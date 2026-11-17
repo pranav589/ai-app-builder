@@ -115,6 +115,36 @@ export const agentEvents = pgTable(
 
 export type AgentRunRow = typeof agentRuns.$inferSelect;
 
+// ---------------------------------------------------------------- app snapshots
+// Every committed version of a project's app document (lib/app-runtime/app-doc.ts).
+// projects.current_version points at the head; restoring copies an older
+// doc back onto the head and adds a new snapshot on top, so history is never
+// rewritten. Created by db/sql/snapshots.sql (npm run db:sql).
+export const appSnapshots = pgTable(
+  "app_snapshots",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    parentVersion: integer("parent_version"),
+    doc: jsonb("doc").notNull(),
+    author: text("author"),
+    intent: text("intent"),
+    runId: text("run_id"),
+    /** Filled in from Phase 2 onward (gate results); unused until then. */
+    verified: jsonb("verified"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("app_snapshots_project_version").on(t.projectId, t.version),
+    index("app_snapshots_project_created").on(t.projectId, t.createdAt),
+  ]
+);
+
+export type AppSnapshotRow = typeof appSnapshots.$inferSelect;
+
 // ---------------------------------------------------------------- CloudHike backend
 // Created by db/sql/cloudhike.sql (npm run db:sql). Secrets are encrypted at rest.
 

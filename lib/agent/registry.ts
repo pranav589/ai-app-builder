@@ -6,6 +6,8 @@ import type { AgentEvent } from "./types"
 // or anywhere else, and a reloaded page can join it.
 export type LiveRun = {
   projectId: string
+  /** The agent_runs row this run is persisted under, when there is one. */
+  runId?: string
   emit: (e: AgentEvent) => void
 }
 

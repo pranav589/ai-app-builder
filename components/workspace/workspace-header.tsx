@@ -27,6 +27,7 @@ import { cn } from "cn"
 import { useAuth } from "@/components/auth/auth-provider"
 import type { BackendInfo } from "@/lib/agent/types"
 import { BackendControl } from "./backend-connect"
+import { VersionsMenu } from "./versions-menu"
 import { statusLabel } from "@/lib/project-status"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
@@ -298,6 +299,8 @@ export function WorkspaceHeader({
           onSetupBackend={onSetupBackend}
           onDisconnected={onBackendDisconnected}
         />
+
+        <VersionsMenu projectId={projectId} />
 
         <DropdownMenu>
           <DropdownMenuTrigger

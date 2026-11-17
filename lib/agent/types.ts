@@ -67,6 +67,8 @@ export type StoredMessage = {
   createdAt: string
   plan?: AppPlan
   build?: BuildProgress
+  /** Set when this message committed a new version (lib/versions/store.ts). */
+  version?: number
 }
 
 /** The app's backend as the workspace shows it. Never carries credentials. */

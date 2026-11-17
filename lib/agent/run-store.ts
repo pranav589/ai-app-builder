@@ -248,6 +248,7 @@ export async function createEventSink(runId: string, projectId: string) {
 
   const run: LiveRun & { close: () => Promise<void> } = {
     projectId,
+    runId,
     emit(e) {
       // The same status line twice in a row says nothing new.
       if (e.type === "status") {
@@ -264,7 +265,7 @@ export async function createEventSink(runId: string, projectId: string) {
 }
 
 /** A LiveRun that drops its events (repairs report through their HTTP answer). */
-export const silentRun = (projectId: string): LiveRun => ({ projectId, emit() {} })
+export const silentRun = (projectId: string, runId?: string): LiveRun => ({ projectId, runId, emit() {} })
 
 // ---------------------------------------------------------------- streaming to the browser
 

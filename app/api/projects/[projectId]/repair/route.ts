@@ -47,7 +47,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
   const release = holdRun(lock.id)
   let ok = false
   try {
-    const result = await repairFile(silentRun(projectId), projectId, path, message)
+    const result = await repairFile(silentRun(projectId, lock.id), projectId, path, message)
     ok = true
     if (!result) return json({ fixed: false })
     return json({ fixed: true, ...result })

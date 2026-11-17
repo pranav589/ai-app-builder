@@ -413,6 +413,11 @@ export function ChatPanel({
                   />
                 )}
                 {m.kind === "build" && m.build && <BuildCard build={m.build} />}
+                {m.version !== undefined && (
+                  <span className="mt-2 inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                    Version {m.version}
+                  </span>
+                )}
               </AgentBlock>
             )
           )}

@@ -5,6 +5,8 @@ import { asc, desc, eq, sql } from "drizzle-orm"
 
 import { db, messages, projects, type Project } from "@/db"
 import { readAppDoc, type AppDoc } from "@/lib/app-runtime/app-doc"
+import { commitSnapshot } from "@/lib/versions/store"
+import { regenOutcome } from "./generation-guard"
 import { emptyDataModel, normalizeDataModel, type DataModel } from "@/lib/app-runtime/data-model"
 import { baseThemeFromPlan, fallbackThemes, normalizeThemes, type AppTheme, type ThemePackage } from "@/lib/app-runtime/theme"
 import { autoImport, checkFile, projectExports, screenPath, type ProjectFiles } from "@/lib/app-project/project"
@@ -104,13 +106,30 @@ export function toStoredMessage(m: DbMessage): StoredMessage {
     createdAt: m.createdAt.toISOString(),
     plan: kind === "plan" ? ((m.plan as AppPlan | null) ?? undefined) : undefined,
     build: kind === "build" ? ((m.pipelineData as BuildProgress | null) ?? undefined) : undefined,
+    version: (m.pipelineData as { version?: number } | null)?.version,
   }
 }
 
 async function saveMessage(
   projectId: string,
-  m: { id?: string; sender: "user" | "assistant"; kind: ChatMessageKind; text: string; plan?: AppPlan; build?: BuildProgress; meta?: unknown }
+  m: {
+    id?: string
+    sender: "user" | "assistant"
+    kind: ChatMessageKind
+    text: string
+    plan?: AppPlan
+    build?: BuildProgress
+    meta?: Record<string, unknown>
+    /** The version this message committed, shown as a small label in the chat. */
+    version?: number
+  }
 ) {
+  const pipelineData =
+    m.kind === "build"
+      ? m.build ?? null
+      : m.meta || m.version !== undefined
+        ? { ...(m.meta ?? {}), ...(m.version !== undefined ? { version: m.version } : {}) }
+        : null
   const [row] = await db
     .insert(messages)
     .values({
@@ -120,7 +139,7 @@ async function saveMessage(
       text: m.text,
       type: m.kind,
       plan: m.plan ?? null,
-      pipelineData: m.build ?? m.meta ?? null,
+      pipelineData,
     })
     .returning()
   return toStoredMessage(row)
@@ -515,20 +534,13 @@ export async function repairFile(run: LiveRun, projectId: string, path: string, 
   ])
   if (blocking(fixed.problems).length || fixed.code === code) return null
 
-  if (screen) {
-    // Re-read so a concurrent change to other screens isn't lost.
-    const latest = readAppDoc((await loadProject(projectId)).previewScreens).screens
-    await saveScreens(projectId, latest.map((s) => (s.id === screen.id ? { ...s, code: fixed.code } : s)))
-    return { path, code: fixed.code, screenId: screen.id }
-  }
-  await db
-    .update(projects)
-    .set({
-      previewScreens: sql`jsonb_set(${projects.previewScreens}, ARRAY['files', ${path}]::text[], ${JSON.stringify(fixed.code)}::jsonb)`,
-      updatedAt: new Date(),
-    })
-    .where(eq(projects.id, projectId))
-  return { path, code: fixed.code }
+  // Re-read so a concurrent change to other screens isn't lost.
+  const latest = readAppDoc((await loadProject(projectId)).previewScreens)
+  const updatedDoc: AppDoc = screen
+    ? { ...latest, screens: latest.screens.map((s) => (s.id === screen.id ? { ...s, code: fixed.code } : s)) }
+    : { ...latest, files: { ...(latest.files ?? {}), [path]: fixed.code } }
+  await commitSnapshot(projectId, updatedDoc, { author: project.userId, intent: `Repaired ${label}`, runId: run.runId })
+  return screen ? { path, code: fixed.code, screenId: screen.id } : { path, code: fixed.code }
 }
 
 // ---------------------------------------------------------------- targeted edits
@@ -640,17 +652,19 @@ export async function runEdit(run: LiveRun, projectId: string, edit: EditRequest
   const latest = readAppDoc((await loadProject(projectId)).previewScreens)
   const screenUpdates = latest.screens.map((s) => (s.path && saved[s.path] !== undefined ? { ...s, code: saved[s.path], state: "ready" as const } : s))
   const fileUpdates = Object.fromEntries(Object.entries(saved).filter(([p]) => !latest.screens.some((s) => s.path === p)))
+  let version: number | undefined
   if (Object.keys(saved).length) {
-    await saveDoc(projectId, { ...latest, screens: screenUpdates, files: { ...(latest.files ?? {}), ...fileUpdates } })
+    const updatedDoc: AppDoc = { ...latest, screens: screenUpdates, files: { ...(latest.files ?? {}), ...fileUpdates } }
+    ;({ version } = await commitSnapshot(projectId, updatedDoc, { author: project.userId, intent: `Edit: ${edit.instruction.slice(0, 140)}`, runId: run.runId }))
     for (const s of screenUpdates) if (s.path && saved[s.path] !== undefined) run.emit({ type: "screen_done", screen: s })
-    if (Object.keys(fileUpdates).length) run.emit({ type: "files", files: { ...(latest.files ?? {}), ...fileUpdates } })
+    if (Object.keys(fileUpdates).length) run.emit({ type: "files", files: updatedDoc.files! })
   }
 
   const done = Object.keys(saved).map(nameOf)
   const text = done.length
     ? `Updated ${done.join(", ")}.${failed.length ? ` I couldn't apply the change to ${failed.join(", ")} cleanly, so ${failed.length === 1 ? "it was" : "they were"} left as before.` : ""}`
     : "I couldn't apply that change cleanly, so nothing was changed. Could you describe it a little differently?"
-  const msg = await saveMessage(projectId, { sender: "assistant", kind: "standard", text })
+  const msg = await saveMessage(projectId, { sender: "assistant", kind: "standard", text, version })
   run.emit({ type: "message_done", message: msg })
   await setPhase(projectId, "ready")
   run.emit({ type: "phase", phase: "ready" })
@@ -1035,6 +1049,7 @@ export async function runGeneration(run: LiveRun, projectId: string) {
   const statusText = () => (active.size ? `Building ${[...active].join(", ")}` : "Finishing up")
 
   let failures = 0
+  const kept: string[] = []
   const buildScreen = async (screenId: string, n: number) => {
     const spec = plan.screens.find((s) => s.id === screenId)!
     const index = plan.screens.indexOf(spec)
@@ -1116,11 +1131,10 @@ IMPORTANT: your previous attempt was cut off at the output limit. Write a more c
     }
 
     active.delete(spec.name)
-    if (code) void update(screenId, { state: "ready", code, path, error: undefined })
-    else {
-      failures++
-      void update(screenId, { state: "error", error })
-    }
+    const outcome = regenOutcome(previous.get(screenId), path, code, error)
+    if (outcome.kept) kept.push(spec.name)
+    if (outcome.failed) failures++
+    void update(screenId, outcome.patch)
     run.emit({ type: "screen_done", screen: screens.find((s) => s.id === screenId)! })
     if (active.size) run.emit({ type: "status", text: statusText() })
   }
@@ -1142,15 +1156,24 @@ IMPORTANT: your previous attempt was cut off at the output limit. Write a more c
 
   // The shell is kept; refresh only in case a later build changes it.
   files = { ...platform, ...shellFiles }
+  const finalDoc: AppDoc = { ...doc, screens, themes, data, files, shellHash: sHash, componentsHash: cHash }
+  const { version } = await commitSnapshot(projectId, finalDoc, {
+    author: project.userId,
+    intent: todo.length ? `Built ${todo.length} screen${todo.length === 1 ? "" : "s"}` : "Rebuilt (no screens changed)",
+    runId: run.runId,
+  })
   await setPhase(projectId, "ready")
   run.emit({ type: "phase", phase: "ready" })
   const done = screens.filter((s) => s.state === "ready").length
+  const keptNote = kept.length ? ` Kept the previous version of ${kept.join(", ")}.` : ""
   const summary = await saveMessage(projectId, {
     sender: "assistant",
     kind: "standard",
-    text: failures
-      ? `${done} of ${screens.length} screens are ready. ${failures === 1 ? "One screen" : `${failures} screens`} didn't come out right; say "retry" and I'll rebuild ${failures === 1 ? "it" : "them"}.`
-      : `All ${screens.length} screens are written in React Native and wired together. Tap through the app in **Preview**, see the code in **Code**, try other looks from the **theme menu** above the canvas, or select a screen and choose **Edit with AI**.`,
+    text:
+      (failures
+        ? `${done} of ${screens.length} screens are ready. ${failures === 1 ? "One screen" : `${failures} screens`} didn't come out right; say "retry" and I'll rebuild ${failures === 1 ? "it" : "them"}.`
+        : `All ${screens.length} screens are written in React Native and wired together. Tap through the app in **Preview**, see the code in **Code**, try other looks from the **theme menu** above the canvas, or select a screen and choose **Edit with AI**.`) + keptNote,
+    version,
   })
   run.emit({ type: "message_done", message: summary })
 }
