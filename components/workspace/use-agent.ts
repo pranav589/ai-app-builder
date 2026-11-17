@@ -45,6 +45,8 @@ export function useAgent({
   const [messages, setMessages] = React.useState<ChatMessage[]>(initialMessages)
   const [streaming, setStreaming] = React.useState<{ id: string; text: string } | null>(null)
   const [status, setStatus] = React.useState<string | null>(null)
+  /** When the current status label started (epoch ms), so the chat can count elapsed seconds itself. */
+  const [statusSince, setStatusSince] = React.useState<number | null>(null)
   const [planProgress, setPlanProgress] = React.useState<string[]>([])
   const [screens, setScreens] = React.useState<GeneratedScreen[]>(initialScreens)
   const [activeScreenId, setActiveScreenId] = React.useState<string | null>(null)
@@ -80,6 +82,7 @@ export function useAgent({
           break
         case "status":
           setStatus(e.text)
+          setStatusSince(e.since ?? Date.now())
           break
         case "project":
           setName(e.name)
@@ -130,6 +133,7 @@ export function useAgent({
         case "snapshot":
           // Joined a run that was already going (e.g. after a reload).
           setStatus(e.status)
+          setStatusSince(e.status ? Date.now() : null)
           if (e.message) setStreaming(e.message)
           if (e.screen) {
             codeBuf.current.set(e.screen.id, e.screen.code)
@@ -147,6 +151,7 @@ export function useAgent({
           break
         case "done":
           setStatus(null)
+          setStatusSince(null)
           setPlanProgress([])
           break
       }
@@ -161,6 +166,7 @@ export function useAgent({
       setStatus(
         req.action === "approve" ? "Starting the build" : req.action === "message" ? "Sending" : req.action === "backend" ? "Connecting to CloudHike" : "Connecting to the agent"
       )
+      setStatusSince(Date.now())
       try {
         const res = await fetch(`/api/projects/${projectId}/agent`, {
           method: "POST",
@@ -211,6 +217,7 @@ export function useAgent({
         }
         setBusy(false)
         setStatus(null)
+        setStatusSince(null)
         setStreaming((s) => (s && s.text ? s : null))
       }
     },
@@ -349,6 +356,7 @@ export function useAgent({
     messages,
     streaming,
     status,
+    statusSince,
     planProgress,
     screens,
     activeScreenId,

@@ -6,6 +6,12 @@ import { asc, desc, eq, sql } from "drizzle-orm"
 import { db, messages, projects, type Project } from "@/db"
 import { readAppDoc, type AppDoc } from "@/lib/app-runtime/app-doc"
 import { commitSnapshot } from "@/lib/versions/store"
+import { engineOf } from "@/lib/verify/engine"
+import { coderAdapter } from "@/lib/verify/coder"
+import { runChange } from "@/lib/verify/run"
+import { verifiedEditPrompt } from "@/lib/verify/prompts"
+import { docFromWorkspace, workspaceFromDoc } from "@/lib/verify/workspace"
+import type { GateName } from "@/lib/verify/types"
 import { regenOutcome } from "./generation-guard"
 import { emptyDataModel, normalizeDataModel, type DataModel } from "@/lib/app-runtime/data-model"
 import { baseThemeFromPlan, fallbackThemes, normalizeThemes, type AppTheme, type ThemePackage } from "@/lib/app-runtime/theme"
@@ -177,24 +183,23 @@ async function loadProject(projectId: string) {
 
 /**
  * The gateway can go quiet for a long time before the first token. While
- * nothing arrives, keep the user informed with an updating status line.
+ * nothing arrives, keep the user informed with a status line. Unlike before,
+ * this only emits when the label itself changes, not once a second: each
+ * event carries a `since` timestamp so the client counts elapsed seconds
+ * itself instead of being sent a new event every second for the same status.
  */
 function heartbeat(run: LiveRun, label: () => string) {
-  const started = Date.now()
-  let last = Date.now()
-  let lastShown = ""
-  const timer = setInterval(() => {
-    const idle = Date.now() - last
-    if (idle < 2500) return
-    const secs = Math.round((Date.now() - started) / 1000)
-    const text = `${label()} · ${secs}s`
-    if (text !== lastShown) {
-      lastShown = text
-      run.emit({ type: "status", text })
-    }
-  }, 1000)
+  let lastLabel: string | null = null
+  const emitIfChanged = () => {
+    const text = label()
+    if (text === lastLabel) return
+    lastLabel = text
+    run.emit({ type: "status", text, since: Date.now() })
+  }
+  emitIfChanged()
+  const timer = setInterval(emitIfChanged, 1000)
   return {
-    touch: () => (last = Date.now()),
+    touch: () => {},
     stop: () => clearInterval(timer),
   }
 }
@@ -509,14 +514,39 @@ async function saveScreens(projectId: string, screens: GeneratedScreen[]) {
     .where(eq(projects.id, projectId))
 }
 
+// ---------------------------------------------------------------- verified engine glue
+//
+// lib/verify/* stays free of DB access (Phase 3 depends on that split): it
+// only runs the change gateway against a Workspace built from in-memory
+// files. Everything here does the persistence (loading the project,
+// committing the result) and turns a RunResult into the chat events and
+// messages the legacy engine already produces for the same situations.
+
+/** VERIFY_DEBUG_FAIL=<gate>:<n>, ignored in production: fails `gate` synthetically for a run's first `n` attempts. */
+function verifyDebugFail(): { gate: GateName; n: number } | undefined {
+  if (process.env.NODE_ENV === "production") return undefined
+  const raw = process.env.VERIFY_DEBUG_FAIL?.trim()
+  if (!raw) return undefined
+  const [gate, nStr] = raw.split(":")
+  const n = Number(nStr)
+  if (!gate || !Number.isFinite(n)) return undefined
+  return { gate: gate as GateName, n }
+}
+
+/** Every verified model call + gate run, as an event the run's agent_events log already captures. */
+function emitAttempts(run: LiveRun, attempts: { n: number; modelMs: number; gatesMs: number; ok: boolean; failedAt?: GateName; diagnostics?: string; tokens?: { prompt?: number; completion?: number } }[]) {
+  for (const a of attempts) run.emit({ type: "attempt", ...a })
+}
+
 // ---------------------------------------------------------------- runtime repair
 
 export type RepairResult = { path: string; code: string; screenId?: string } | null
 
 /**
- * Fixes a file that crashed in the preview. The crash message goes to the
- * fixer together with the file and what the project actually exports; the
- * repaired file is saved only if it passes every check.
+ * Fixes a file that crashed in the preview. On the legacy engine, the crash
+ * message goes to the fixer together with the file and what the project
+ * actually exports; the repaired file is saved only if it passes every check.
+ * On the verified engine, it goes through the same change gateway as an edit.
  */
 export async function repairFile(run: LiveRun, projectId: string, path: string, message: string): Promise<RepairResult> {
   const project = await loadProject(projectId)
@@ -524,11 +554,34 @@ export async function repairFile(run: LiveRun, projectId: string, path: string, 
   const screen = doc.screens.find((s) => s.path === path && s.code)
   const code = screen?.code ?? doc.files?.[path]
   if (!code) return null
+  const label = screen?.name ?? path.split("/").pop() ?? path
+
+  if (engineOf(project) === "verified") {
+    const ws = workspaceFromDoc(doc)
+    const exports = projectExports(ws.files)
+    const prompt = verifiedEditPrompt(`In the running app, ${path} crashed with: "${message.slice(0, 500)}". Find the cause and fix it.`, [{ path, code }], {
+      screens: doc.screens.filter((s) => s.state === "ready").map((s) => `/${s.id}: ${s.name}`).join(", "),
+      components: Object.entries(exports).map(([n, e]) => `${n} (${e.module})`).join(", "),
+      data: doc.data ?? emptyDataModel(),
+    })
+    const result = await runChange(ws, prompt, coderAdapter, {
+      debugFail: verifyDebugFail(),
+      onState: (state) => run.emit({ type: "run_state", state }),
+    })
+    emitAttempts(run, result.attempts)
+    if (result.state === "needs_user") return null
+
+    const updatedDoc = docFromWorkspace(doc, result.ws)
+    await commitSnapshot(projectId, updatedDoc, { author: project.userId, intent: `Repaired ${label}`, runId: run.runId })
+    const newCode = updatedDoc.screens.find((s) => s.path === path)?.code ?? updatedDoc.files?.[path]
+    if (newCode === undefined || newCode === code) return null
+    return screen ? { path, code: newCode, screenId: screen.id } : { path, code: newCode }
+  }
+
   const files: ProjectFiles = {
     ...(doc.files ?? {}),
     ...Object.fromEntries(doc.screens.filter((s) => s.code && s.path).map((s) => [s.path!, s.code!])),
   }
-  const label = screen?.name ?? path.split("/").pop() ?? path
   const fixed = await checkAndFix(run, path, code, files, label, [
     `In the running app this file crashed with: "${message.slice(0, 500)}". Find the cause and fix it.`,
   ])
@@ -665,6 +718,80 @@ export async function runEdit(run: LiveRun, projectId: string, edit: EditRequest
     ? `Updated ${done.join(", ")}.${failed.length ? ` I couldn't apply the change to ${failed.join(", ")} cleanly, so ${failed.length === 1 ? "it was" : "they were"} left as before.` : ""}`
     : "I couldn't apply that change cleanly, so nothing was changed. Could you describe it a little differently?"
   const msg = await saveMessage(projectId, { sender: "assistant", kind: "standard", text, version })
+  run.emit({ type: "message_done", message: msg })
+  await setPhase(projectId, "ready")
+  run.emit({ type: "phase", phase: "ready" })
+  return { needsPlan: false }
+}
+
+/**
+ * The verified engine's edit path: builds a Workspace from the AppDoc, runs
+ * the change gateway (lib/verify/run.ts) with the coder model, and on
+ * success commits a snapshot. On `needs_user`, posts a plain-words message
+ * and leaves the app unchanged. Target resolution and escalation mirror
+ * runEdit so both engines behave the same from the chat's point of view.
+ */
+export async function runVerifiedEdit(run: LiveRun, projectId: string, edit: EditRequest, opts: { escalate?: boolean } = {}): Promise<{ needsPlan: boolean }> {
+  const project = await loadProject(projectId)
+  const doc = readAppDoc(project.previewScreens)
+  const ready = doc.screens.filter((s) => s.state === "ready" && s.code && s.path)
+  const ws = workspaceFromDoc(doc)
+
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "")
+  const targetPaths = new Set<string>()
+  let unknownScreen = false
+  for (const t of edit.targets) {
+    const screen = ready.find((s) => s.id === t || norm(s.name) === norm(t) || s.path === t)
+    if (screen) targetPaths.add(screen.path!)
+    else if (ws.files[t.replace(/^@\//, "")]) targetPaths.add(t.replace(/^@\//, ""))
+    else if (!t.includes("/") || /^app\//.test(t)) unknownScreen = true
+  }
+  if (opts.escalate && unknownScreen) return { needsPlan: true }
+  if (!targetPaths.size && ready[0]) targetPaths.add(ready[0].path!)
+  const nameOf = (path: string) => ready.find((s) => s.path === path)?.name ?? path.split("/").pop()!.replace(/\.\w+$/, "")
+  const label = [...targetPaths].map(nameOf).join(", ")
+
+  run.emit({ type: "status", text: `Editing ${label}`, since: Date.now() })
+  const prompt = verifiedEditPrompt(
+    edit.instruction,
+    [...targetPaths].map((p) => ({ path: p, code: ws.files[p] })),
+    {
+      screens: ready.map((s) => `/${s.id}: ${s.name}`).join(", "),
+      components: Object.entries(projectExports(ws.files)).map(([n, e]) => `${n} (${e.module})`).join(", "),
+      data: doc.data ?? emptyDataModel(),
+    }
+  )
+
+  const result = await runChange(ws, prompt, coderAdapter, {
+    debugFail: verifyDebugFail(),
+    onState: (state) => {
+      run.emit({ type: "run_state", state })
+      run.emit({ type: "status", text: state === "repairing" ? `Fixing ${label}` : `Editing ${label}`, since: Date.now() })
+    },
+  })
+  emitAttempts(run, result.attempts)
+
+  if (result.state === "needs_user") {
+    const msg = await saveMessage(projectId, { sender: "assistant", kind: "standard", text: result.message })
+    run.emit({ type: "message_done", message: msg })
+    await setPhase(projectId, "ready")
+    run.emit({ type: "phase", phase: "ready" })
+    return { needsPlan: false }
+  }
+
+  const updatedDoc = docFromWorkspace(doc, result.ws)
+  const { version } = await commitSnapshot(projectId, updatedDoc, {
+    author: project.userId,
+    intent: result.intent || `Edit: ${edit.instruction.slice(0, 140)}`,
+    runId: run.runId,
+  })
+  for (const path of result.changed) {
+    const screen = updatedDoc.screens.find((s) => s.path === path)
+    if (screen) run.emit({ type: "screen_done", screen })
+  }
+  if (result.changed.some((p) => !updatedDoc.screens.some((s) => s.path === p))) run.emit({ type: "files", files: updatedDoc.files ?? {} })
+
+  const msg = await saveMessage(projectId, { sender: "assistant", kind: "standard", text: `Updated ${label}.`, version })
   run.emit({ type: "message_done", message: msg })
   await setPhase(projectId, "ready")
   run.emit({ type: "phase", phase: "ready" })

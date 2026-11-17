@@ -166,7 +166,7 @@ Return the JSON object now.`
 
 // ---------------------------------------------------------------- React Native code
 
-const TECH_RULES = `TECH STACK (strict; current as of Expo SDK 58)
+export const TECH_RULES = `TECH STACK (strict; current as of Expo SDK 58)
 - Expo SDK 58, React Native 0.88 (New Architecture), React 19.3, TypeScript 6 (strict), Expo Router 58 (file-based routing). React Compiler is ON.
 - Function components and hooks only. Follow the Rules of React so the React Compiler can optimize: render is pure, never mutate props, state or objects created in an earlier render, never read or write ref.current during render. Don't add useMemo/useCallback/React.memo for performance; the compiler handles it. Keep hooks at the top level of components.
 - Allowed imports ONLY: React Native core components and APIs, these packages: ${ALLOWED_PACKAGES.join(", ")}, the platform modules "@/theme" and "@/lib/backend", and project files via "@/..." paths. Nothing else (no react-native-reanimated, no react-native-svg, no @react-navigation/*, no other npm packages).
@@ -195,7 +195,7 @@ APP RULES
 PLATFORM MODULES
 ${PLATFORM_API_DOCS}`
 
-const CRAFT_RULES = `CRAFT (it must feel like a top App Store app in 2026, down to the last pixel)
+export const CRAFT_RULES = `CRAFT (it must feel like a top App Store app in 2026, down to the last pixel)
 - Layout: 4/8pt grid (spacing tokens), 20pt screen margins, generous whitespace, one alignment edge. Content-first: large titles, clear sections, no visual noise.
 - Type scale: large titles 34 bold, letterSpacing -0.6; title 28 bold; section titles 20-22 semibold; body 17; secondary 15 in colors.textMuted; captions 12-13. fontVariant ["tabular-nums"] for numbers and stats. Use weight and size for hierarchy, not color alone.
 - Hierarchy: exactly one primary action per screen (filled colors.primary, 52-56pt tall, radius.pill or radius.lg); secondary actions as primarySoft fills, text buttons or glass chips.

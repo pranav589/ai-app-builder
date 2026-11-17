@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm"
 import { db, projects } from "@/db"
 import { AgentConfigError } from "@/lib/agent/config"
 import { repairFile } from "@/lib/agent/orchestrator"
+import { claimRepairAttempt } from "@/lib/agent/repair-cap"
 import { finishRun, holdRun, openRun, silentRun } from "@/lib/agent/run-store"
 import { getCurrentUser, ServiceUnavailableError } from "@/lib/current-user"
 import { isSameOriginJson, json, readJson, str } from "@/lib/http"
@@ -35,11 +36,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
   if (!path || !message || path.includes("..")) return json({ error: "Bad request" }, 400)
 
   const [project] = await db
-    .select({ id: projects.id })
+    .select({ id: projects.id, currentVersion: projects.currentVersion })
     .from(projects)
     .where(and(eq(projects.id, projectId), eq(projects.userId, user.id)))
     .limit(1)
   if (!project) return json({ error: "Project not found." }, 404)
+
+  // At most one repair attempt per (project, version, path): a second try
+  // for the same file never gets this far, no matter how many times it's asked.
+  if (!claimRepairAttempt(projectId, project.currentVersion, path)) return json({ fixed: false, reason: "already_tried" })
 
   // One agent job per project at a time; a build in progress wins.
   const lock = await openRun(projectId, "repair")

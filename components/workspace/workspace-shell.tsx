@@ -133,6 +133,7 @@ export function WorkspaceShell({
       messages={agent.messages}
       streaming={agent.streaming}
       status={agent.status}
+      statusSince={agent.statusSince}
       planProgress={agent.planProgress}
       phase={agent.phase}
       busy={agent.busy}

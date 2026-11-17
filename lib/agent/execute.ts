@@ -3,12 +3,15 @@ import { and, eq } from "drizzle-orm"
 
 import { db, messages, projects } from "@/db"
 import { readAppDoc } from "@/lib/app-runtime/app-doc"
+import { engineOf } from "@/lib/verify/engine"
 import { AgentConfigError } from "./config"
-import { latestPlan, NEW_SCREEN_NUDGE, runEdit, runGeneration, runPlanning, setPhase } from "./orchestrator"
+import { latestPlan, NEW_SCREEN_NUDGE, runEdit, runGeneration, runPlanning, runVerifiedEdit, setPhase } from "./orchestrator"
 import { claimRun, createEventSink, finishRun, holdRun, type RunInput } from "./run-store"
 import { parseServices } from "@/lib/cloudhike/config"
 import { runBackendSetup, syncBackendSchema } from "@/lib/cloudhike/provision"
 import type { AgentPhase } from "./types"
+import type { EditRequest } from "./protocol"
+import type { LiveRun } from "./registry"
 
 export function friendlyError(e: unknown) {
   if (e instanceof AgentConfigError) return "The AI agent isn't configured on the server yet."
@@ -51,12 +54,12 @@ export async function executeRun(runId: string): Promise<{ taken: boolean; ok?: 
       if (approved) await generate(run, projectId)
       // Changes to built screens skip the plan and the full build.
       else if (edit) {
-        const { needsPlan } = await runEdit(run, projectId, edit, { escalate: true })
+        const { needsPlan } = await dispatchEdit(run, projectId, edit, { escalate: true })
         // It needed a new screen after all: plan it (once), then build just that.
         if (needsPlan) {
           const again = await runPlanning(run, projectId, { first: false, nudge: NEW_SCREEN_NUDGE })
           if (again.approved) await generate(run, projectId)
-          else if (again.edit) await runEdit(run, projectId, again.edit)
+          else if (again.edit) await dispatchEdit(run, projectId, again.edit)
         }
       }
     } else {
@@ -84,6 +87,12 @@ export async function executeRun(runId: string): Promise<{ taken: boolean; ok?: 
 async function generate(run: Parameters<typeof runGeneration>[0], projectId: string) {
   await runGeneration(run, projectId)
   await syncBackendSchema(projectId)
+}
+
+/** Sends an edit through the verified engine's change gateway, or the legacy editor, by the project's own engine. */
+async function dispatchEdit(run: LiveRun, projectId: string, edit: EditRequest, opts: { escalate?: boolean } = {}) {
+  const [project] = await db.select({ engine: projects.engine }).from(projects).where(eq(projects.id, projectId)).limit(1)
+  return engineOf(project ?? {}) === "verified" ? runVerifiedEdit(run, projectId, edit, opts) : runEdit(run, projectId, edit, opts)
 }
 
 /** Where a failed run leaves the project. */

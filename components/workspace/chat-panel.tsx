@@ -297,11 +297,27 @@ function AgentBlock({ children, active }: { children: React.ReactNode; active?: 
   )
 }
 
-function ActivityLine({ text }: { text: string }) {
+/**
+ * The server sends a new status line only when the label itself changes (not
+ * once a second), each carrying `since`; the elapsed-seconds counter here is
+ * purely a client-side tick, so the SSE stream stays quiet while this still visibly counts.
+ */
+function ActivityLine({ text, since }: { text: string; since: number | null }) {
+  const [now, setNow] = React.useState(() => Date.now())
+  React.useEffect(() => {
+    if (!since) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [since])
+  const secs = since ? Math.max(0, Math.round((now - since) / 1000)) : null
+
   return (
     <p role="status" className="flex items-center gap-2 text-sm">
       <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
-      <span className="shimmer-text truncate">{text}</span>
+      <span className="shimmer-text truncate">
+        {text}
+        {secs !== null && secs > 0 ? ` · ${secs}s` : ""}
+      </span>
     </p>
   )
 }
@@ -312,6 +328,7 @@ export function ChatPanel({
   messages,
   streaming,
   status,
+  statusSince,
   planProgress,
   phase,
   busy,
@@ -327,6 +344,7 @@ export function ChatPanel({
   messages: ChatMessage[]
   streaming: { id: string; text: string } | null
   status: string | null
+  statusSince: number | null
   planProgress: string[]
   phase: AgentPhase
   busy: boolean
@@ -437,7 +455,7 @@ export function ChatPanel({
                   </ol>
                 </div>
               )}
-              {showActivity && <div className={cn(streaming?.text && "mt-2.5")}><ActivityLine text={status!} /></div>}
+              {showActivity && <div className={cn(streaming?.text && "mt-2.5")}><ActivityLine text={status!} since={statusSince} /></div>}
             </AgentBlock>
           )}
 

@@ -2,6 +2,7 @@
 
 import type { DataModel } from "@/lib/app-runtime/data-model"
 import type { ThemePackage } from "@/lib/app-runtime/theme"
+import type { GateName, RunState } from "@/lib/verify/types"
 
 export type PlanScreen = {
   /** Stable kebab-case id, e.g. "home". Kept across plan revisions. */
@@ -86,7 +87,8 @@ export type BackendInfo = {
 /** Events streamed from POST /api/projects/[id]/agent as server-sent events. */
 export type AgentEvent =
   | { type: "phase"; phase: AgentPhase }
-  | { type: "status"; text: string }
+  /** `since` (epoch ms) lets the client count elapsed seconds itself; the server only sends a new event when the label changes. */
+  | { type: "status"; text: string; since?: number }
   | { type: "project"; name: string }
   | { type: "message_start"; id: string }
   | { type: "text"; id: string; delta: string }
@@ -104,6 +106,10 @@ export type AgentEvent =
   | { type: "snapshot"; status: string | null; message?: { id: string; text: string }; screen?: { id: string; code: string } }
   /** The app's backend changed (setting up, connected, failed). */
   | { type: "backend"; backend: BackendInfo }
+  /** Verified-engine run state, for the chat and later evaluation. The browser may ignore it. */
+  | { type: "run_state"; state: RunState; round?: number }
+  /** One verified model call + gate run, logged for inspection and evaluation (Phase 3). */
+  | { type: "attempt"; n: number; modelMs: number; gatesMs: number; ok: boolean; failedAt?: GateName; diagnostics?: string; tokens?: { prompt?: number; completion?: number } }
   | { type: "error"; message: string; retryable: boolean }
   | { type: "busy" }
   | { type: "done" }
