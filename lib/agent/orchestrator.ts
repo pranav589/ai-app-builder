@@ -12,7 +12,10 @@ import { runChange } from "@/lib/verify/run"
 import { verifiedEditPrompt } from "@/lib/verify/prompts"
 import { docFromWorkspace, workspaceFromDoc } from "@/lib/verify/workspace"
 import { ensureManifest, syncManifest } from "@/lib/manifest/migrate"
+import { selectFiles } from "@/lib/verify/context"
+import { formatDiagnostics, verifyChange } from "@/lib/verify/pipeline"
 import { compileManifest } from "@/lib/manifest/compile"
+import { KIT_PATH, KIT_SOURCE } from "@/lib/app-project/kit"
 import type { GateName } from "@/lib/verify/types"
 import { regenOutcome } from "./generation-guard"
 import { emptyDataModel, normalizeDataModel, type DataModel } from "@/lib/app-runtime/data-model"
@@ -563,7 +566,7 @@ export async function repairFile(run: LiveRun, projectId: string, path: string, 
     if (!manifest) return null
     const ws = workspaceFromDoc({ ...doc, manifest })
     const exports = projectExports(ws.files)
-    const prompt = verifiedEditPrompt(`In the running app, ${path} crashed with: "${message.slice(0, 500)}". Find the cause and fix it.`, [{ path, code }], {
+    const prompt = verifiedEditPrompt(`In the running app, ${path} crashed with: "${message.slice(0, 500)}". Find the cause and fix it.`, selectFiles(ws, [path]), {
       manifest,
       components: Object.entries(exports).map(([n, e]) => `${n} (${e.module})`).join(", "),
       data: doc.data ?? emptyDataModel(),
@@ -761,7 +764,7 @@ export async function runVerifiedEdit(run: LiveRun, projectId: string, edit: Edi
   run.emit({ type: "status", text: `Editing ${label}`, since: Date.now() })
   const prompt = verifiedEditPrompt(
     edit.instruction,
-    [...targetPaths].map((p) => ({ path: p, code: ws.files[p] })),
+    selectFiles(ws, [...targetPaths]),
     {
       manifest,
       components: Object.entries(projectExports(ws.files)).map(([n, e]) => `${n} (${e.module})`).join(", "),
@@ -799,7 +802,11 @@ export async function runVerifiedEdit(run: LiveRun, projectId: string, edit: Edi
   }
   if (result.changed.some((p) => !updatedDoc.screens.some((s) => s.path === p))) run.emit({ type: "files", files: updatedDoc.files ?? {} })
 
-  const msg = await saveMessage(projectId, { sender: "assistant", kind: "standard", text: `Updated ${label}.`, version })
+  // The model's own one-sentence <intent> often carries something worth
+  // telling the user (e.g. it built the closest version of an unsupported
+  // request and said what's missing); a generic "Updated X." would bury that
+  // in the Versions panel instead of surfacing it where the user is looking.
+  const msg = await saveMessage(projectId, { sender: "assistant", kind: "standard", text: result.intent || `Updated ${label}.`, version })
   run.emit({ type: "message_done", message: msg })
   await setPhase(projectId, "ready")
   run.emit({ type: "phase", phase: "ready" })
@@ -1156,9 +1163,11 @@ export async function runGeneration(run: LiveRun, projectId: string) {
   // verified engine, navigation and typed nav/data files come from the
   // manifest compiler, not the AI shell (Phase 6): the manifest is built
   // once (or reused from a previous edit) and recompiled on every build so
-  // it never drifts from the plan.
-  const platform = platformFiles(plan, themes, data)
-  const manifest = engineOf(project) === "verified" ? syncManifest({ ...doc, data }, plan) : undefined
+  // it never drifts from the plan. The component kit (Phase 7) ships the
+  // same way: a platform file, not AI-written.
+  const verified = engineOf(project) === "verified"
+  const platform = { ...platformFiles(plan, themes, data), ...(verified ? { [KIT_PATH]: KIT_SOURCE } : {}) }
+  const manifest = verified ? syncManifest({ ...doc, data }, plan) : undefined
   const generated = manifest ? compileManifest(manifest) : {}
   let files: ProjectFiles = { ...platform, ...shellFiles, ...generated }
   await saveDoc(projectId, { ...doc, screens, themes, data, files, manifest, shellHash: sHash, componentsHash: cHash })
@@ -1262,6 +1271,19 @@ IMPORTANT: your previous attempt was cut off at the output limit. Write a more c
         if (stop.length) {
           error = stop[0]
           console.warn(`[build ${projectId}] screen ${screenId}: still failing checks`, stop)
+        } else if (engineOf(project) === "verified") {
+          // A freshly generated screen gets the same real checks an edit
+          // gets (parse/policy/tsc/render), not only today's regex/noResolve
+          // check: nothing unverified should reach the user, builds included.
+          // Through verifyChange (not verifyWorkspace directly) so concurrent
+          // screen builds share its lock around the render gate's global state.
+          const verdict = await verifyChange({ files: allFiles }, { intent: "", manifestPatch: [], files: [{ path, op: "write", content: checked.code }] }, projectId)
+          // Use the gateway's own output (autoImport may have adjusted it), not the pre-verification draft, so what's saved is exactly what passed.
+          if (verdict.ok) code = verdict.ws!.files[path]
+          else {
+            error = `Didn't pass the verified engine's checks: ${formatDiagnostics(verdict)}`
+            console.warn(`[build ${projectId}] screen ${screenId}: failed verified gates (${verdict.failedAt})`)
+          }
         } else code = checked.code
       } catch (e) {
         error = e instanceof Error ? e.message : "Generation failed."

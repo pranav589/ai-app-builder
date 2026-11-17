@@ -34,10 +34,11 @@ import path from "node:path"
 import type { AppDoc } from "@/lib/app-runtime/app-doc"
 import type { AppPlan } from "@/lib/agent/types"
 import { emptyDataModel } from "@/lib/app-runtime/data-model"
-import { importsOf, projectExports } from "@/lib/app-project/project"
+import { projectExports } from "@/lib/app-project/project"
 import { coderAdapter } from "@/lib/verify/coder"
 import { ensureManifest } from "@/lib/manifest/migrate"
 import type { AppManifest } from "@/lib/manifest/schema"
+import { selectFiles } from "@/lib/verify/context"
 import { formatDiagnostics, verifyChange, type Verdict } from "@/lib/verify/pipeline"
 import { verifiedEditPrompt, repairPrompt } from "@/lib/verify/prompts"
 import { parseReply } from "@/lib/verify/protocol"
@@ -89,18 +90,8 @@ const appFiles = Object.entries(base.files)
   .filter(([p]) => isAppOwned(p))
   .map(([path, code]) => ({ path, code }))
 
-/** The first ready screen plus the local components/lib files it imports (one level). */
-const focusedFiles = (() => {
-  const target = ready[0]
-  if (!target?.path || base.files[target.path] === undefined) return appFiles
-  const picked = new Set<string>([target.path])
-  for (const spec of importsOf(base.files[target.path])) {
-    if (!spec.startsWith("@/components/") && !spec.startsWith("@/lib/")) continue
-    const p = spec.slice(2)
-    for (const f of [p, `${p}.tsx`, `${p}.ts`]) if (base.files[f] !== undefined) picked.add(f)
-  }
-  return [...picked].sort().map((path) => ({ path, code: base.files[path] }))
-})()
+/** The first ready screen plus the local components/lib files it imports (one level); lib/verify/context.ts selectFiles, the same scoping the real edit path (runVerifiedEdit) falls back to for a request that doesn't name a screen. */
+const focusedFiles = selectFiles(base, ready[0]?.path ? [ready[0].path] : [])
 
 function buildPrompt(task: Task) {
   return verifiedEditPrompt(task.text, context === "all" ? appFiles : focusedFiles, {

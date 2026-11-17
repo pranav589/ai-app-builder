@@ -489,13 +489,15 @@ adds a screen without its file is rejected.
 **Done when.** Tests pass; existing verified projects migrate on first open; adding a screen by
 chat always shows it in navigation.
 
-**User tests.**
+**User tests.** Pending — to be tested later.
 1. On a verified project, ask "add a Settings tab with notification toggles". It appears in
    the tab bar with an icon, every time (try it 3 times on a fresh project).
 2. Ask "rename the Profile tab to You": only the manifest and layout change, no screen rewrite.
-3. Tabs no longer sit under the phone's navigation bar (checked fully on device in Phase 10;
+3. As a regression check: after renaming a tab via chat, ask for a brand-new screen to be
+   added (an "additive" rebuild) and confirm the rename survives.
+4. Tabs no longer sit under the phone's navigation bar (checked fully on device in Phase 10;
    in the browser preview, check the tab bar still looks right).
-4. Run the eval and compare.
+5. Run the eval and compare.
 
 ---
 
@@ -537,12 +539,31 @@ builder snapshot test; `selectFiles` cases.
 **Done when.** Tests pass; eval first-pass rate is at or above the Phase 6 number; a new app
 builds fully on the verified engine.
 
-**User tests.**
+**Status: done, at a lighter scope on item 4 (decided with the user).**
+- Items 1-3 done as specified, with two simplifications the real architecture made possible:
+  `@/kit` (`lib/app-project/kit.ts`) needs no separate preview-runtime mapping and no
+  type-bundle entry, because it ships as a normal platform file in the Workspace FileMap —
+  the existing generic file resolver (`preview-runtime/modules.ts` `resolvePath`) and the
+  `tsc` gate (which already type-checks every file in the workspace, platform files included)
+  pick it up for free, the same way `@/theme` already does. Tests type-check and render-mount
+  the kit for real (`lib/app-project/__tests__/kit.test.ts`), not just a props snapshot.
+- Item 4 (new-screen generation through the verified coder + gateway, with kit-based screens
+  from the first build) was scoped down after asking the user: today's build loop (legacy
+  designer prompt, live `screen_delta` streaming) stays as it is, but a freshly generated
+  screen on a verified project is now also run through the real gates (parse/policy/tsc/render)
+  before being accepted, not only today's regex/noResolve check (`lib/agent/orchestrator.ts`
+  `buildScreen`, via `lib/verify/pipeline.ts` `verifyChange`). The full swap (verified coder +
+  kit + gateway + bounded repair for brand-new screens, which needs streaming support added to
+  the coder model adapter to keep the live-typing UX) is deferred; new screens on a verified
+  project don't use `@/kit` yet, only edits do.
+
+**User tests.** Pending — to be tested later.
 1. Create a new project on the verified engine (`DEFAULT_ENGINE=verified` in `.env` for dev)
    from a fresh prompt. Compare its look with a legacy project from the same prompt. Tell the
    agent what looks worse; that feeds back into the kit and prompt.
-2. Open the Code tab: screens import from `@/kit`, files are short, parts live under
-   `components/<screen>/`.
+2. On a verified project, ask for an edit that would plausibly use the kit (e.g. "add a progress
+   bar to the habit card"): the edited code imports from `@/kit` rather than rebuilding the same
+   primitives by hand.
 3. Ask "add a map of nearby gyms": you get a clear answer that maps aren't supported yet, with
    an alternative, and nothing changes.
 4. Ask "make it better": you get a question with concrete options.

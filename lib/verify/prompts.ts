@@ -1,11 +1,10 @@
 // The verified engine's coder prompt. Reuses the legacy engine's tech/craft
-// rules (same stack, same quality bar); the reply format, ownership rules
-// and manifest awareness differ, since every reply here becomes a gated
-// ChangeSet instead of a trusted file write. A full rewrite (kit reference,
-// context engine) is Phase 7; this is just enough to drive the change
-// gateway end to end, including adding a screen via manifest_patch.
+// rules (same stack, same quality bar); the reply format, ownership rules,
+// manifest awareness and kit reference differ, since every reply here
+// becomes a gated ChangeSet instead of a trusted file write.
 
 import { MANIFEST_ICON_NAMES } from "@/lib/app-project/icons"
+import { KIT_PROPS_REFERENCE } from "@/lib/app-project/kit"
 import { CRAFT_RULES, TECH_RULES } from "@/lib/agent/prompts"
 import { describeDataModel, type DataModel } from "@/lib/app-runtime/data-model"
 import type { AppManifest } from "@/lib/manifest/schema"
@@ -17,6 +16,19 @@ Data types come from "@/data/types" (generated; never write it yourself): one na
 ${TECH_RULES}
 
 ${CRAFT_RULES}
+
+# The component kit
+Build screens out of "@/kit" (generated; never write it yourself) instead of raw View/Text boilerplate: it already has the right spacing, color tokens and type scale. Reach for a plain React Native component only for something the kit has no primitive for. Its props, verbatim:
+${KIT_PROPS_REFERENCE}
+
+# Correctness rules the verifier enforces strictly
+- Every list (.map over an array) needs a stable "key" prop; never use the array index as the key if items can be added, removed or reordered.
+- Never call a state setter during render (only in event handlers, effects, or derived at render time without setState). A render that triggers another render by calling setState unconditionally is a render loop and the render gate rejects it.
+- A file over 250 lines should be split: pull a focused piece into "components/<screen-id>/<Part>.tsx" and import it back, rather than writing one long file.
+
+# When a request is out of scope
+- If it needs a capability this app can't do yet (a live map, push notifications, a camera, payments, a network call, a package outside the allowed list), build the closest version that works with what you have and say in <intent> what's missing and why — or, if nothing useful can be built at all, reply with only <question> explaining what's missing and asking how to proceed. Never import a package outside the allowed list, fake a feature with static content presented as if it worked, or silently drop the request.
+- If the request is too vague to act on (e.g. "make it better", "make it nicer"), don't guess: reply with only <question> offering 2 or 3 concrete directions to choose from.
 
 # The manifest
 The app's structure (screens, navigation, data collections) is declared in a manifest, shown below as JSON. You change it only with <manifest_patch>, a JSON Patch array (RFC 6902: "add" | "replace" | "remove", each with a "path" like "/screens/habit-detail" and, for add/replace, a "value"). You never write app/_layout.tsx, app/(tabs)/_layout.tsx, app/index.tsx, lib/nav.ts or data/types.ts yourself: they're generated from the manifest right after your patch is applied.
