@@ -8,6 +8,7 @@ import { signedDownloadUrl } from "@/lib/storage"
 import { toStoredMessage } from "@/lib/agent/orchestrator"
 import type { AgentPhase } from "@/lib/agent/types"
 import { readAppDoc } from "@/lib/app-runtime/app-doc"
+import { engineOf } from "@/lib/verify/engine"
 import { getBackend } from "@/lib/cloudhike/app-backend"
 import { isConnectConfigured } from "@/lib/cloudhike/config"
 import { hasConnection } from "@/lib/cloudhike/connect"
@@ -84,6 +85,7 @@ export default async function WorkspacePage({
     backend: doc.backend,
     backendInfo: backendInfo(backendRow),
     cloudhike: { configured: isConnectConfigured(), accountConnected },
+    engine: engineOf(project),
   }
 
   // The project's attachments belong to the first prompt.

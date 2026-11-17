@@ -22,6 +22,17 @@ function fileIcon(name: string) {
   return FileCode2
 }
 
+const OWNER_LABEL: Record<FileLeaf["owner"], string> = { app: "App", platform: "Platform", generated: "Generated" }
+
+function OwnerBadge({ owner, className }: { owner: FileLeaf["owner"]; className?: string }) {
+  if (owner === "app") return null
+  return (
+    <span className={cn("shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground", className)}>
+      {OWNER_LABEL[owner]}
+    </span>
+  )
+}
+
 function flatten(nodes: FileNode[]): FileLeaf[] {
   return nodes.flatMap((n): FileLeaf[] => (n.type === "file" ? [n] : flatten(n.children)))
 }
@@ -101,7 +112,8 @@ function TreeItem({
         style={{ paddingLeft: 8 + depth * 12 + 20 }}
       >
         <Icon className="size-3.5 shrink-0 opacity-70" />
-        <span className="truncate">{node.name}</span>
+        <span className="min-w-0 flex-1 truncate">{node.name}</span>
+        <OwnerBadge owner={node.owner} />
       </button>
     </li>
   )
@@ -211,10 +223,16 @@ export function CodeView({ tree }: { tree: FileNode[] }) {
                 ))}
               </p>
               <div className="flex shrink-0 items-center gap-2">
+                <OwnerBadge owner={active.owner} className="hidden @2xl:inline" />
                 <span className="hidden rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground @2xl:inline">Read-only</span>
                 <CodeBlockCopyButton value={active.content} size="icon-sm" />
               </div>
             </div>
+            {active.owner !== "app" && (
+              <p className="shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
+                Generated from the app&apos;s structure{active.owner === "platform" ? " and configuration" : ""}; the AI never writes this file.
+              </p>
+            )}
             <div className="min-h-0 flex-1">
               <CodeViewer key={active.path} file={active} />
             </div>

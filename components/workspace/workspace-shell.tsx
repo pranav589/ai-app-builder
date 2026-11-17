@@ -63,8 +63,8 @@ export function WorkspaceShell({
     [cloudRef]
   )
   const files = React.useMemo(
-    () => appFileTree({ files: agent.files, screens: agent.screens, backend: backendConfig }),
-    [agent.files, agent.screens, backendConfig]
+    () => appFileTree({ files: agent.files, screens: agent.screens, backend: backendConfig, engine: project.engine }),
+    [agent.files, agent.screens, backendConfig, project.engine]
   )
   // What the preview runs: every project file plus each finished screen
   // (a screen still streaming in isn't complete code yet).

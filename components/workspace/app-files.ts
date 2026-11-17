@@ -2,13 +2,27 @@
 
 import type { GeneratedScreen } from "@/lib/agent/types"
 import type { BackendConfig } from "@/lib/app-runtime/app-doc"
-import type { FileNode } from "./types"
+import type { Engine } from "@/lib/verify/engine"
+import { isCompilerOwned, isPlatformOwned } from "@/lib/verify/ownership"
+import type { FileNode, FileOwner } from "./types"
 
 const LANG: Record<string, string> = { tsx: "tsx", ts: "typescript", js: "javascript", jsx: "jsx", json: "json", css: "css", md: "markdown" }
 const language = (path: string) => LANG[path.split(".").pop() ?? ""] ?? "text"
 
+/**
+ * Who owns a file (Phase 9): platform files (theme, backend, config) are
+ * template-written in both engines, so that's always true; the compiler
+ * only exists on the verified engine (for a legacy project the same paths,
+ * like app/_layout.tsx, are AI-written, which is "app").
+ */
+export function classifyOwner(path: string, engine: Engine): FileOwner {
+  if (isPlatformOwned(path)) return "platform"
+  if (engine === "verified" && isCompilerOwned(path)) return "generated"
+  return "app"
+}
+
 /** Builds a sorted folder tree (folders first) from flat paths. */
-function toTree(files: Record<string, string>): FileNode[] {
+function toTree(files: Record<string, string>, engine: Engine): FileNode[] {
   type Dir = { dirs: Map<string, Dir>; files: Map<string, string> }
   const root: Dir = { dirs: new Map(), files: new Map() }
   for (const [path, content] of Object.entries(files)) {
@@ -26,7 +40,10 @@ function toTree(files: Record<string, string>): FileNode[] {
       .map(([name, sub]): FileNode => ({ type: "folder", name, path: prefix + name, children: build(sub, `${prefix}${name}/`) })),
     ...[...d.files.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, content]): FileNode => ({ type: "file", name, path: prefix + name, language: language(name), content })),
+      .map(([name, content]): FileNode => {
+        const path = prefix + name
+        return { type: "file", name, path, language: language(name), content, owner: classifyOwner(path, engine) }
+      }),
   ]
   return build(root, "")
 }
@@ -35,10 +52,12 @@ export function appFileTree({
   files,
   screens,
   backend,
+  engine,
 }: {
   files: Record<string, string>
   screens: GeneratedScreen[]
   backend?: BackendConfig
+  engine: Engine
 }): FileNode[] {
   const all: Record<string, string> = { ...files }
   // Screens show up as they are written, including the one streaming in.
@@ -54,5 +73,5 @@ export function appFileTree({
       null,
       2
     ) + "\n"
-  return toTree(all)
+  return toTree(all, engine)
 }

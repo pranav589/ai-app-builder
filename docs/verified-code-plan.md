@@ -637,11 +637,30 @@ builds fully on the verified engine.
 
 **Done when.** Tests pass; badges and diffs render.
 
-**User tests.**
+**Status: done, except item 3 (same blocker as Phase 8 item 3).**
+- Item 1: `components/workspace/app-files.ts` `classifyOwner(path, engine)` (platform files are
+  platform-owned in both engines; compiler paths like `app/_layout.tsx` and `lib/nav.ts` are
+  "generated" only on the verified engine — on legacy the same paths are AI-written, so they're
+  "app"). `FileNode` carries the owner; `code-view.tsx` shows a small badge in the tree and the
+  open-file header, plus a read-only note for Platform/Generated files.
+- Item 2: `lib/versions/diff.ts` (dependency-free LCS line diff, unified-context trimming) plus
+  `GET /api/projects/[projectId]/versions/[version]/diff` and a new "Changes" tab
+  (`components/workspace/changes-view.tsx`) next to Preview/Code, with a version picker that
+  reuses the Phase 1 `/versions` list. Works for both engines (it diffs `AppDoc` snapshots,
+  which both engines commit).
+- Item 3 is **not done**, for the same reason as Phase 8 item 3: it depends on the canvas
+  inspector (clicking an element in the preview to select it) which doesn't exist anywhere in
+  this codebase. Nothing currently sets `data-eid` on a clicked element or reads
+  `SelectedElement`, so there's nothing to jump from yet.
+
+**User tests.** Pending — to be tested later. I verified the build compiles, the gates/ownership
+unit tests pass, and (via the dev server already running) that the new routes and components
+load without a runtime error, but I did not click through the UI as a signed-in user.
 1. Open the Code tab: screens are marked App, layouts and `lib/nav.ts` are Generated, theme
    and backend are Platform.
 2. Make an edit, open Changes: only the touched files are listed, with a readable diff.
-3. Click an element in the preview: the Code tab jumps to its lines.
+3. ~~Click an element in the preview: the Code tab jumps to its lines.~~ Not applicable until
+   the canvas inspector exists (see Status above).
 
 ---
 

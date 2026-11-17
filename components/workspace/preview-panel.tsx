@@ -1,11 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { ChevronLeft, ChevronRight, Code2, DatabaseZap, Eye, QrCode, RotateCw } from "lucide-react"
+import { ChevronLeft, ChevronRight, Code2, DatabaseZap, Eye, GitCompare, QrCode, RotateCw } from "lucide-react"
 import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ChangesView } from "./changes-view"
 import { CodeView } from "./code-view"
 import { SCREEN_HEIGHT, SCREEN_WIDTH } from "./dummy-data"
 import { ExpoQrDialog, QrPattern } from "./expo-qr"
@@ -133,13 +134,13 @@ export function PreviewPanel({
   files: FileNode[]
 }) {
   const resetData = useResetAppData()
-  const [tab, setTab] = React.useState<"preview" | "code">("preview")
+  const [tab, setTab] = React.useState<"preview" | "code" | "changes">("preview")
   const [platform, setPlatform] = React.useState<DevicePlatform>("ios")
   const [reloadKey, setReloadKey] = React.useState(0)
   const [qrOpen, setQrOpen] = React.useState(false)
 
   return (
-    <Tabs value={tab} onValueChange={(v) => setTab(v as "preview" | "code")} className="h-full min-h-0 gap-0 bg-background">
+    <Tabs value={tab} onValueChange={(v) => setTab(v as "preview" | "code" | "changes")} className="h-full min-h-0 gap-0 bg-background">
       <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border px-2">
         <TabsList className="h-8">
           <TabsTrigger value="preview" className="px-2.5">
@@ -147,6 +148,9 @@ export function PreviewPanel({
           </TabsTrigger>
           <TabsTrigger value="code" className="px-2.5">
             <Code2 /> Code
+          </TabsTrigger>
+          <TabsTrigger value="changes" className="px-2.5">
+            <GitCompare /> Changes
           </TabsTrigger>
         </TabsList>
 
@@ -204,6 +208,10 @@ export function PreviewPanel({
 
       <TabsContent value="code" className="min-h-0">
         <CodeView tree={files} />
+      </TabsContent>
+
+      <TabsContent value="changes" className="min-h-0">
+        <ChangesView projectId={projectId} />
       </TabsContent>
 
       <ExpoQrDialog open={qrOpen} onOpenChange={setQrOpen} projectId={projectId} />
