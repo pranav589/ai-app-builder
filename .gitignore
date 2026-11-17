@@ -38,6 +38,8 @@ next-env.d.ts
 
 # junction into .agents/skills/ (same files; avoid a duplicate copy in git)
 /.claude/skills/
+/.agents
+/poc
 
 # scratch SSE/debug captures
 /streams.txt
