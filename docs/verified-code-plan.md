@@ -592,11 +592,30 @@ builds fully on the verified engine.
 
 **Done when.** Tests pass; eval p50 time to verified for `edit` tasks is lower than Phase 7.
 
-**User tests.**
+**Status: done, except item 3 (decided with the user).**
+- Items 1, 2 and 4 done: `lib/verify/router.ts` (route, parsing, prompt) plus
+  `lib/agent/orchestrator.ts` `routeMessage`, called from `execute.ts` before the planner for a
+  verified project that already has a built app. `edit` goes straight to `runVerifiedEdit`
+  (focused context, no planner call); `question`/`integration`/`unsupported` are answered
+  directly with no new version; `add_screen`/`structure`/an unparseable reply/no built app yet
+  fall back to the existing planner path unchanged. Item 4 (the chat showing "Editing Home"
+  instead of "Planning") falls out of this for free: skipping the planner also skips its
+  `phase: "planning"` / "Thinking" status, so the first thing shown is `routeMessage`'s "Reading
+  your message" and then `runVerifiedEdit`'s own "Editing Home" status.
+- Item 3 (canvas inline edits) is **not done**: the preview inspector it depends on (picking an
+  element in the canvas, editing its text/style inline) doesn't exist anywhere in this
+  codebase yet — only the message protocol types (`SelectedElement`, `ElementEdit`,
+  `apply-edit`) are defined, with no UI calling them. Building that inspector is a separate,
+  sizeable feature on its own; the user chose to skip it for this phase rather than build it or
+  stub the codemod alone. The AST codemod (apply a text/style edit at an `eid` location, run it
+  through the gates, no model call) still needs to be built once the inspector exists.
+
+**User tests.** Pending — to be tested later.
 1. Ask "add a scroll to the home screen": it finishes in roughly 10 to 15 seconds and the
    Versions entry shows only that screen changed.
 2. Ask "what screens does my app have?": you get an answer and no new version.
-3. Edit a text inline on the canvas: it saves instantly as a new version without an AI call.
+3. ~~Edit a text inline on the canvas: it saves instantly as a new version without an AI
+   call.~~ Not applicable until the canvas inspector exists (see Status above).
 
 ---
 

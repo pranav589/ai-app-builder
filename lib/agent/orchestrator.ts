@@ -1,7 +1,7 @@
 import "server-only"
 import { randomBytes } from "node:crypto"
 import { Agent, assistant, run as runAgent, system, user, type AgentInputItem } from "@openai/agents"
-import { asc, desc, eq, sql } from "drizzle-orm"
+import { and, asc, desc, eq, sql } from "drizzle-orm"
 
 import { db, messages, projects, type Project } from "@/db"
 import { readAppDoc, type AppDoc } from "@/lib/app-runtime/app-doc"
@@ -16,6 +16,7 @@ import { selectFiles } from "@/lib/verify/context"
 import { formatDiagnostics, verifyChange } from "@/lib/verify/pipeline"
 import { compileManifest } from "@/lib/manifest/compile"
 import { KIT_PATH, KIT_SOURCE } from "@/lib/app-project/kit"
+import { ROUTER_INSTRUCTIONS, parseRouterReply, routerPrompt } from "@/lib/verify/router"
 import type { GateName } from "@/lib/verify/types"
 import { regenOutcome } from "./generation-guard"
 import { emptyDataModel, normalizeDataModel, type DataModel } from "@/lib/app-runtime/data-model"
@@ -75,6 +76,7 @@ let foundation: Agent | null = null
 let shell: Agent | null = null
 let fixer: Agent | null = null
 let editor: Agent | null = null
+let router: Agent | null = null
 
 function agents() {
   const model = getModel()
@@ -100,7 +102,8 @@ function agents() {
     modelSettings: { maxTokens: 6000, reasoning, providerData },
   })
   foundation ??= new Agent({ name: "Design system", instructions: FOUNDATION_INSTRUCTIONS, model: fast, modelSettings: { maxTokens: 12000, reasoning, providerData } })
-  return { planner, designer, planFixer, foundation, shell, fixer, editor }
+  router ??= new Agent({ name: "Router", instructions: ROUTER_INSTRUCTIONS, model: fast, modelSettings: { maxTokens: 400, reasoning, providerData } })
+  return { planner, designer, planFixer, foundation, shell, fixer, editor, router }
 }
 
 // ---------------------------------------------------------------- persistence
@@ -315,6 +318,59 @@ function historyToInput(
 /** Sent to the planner when a request turned out to need a new screen. */
 export const NEW_SCREEN_NUDGE =
   "The person's latest request may need a new screen, which an <edit> cannot do (the editor can only change files that already exist). If it does, reply again: one short sentence saying you are adding it now, then the full updated <plan> with every existing screen unchanged and the new screen added, and no <edit> block. If it really is only a change to existing screens, reply with the <edit> as before."
+
+/**
+ * Phase 8 fast path: for a verified project that already has a built app,
+ * classify the latest message before running the slow, streaming planner on
+ * it. "edit" goes straight to the coder with focused context; "question",
+ * "integration" and "unsupported" are answered directly, no ChangeSet. Every
+ * other case (add_screen, structure, an unparseable router reply, a legacy
+ * project, or nothing built yet) returns `{ handled: false }` so the caller
+ * falls back to the planner exactly as it did before this existed.
+ */
+export async function routeMessage(run: LiveRun, projectId: string): Promise<{ handled: boolean }> {
+  const project = await loadProject(projectId)
+  if (engineOf(project) !== "verified") return { handled: false }
+  const doc = readAppDoc(project.previewScreens)
+  if (!doc.screens.some((s) => s.state === "ready")) return { handled: false }
+
+  const [lastUser] = await db
+    .select({ text: messages.text })
+    .from(messages)
+    .where(and(eq(messages.projectId, projectId), eq(messages.sender, "user")))
+    .orderBy(desc(messages.createdAt))
+    .limit(1)
+  if (!lastUser?.text) return { handled: false }
+
+  const manifest = ensureManifest(doc, await latestPlan(projectId))
+  if (!manifest) return { handled: false }
+
+  run.emit({ type: "status", text: "Reading your message" })
+  const { router } = agents()
+  let raw = ""
+  try {
+    raw = await streamText(router, routerPrompt(manifest, lastUser.text), () => {})
+  } catch (e) {
+    console.warn("router call failed, falling back to the planner", e instanceof Error ? e.message : e)
+    return { handled: false }
+  }
+  const reply = parseRouterReply(raw)
+  if (!reply || reply.route === "add_screen" || reply.route === "structure") return { handled: false }
+
+  if (reply.route === "edit") {
+    run.emit({ type: "run_state", state: "routed" })
+    const { needsPlan } = await runVerifiedEdit(run, projectId, { targets: reply.targets, instruction: lastUser.text })
+    return { handled: !needsPlan }
+  }
+
+  // question / integration / unsupported: answered directly, no ChangeSet, no new version.
+  run.emit({ type: "run_state", state: "answered" })
+  const msg = await saveMessage(projectId, { sender: "assistant", kind: "standard", text: reply.answer || "Could you say a bit more about what you'd like changed?" })
+  run.emit({ type: "message_done", message: msg })
+  await setPhase(projectId, "ready")
+  run.emit({ type: "phase", phase: "ready" })
+  return { handled: true }
+}
 
 export async function runPlanning(run: LiveRun, projectId: string, opts: { first: boolean; nudge?: string }) {
   const { planner, planFixer } = agents()

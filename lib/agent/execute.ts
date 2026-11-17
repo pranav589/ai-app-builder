@@ -5,7 +5,7 @@ import { db, messages, projects } from "@/db"
 import { readAppDoc } from "@/lib/app-runtime/app-doc"
 import { engineOf } from "@/lib/verify/engine"
 import { AgentConfigError } from "./config"
-import { latestPlan, NEW_SCREEN_NUDGE, runEdit, runGeneration, runPlanning, runVerifiedEdit, setPhase } from "./orchestrator"
+import { latestPlan, NEW_SCREEN_NUDGE, routeMessage, runEdit, runGeneration, runPlanning, runVerifiedEdit, setPhase } from "./orchestrator"
 import { claimRun, createEventSink, finishRun, holdRun, type RunInput } from "./run-store"
 import { parseServices } from "@/lib/cloudhike/config"
 import { runBackendSetup, syncBackendSchema } from "@/lib/cloudhike/provision"
@@ -45,21 +45,28 @@ export async function executeRun(runId: string): Promise<{ taken: boolean; ok?: 
     if (input.task === "backend") {
       await runBackendSetup(run, projectId, input.userId!, parseServices(input.services))
     } else if (input.task === "plan") {
-      const hasAssistant = await db
-        .select({ id: messages.id })
-        .from(messages)
-        .where(and(eq(messages.projectId, projectId), eq(messages.sender, "assistant")))
-        .limit(1)
-      const { approved, edit } = await runPlanning(run, projectId, { first: hasAssistant.length === 0 })
-      if (approved) await generate(run, projectId)
-      // Changes to built screens skip the plan and the full build.
-      else if (edit) {
-        const { needsPlan } = await dispatchEdit(run, projectId, edit, { escalate: true })
-        // It needed a new screen after all: plan it (once), then build just that.
-        if (needsPlan) {
-          const again = await runPlanning(run, projectId, { first: false, nudge: NEW_SCREEN_NUDGE })
-          if (again.approved) await generate(run, projectId)
-          else if (again.edit) await dispatchEdit(run, projectId, again.edit)
+      // The fast router (Phase 8): a verified project with a built app gets
+      // most chat messages classified and handled without the slow planner
+      // call. Falls through to the planner for everything it isn't sure
+      // about, exactly as if this didn't run.
+      const { handled } = await routeMessage(run, projectId)
+      if (!handled) {
+        const hasAssistant = await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(and(eq(messages.projectId, projectId), eq(messages.sender, "assistant")))
+          .limit(1)
+        const { approved, edit } = await runPlanning(run, projectId, { first: hasAssistant.length === 0 })
+        if (approved) await generate(run, projectId)
+        // Changes to built screens skip the plan and the full build.
+        else if (edit) {
+          const { needsPlan } = await dispatchEdit(run, projectId, edit, { escalate: true })
+          // It needed a new screen after all: plan it (once), then build just that.
+          if (needsPlan) {
+            const again = await runPlanning(run, projectId, { first: false, nudge: NEW_SCREEN_NUDGE })
+            if (again.approved) await generate(run, projectId)
+            else if (again.edit) await dispatchEdit(run, projectId, again.edit)
+          }
         }
       }
     } else {
