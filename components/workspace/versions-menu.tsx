@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -73,7 +74,9 @@ export function VersionsMenu({ projectId, disabled }: { projectId: string; disab
         }
       />
       <DropdownMenuContent align="end" className="w-80">
-        <DropdownMenuLabel>Versions</DropdownMenuLabel>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Versions</DropdownMenuLabel>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
         {loading && <div className="px-2 py-3 text-sm text-muted-foreground">Loading…</div>}
         {error && <div className="px-2 py-2 text-sm text-destructive">{error}</div>}
