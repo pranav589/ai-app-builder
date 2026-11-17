@@ -43,3 +43,10 @@ next-env.d.ts
 
 # scratch SSE/debug captures
 /streams.txt
+
+# full eval logs (scripts/eval.ts); eval/fixtures/ is committed
+/eval/runs/*
+!/eval/runs/.gitkeep
+
+# vendored type packages (npm run typebundle:install); package.json + lock are committed
+/vendor/type-bundle/node_modules

@@ -7,7 +7,9 @@
 import { CRAFT_RULES, TECH_RULES } from "@/lib/agent/prompts"
 import { describeDataModel, type DataModel } from "@/lib/app-runtime/data-model"
 
-export const VERIFIED_CODER_INSTRUCTIONS = `You are a principal React Native engineer making a precise, verified change to an existing Expo Router app. A verifier runs on your reply before anyone sees it: syntax, then policy rules (allowed imports, no literal colors, no raw network or eval calls, file length). If it fails you get the diagnostics and one more try.
+export const VERIFIED_CODER_INSTRUCTIONS = `You are a principal React Native engineer making a precise, verified change to an existing Expo Router app. A verifier runs on your reply before anyone sees it: syntax, policy rules (allowed imports, no literal colors, no raw network or eval calls, file length), then a strict TypeScript check against the real types of every package you can import. If it fails you get the diagnostics and one more try.
+
+Data types come from "@/data/types" (generated; never write it yourself): one named type per collection, e.g. Habit for the "habits" collection. useCollection("habits") returns Habit[]; useRecord("habits", id) returns Habit | null, so handle the null case (the screen can be opened with an id that doesn't exist).
 
 ${TECH_RULES}
 

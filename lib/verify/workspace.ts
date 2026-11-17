@@ -2,6 +2,7 @@
 // Ported from poc/verified-code/src/core/workspace.ts, without its manifest
 // and compiler integration (that lands in Phase 6).
 
+import { autoImport, projectExports } from "@/lib/app-project/project"
 import type { AppDoc } from "@/lib/app-runtime/app-doc"
 import { isAppOwned, isCompilerOwned, isPlatformOwned } from "./ownership"
 import type { ChangeSet, Diagnostic, FileMap, Workspace } from "./types"
@@ -100,6 +101,22 @@ export function applyChangeSet(base: Workspace, cs: ChangeSet): { ws?: Workspace
     changed.add(ch.path)
   }
   if (diagnostics.length) return { changed: [...changed], diagnostics }
+
+  // A missing import is the model's most common slip, and it's a name the
+  // project already has (its own exports or a well-known API); fix it
+  // deterministically rather than spending a repair round on it. Retired
+  // once first-pass rates show the model doesn't need it anymore.
+  const exports = projectExports(files)
+  for (const path of changed) {
+    if (!isAppOwned(path)) continue
+    const code = files[path]
+    if (code === undefined) continue // deleted
+    const fixed = autoImport(code, exports)
+    if (fixed !== code) {
+      console.info(`[verify] autoImport added an import in ${path}`)
+      files[path] = fixed
+    }
+  }
 
   return { ws: { manifest: base.manifest, files }, changed: [...changed].sort(), diagnostics: [] }
 }

@@ -566,6 +566,7 @@ export async function repairFile(run: LiveRun, projectId: string, path: string, 
     })
     const result = await runChange(ws, prompt, coderAdapter, {
       debugFail: verifyDebugFail(),
+      projectKey: projectId,
       onState: (state) => run.emit({ type: "run_state", state }),
     })
     emitAttempts(run, result.attempts)
@@ -764,6 +765,7 @@ export async function runVerifiedEdit(run: LiveRun, projectId: string, edit: Edi
 
   const result = await runChange(ws, prompt, coderAdapter, {
     debugFail: verifyDebugFail(),
+    projectKey: projectId,
     onState: (state) => {
       run.emit({ type: "run_state", state })
       run.emit({ type: "status", text: state === "repairing" ? `Fixing ${label}` : `Editing ${label}`, since: Date.now() })

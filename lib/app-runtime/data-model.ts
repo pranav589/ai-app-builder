@@ -93,6 +93,71 @@ export function normalizeDataModel(raw: unknown, hash: string): DataModel {
   }
 }
 
+const FIELD_TS_TYPE: Record<FieldType, string> = {
+  string: "string",
+  text: "string",
+  number: "number",
+  boolean: "boolean",
+  date: "string",
+  image: "string",
+  enum: "string",
+}
+
+const pascalCase = (s: string) =>
+  s
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .trim()
+    .split(" ")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join("") || "Record"
+
+/** "habits" -> "habit", "categories" -> "category" (rough English singularization, good enough for collection names). */
+const singular = (s: string) =>
+  s
+    .replace(/(ies)$/i, "y")
+    .replace(/(ses|xes|ches|shes)$/i, (m) => m.slice(0, -2))
+    .replace(/s$/i, "")
+
+/** The TypeScript type name a collection's records are given in the generated @/data/types module. */
+export const collectionTypeName = (collectionName: string) => pascalCase(singular(collectionName))
+
+const fieldTsType = (f: DataField) => (f.type === "enum" && f.options?.length ? f.options.map((o) => JSON.stringify(o)).join(" | ") : FIELD_TS_TYPE[f.type])
+
+/**
+ * `data/types.ts`: one record type per collection, plus a `Collections` map
+ * the typed `useCollection`/`useRecord` overloads key off of. Generated
+ * deterministically so the same data model always produces the same file;
+ * regenerated whenever the model changes (same cadence as data/seed.json).
+ */
+export function generateDataTypes(m: DataModel): string {
+  if (!m.collections.length) {
+    return `// Generated from the app's data model (lib/app-runtime/data-model.ts). Do not edit: it is
+// rewritten whenever the data model changes.
+
+/** No data collections yet. */
+export type Collections = Record<string, never>
+`
+  }
+  const types = m.collections
+    .map((c) => {
+      const name = collectionTypeName(c.name)
+      const fields = c.fields.map((f) => `  ${f.name}: ${fieldTsType(f)}`).join("\n")
+      return `export type ${name} = {\n  id: string\n${fields}\n  createdAt: string\n  updatedAt?: string\n}`
+    })
+    .join("\n\n")
+  const map = m.collections.map((c) => `  ${JSON.stringify(c.name)}: ${collectionTypeName(c.name)}`).join("\n")
+  return `// Generated from the app's data model (lib/app-runtime/data-model.ts). Do not edit: it is
+// rewritten whenever the data model changes.
+
+${types}
+
+/** Maps a collection name to its record type, for useCollection/useRecord. */
+export type Collections = {
+${map}
+}
+`
+}
+
 /** A compact description of the model for the screen designer prompt. */
 export function describeDataModel(m: DataModel) {
   if (!m.collections.length) return "No data collections (this app shows static content only)."

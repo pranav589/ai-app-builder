@@ -40,6 +40,8 @@ export type RunOpts = {
   onState?: (s: RunState, info?: string) => void
   /** VERIFY_DEBUG_FAIL: makes `gate` fail the first `n` attempts with a synthetic diagnostic. */
   debugFail?: { gate: GateName; n: number }
+  /** Identifies this project to the tsc gate's warm-LanguageService cache (lib/verify/gates/typecheck.ts). */
+  projectKey?: string
 }
 
 export async function runChange(base: Workspace, userPrompt: string, model: ModelAdapter, opts: RunOpts = {}): Promise<RunResult> {
@@ -86,7 +88,7 @@ export async function runChange(base: Workspace, userPrompt: string, model: Mode
         ],
       }
     } else {
-      verdict = await verifyChange(base, parsed.changeSet)
+      verdict = await verifyChange(base, parsed.changeSet, opts.projectKey)
     }
     const diagnostics = verdict.ok ? undefined : formatDiagnostics(verdict)
     attempts.push({
