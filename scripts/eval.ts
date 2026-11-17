@@ -36,6 +36,8 @@ import type { AppPlan } from "@/lib/agent/types"
 import { emptyDataModel } from "@/lib/app-runtime/data-model"
 import { importsOf, projectExports } from "@/lib/app-project/project"
 import { coderAdapter } from "@/lib/verify/coder"
+import { ensureManifest } from "@/lib/manifest/migrate"
+import type { AppManifest } from "@/lib/manifest/schema"
 import { formatDiagnostics, verifyChange, type Verdict } from "@/lib/verify/pipeline"
 import { verifiedEditPrompt, repairPrompt } from "@/lib/verify/prompts"
 import { parseReply } from "@/lib/verify/protocol"
@@ -75,7 +77,13 @@ if (context !== "all" && context !== "focused") {
 
 const fixturePath = path.join(process.cwd(), "eval", "fixtures", `${fixtureName}.json`)
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as { plan: AppPlan; doc: AppDoc }
-const base: Workspace = workspaceFromDoc(fixture.doc)
+const manifestOrNull = ensureManifest(fixture.doc, fixture.plan)
+if (!manifestOrNull) {
+  console.error(`Fixture "${fixtureName}" has no manifest and no plan to build one from.`)
+  process.exit(1)
+}
+const manifest: AppManifest = manifestOrNull
+const base: Workspace = workspaceFromDoc({ ...fixture.doc, manifest })
 const ready = fixture.doc.screens.filter((s) => s.state === "ready" && s.code && s.path)
 const appFiles = Object.entries(base.files)
   .filter(([p]) => isAppOwned(p))
@@ -96,7 +104,7 @@ const focusedFiles = (() => {
 
 function buildPrompt(task: Task) {
   return verifiedEditPrompt(task.text, context === "all" ? appFiles : focusedFiles, {
-    screens: ready.map((s) => `/${s.id}: ${s.name}`).join(", "),
+    manifest,
     components: Object.entries(projectExports(base.files)).map(([n, e]) => `${n} (${e.module})`).join(", "),
     data: fixture.doc.data ?? emptyDataModel(),
   })

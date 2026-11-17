@@ -2,6 +2,7 @@
 // stored a bare array of screens there; readAppDoc accepts both shapes.
 
 import type { GeneratedScreen } from "@/lib/agent/types"
+import type { AppManifest } from "@/lib/manifest/schema"
 import type { DataModel } from "./data-model"
 import type { ThemePackage } from "./theme"
 
@@ -23,6 +24,8 @@ export type AppDoc = {
   themes?: ThemePackage
   data?: DataModel
   backend: BackendConfig
+  /** Verified-engine apps only (Phase 6); migrated lazily on first open (lib/manifest/migrate.ts fromLegacy). */
+  manifest?: AppManifest
 }
 
 export function readAppDoc(raw: unknown): AppDoc {
@@ -38,6 +41,7 @@ export function readAppDoc(raw: unknown): AppDoc {
       themes: d.themes,
       data: d.data,
       backend: d.backend ?? { provider: "local" },
+      manifest: d.manifest,
     }
   }
   return { v: 2, screens: [], backend: { provider: "local" } }

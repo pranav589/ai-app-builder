@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { applyChangeSet, docFromWorkspace, workspaceFromDoc } from "@/lib/verify/workspace"
-import type { ChangeSet } from "@/lib/verify/types"
+import type { ChangeSet, Workspace } from "@/lib/verify/types"
 import type { AppDoc } from "@/lib/app-runtime/app-doc"
+import type { AppManifest } from "@/lib/manifest/schema"
 
 const cs = (overrides: Partial<ChangeSet>): ChangeSet => ({ intent: "test", manifestPatch: [], files: [], ...overrides })
 
@@ -86,5 +87,88 @@ describe("workspaceFromDoc / docFromWorkspace", () => {
     const ws = workspaceFromDoc(doc)
     const next = docFromWorkspace(doc, { files: { ...ws.files, "components/Card.tsx": "export const Card = () => <View />\n" } })
     expect(next.files?.["components/Card.tsx"]).toBe("export const Card = () => <View />\n")
+  })
+})
+
+const manifest: AppManifest = {
+  schemaVersion: 1,
+  app: { name: "Habit Tracker", slug: "habit-tracker" },
+  screens: {
+    home: { title: "Home", presentation: "tab", icon: "home-outline" },
+    profile: { title: "Profile", presentation: "tab", icon: "person-outline" },
+  },
+  navigation: { tabs: ["home", "profile"], initial: "home" },
+  collections: {},
+  allowedPackages: ["react", "react-native"],
+}
+
+describe("applyChangeSet with a manifest patch", () => {
+  const base: Workspace = { manifest, files: { "app/(tabs)/home.tsx": "x", "app/(tabs)/profile.tsx": "x" } }
+
+  it("adds a screen whose file is written in the same change", () => {
+    const r = applyChangeSet(
+      base,
+      cs({
+        manifestPatch: [{ op: "add", path: "/screens/settings", value: { title: "Settings", presentation: "stack" } }],
+        files: [{ path: "app/settings.tsx", op: "write", content: `export default function Settings() { return null }\n` }],
+      })
+    )
+    expect(r.diagnostics).toEqual([])
+    expect((r.ws?.manifest as AppManifest).screens.settings).toBeTruthy()
+    expect(r.ws?.files["app/settings.tsx"]).toContain("Settings")
+    expect(r.changed).toContain("app/settings.tsx")
+    expect(r.changed).toContain("lib/nav.ts")
+  })
+
+  it("rejects a manifest patch that adds a screen without its file", () => {
+    const r = applyChangeSet(base, cs({ manifestPatch: [{ op: "add", path: "/screens/settings", value: { title: "Settings", presentation: "stack" } }] }))
+    expect(r.ws).toBeUndefined()
+    expect(r.diagnostics.some((d) => d.gate === "manifest" && d.code === "screen_missing_file")).toBe(true)
+  })
+
+  it("rejects a manifest patch when there is no manifest yet", () => {
+    const r = applyChangeSet({ files: {} }, cs({ manifestPatch: [{ op: "add", path: "/screens/settings", value: { title: "Settings", presentation: "stack" } }] }))
+    expect(r.ws).toBeUndefined()
+    expect(r.diagnostics[0]).toMatchObject({ gate: "manifest", code: "no_manifest" })
+  })
+
+  it("rejects a manifest patch that fails validation", () => {
+    const r = applyChangeSet(base, cs({ manifestPatch: [{ op: "remove", path: "/navigation/tabs/1" }] }))
+    expect(r.ws).toBeUndefined()
+    expect(r.diagnostics.some((d) => d.gate === "manifest")).toBe(true)
+  })
+
+  it("rejects a malformed patch path", () => {
+    const r = applyChangeSet(base, cs({ manifestPatch: [{ op: "replace", path: "/screens/nope/title", value: "x" }] }))
+    expect(r.ws).toBeUndefined()
+    expect(r.diagnostics[0]).toMatchObject({ gate: "manifest", code: "patch_failed" })
+  })
+
+  it("recompiles app/_layout.tsx, app/(tabs)/_layout.tsx, app/index.tsx, lib/nav.ts and data/types.ts when the manifest changes", () => {
+    const r = applyChangeSet(
+      base,
+      cs({
+        manifestPatch: [{ op: "add", path: "/screens/settings", value: { title: "Settings", presentation: "stack" } }],
+        files: [{ path: "app/settings.tsx", op: "write", content: `export default function Settings() { return null }\n` }],
+      })
+    )
+    for (const p of ["app/_layout.tsx", "app/(tabs)/_layout.tsx", "app/index.tsx", "lib/nav.ts", "data/types.ts"]) expect(r.ws?.files[p]).toBeTruthy()
+  })
+})
+
+describe("docFromWorkspace with a manifest", () => {
+  const doc: AppDoc = { v: 2, backend: { provider: "local" }, screens: [{ id: "home", name: "Home", state: "ready", path: "app/home.tsx", code: "old" }], manifest }
+
+  it("adds a new GeneratedScreen for a manifest screen that gained a file", () => {
+    const withNewScreen: AppManifest = { ...manifest, screens: { ...manifest.screens, settings: { title: "Settings", presentation: "stack" } } }
+    const next = docFromWorkspace(doc, { manifest: withNewScreen, files: { "app/home.tsx": "old", "app/profile.tsx": "x", "app/settings.tsx": "new screen code" } })
+    const settings = next.screens.find((s) => s.id === "settings")
+    expect(settings).toMatchObject({ name: "Settings", path: "app/settings.tsx", code: "new screen code", state: "ready" })
+  })
+
+  it("drops a GeneratedScreen the manifest patch removed", () => {
+    const withoutHome: AppManifest = { ...manifest, screens: { profile: manifest.screens.profile }, navigation: { tabs: ["profile"], initial: "profile" } }
+    const next = docFromWorkspace(doc, { manifest: withoutHome, files: { "app/profile.tsx": "x" } })
+    expect(next.screens.find((s) => s.id === "home")).toBeUndefined()
   })
 })

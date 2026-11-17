@@ -86,3 +86,6 @@ export function previewIcon(name: { sf?: string; md?: string }, selected: boolea
 
 /** For the AI: the icon names it may use, as "sf / md" pairs. */
 export const ICON_VOCABULARY = ICONS.map((i) => `${i.sf} (${i.sfSelected}) / ${i.md}`).join(", ")
+
+/** For the verified engine's manifest: the icon vocabulary by its single Ionicons name (lib/manifest/schema.ts validates a tab screen's icon against this). */
+export const MANIFEST_ICON_NAMES = ICONS.map((i) => i.ion).join(", ")

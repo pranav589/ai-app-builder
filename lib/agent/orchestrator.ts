@@ -11,6 +11,8 @@ import { coderAdapter } from "@/lib/verify/coder"
 import { runChange } from "@/lib/verify/run"
 import { verifiedEditPrompt } from "@/lib/verify/prompts"
 import { docFromWorkspace, workspaceFromDoc } from "@/lib/verify/workspace"
+import { ensureManifest, syncManifest } from "@/lib/manifest/migrate"
+import { compileManifest } from "@/lib/manifest/compile"
 import type { GateName } from "@/lib/verify/types"
 import { regenOutcome } from "./generation-guard"
 import { emptyDataModel, normalizeDataModel, type DataModel } from "@/lib/app-runtime/data-model"
@@ -557,10 +559,12 @@ export async function repairFile(run: LiveRun, projectId: string, path: string, 
   const label = screen?.name ?? path.split("/").pop() ?? path
 
   if (engineOf(project) === "verified") {
-    const ws = workspaceFromDoc(doc)
+    const manifest = ensureManifest(doc, await latestPlan(projectId))
+    if (!manifest) return null
+    const ws = workspaceFromDoc({ ...doc, manifest })
     const exports = projectExports(ws.files)
     const prompt = verifiedEditPrompt(`In the running app, ${path} crashed with: "${message.slice(0, 500)}". Find the cause and fix it.`, [{ path, code }], {
-      screens: doc.screens.filter((s) => s.state === "ready").map((s) => `/${s.id}: ${s.name}`).join(", "),
+      manifest,
       components: Object.entries(exports).map(([n, e]) => `${n} (${e.module})`).join(", "),
       data: doc.data ?? emptyDataModel(),
     })
@@ -736,7 +740,9 @@ export async function runVerifiedEdit(run: LiveRun, projectId: string, edit: Edi
   const project = await loadProject(projectId)
   const doc = readAppDoc(project.previewScreens)
   const ready = doc.screens.filter((s) => s.state === "ready" && s.code && s.path)
-  const ws = workspaceFromDoc(doc)
+  const manifest = ensureManifest(doc, await latestPlan(projectId))
+  if (!manifest) return { needsPlan: true }
+  const ws = workspaceFromDoc({ ...doc, manifest })
 
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "")
   const targetPaths = new Set<string>()
@@ -757,7 +763,7 @@ export async function runVerifiedEdit(run: LiveRun, projectId: string, edit: Edi
     edit.instruction,
     [...targetPaths].map((p) => ({ path: p, code: ws.files[p] })),
     {
-      screens: ready.map((s) => `/${s.id}: ${s.name}`).join(", "),
+      manifest,
       components: Object.entries(projectExports(ws.files)).map(([n, e]) => `${n} (${e.module})`).join(", "),
       data: doc.data ?? emptyDataModel(),
     }
@@ -1146,10 +1152,16 @@ export async function runGeneration(run: LiveRun, projectId: string) {
         }),
   ])
 
-  // Project files: platform modules and config, then the shell.
+  // Project files: platform modules and config, then the shell. On the
+  // verified engine, navigation and typed nav/data files come from the
+  // manifest compiler, not the AI shell (Phase 6): the manifest is built
+  // once (or reused from a previous edit) and recompiled on every build so
+  // it never drifts from the plan.
   const platform = platformFiles(plan, themes, data)
-  let files: ProjectFiles = { ...platform, ...shellFiles }
-  await saveDoc(projectId, { ...doc, screens, themes, data, files, shellHash: sHash, componentsHash: cHash })
+  const manifest = engineOf(project) === "verified" ? syncManifest({ ...doc, data }, plan) : undefined
+  const generated = manifest ? compileManifest(manifest) : {}
+  let files: ProjectFiles = { ...platform, ...shellFiles, ...generated }
+  await saveDoc(projectId, { ...doc, screens, themes, data, files, manifest, shellHash: sHash, componentsHash: cHash })
   run.emit({ type: "files", files })
 
   // Several screens finish at once now, so progress saves are queued: each
@@ -1284,8 +1296,8 @@ IMPORTANT: your previous attempt was cut off at the output limit. Write a more c
   console.info(`[build ${projectId}] ${todo.length} screens in ${Date.now() - tBuild}ms (concurrency ${SCREEN_CONCURRENCY})`)
 
   // The shell is kept; refresh only in case a later build changes it.
-  files = { ...platform, ...shellFiles }
-  const finalDoc: AppDoc = { ...doc, screens, themes, data, files, shellHash: sHash, componentsHash: cHash }
+  files = { ...platform, ...shellFiles, ...generated }
+  const finalDoc: AppDoc = { ...doc, screens, themes, data, files, manifest, shellHash: sHash, componentsHash: cHash }
   const { version } = await commitSnapshot(projectId, finalDoc, {
     author: project.userId,
     intent: todo.length ? `Built ${todo.length} screen${todo.length === 1 ? "" : "s"}` : "Rebuilt (no screens changed)",

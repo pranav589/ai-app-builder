@@ -289,7 +289,7 @@ question → needs_user).
 **Done when.** Tests pass; a verified project's edit commits a version through the gateway;
 the legacy engine is unchanged except the repair cap and quieter status events.
 
-**User tests.**
+**User tests.** Pending (1, 2, 4 need a live AI_API_KEY top-up; 3 and 5 don't and can be done any time).
 1. Set one project to verified: `node --env-file=.env scripts/set-engine.mjs <projectId> verified`.
 2. Ask for a small edit ("make the header text bigger"). It applies and a new version appears.
 3. Open the browser's Network tab during an edit: the event stream sends a handful of events,
@@ -333,7 +333,7 @@ feel. Port the POC evaluation.
 **Done when.** The harness runs end to end on at least one fixture with the verified engine;
 results are saved; the report prints.
 
-**User tests.**
+**User tests.** Pending — these need a live AI_API_KEY top-up; do them once that's back.
 1. Run `npm run eval -- --engine verified --fixture <name>` and read the summary. Expected
    cost with Haiku 5.5 for ~26 tasks: about ₹5.
 2. Keep the numbers; the next phases are compared against them.
@@ -387,7 +387,7 @@ generous bound, e.g. 2 s, in CI).
 **Done when.** Tests pass; eval shows the tsc gate catching errors (rejections by `tsc`
 codes), and first-pass/verified rates are reported against the Phase 3 baseline.
 
-**User tests.**
+**User tests.** Pending — these need a live AI_API_KEY top-up; do them once that's back.
 1. Run the eval again and compare with Phase 3. Expect more rejections caught at `tsc` and
    the same or better verified rate. Gate time per change should stay under ~2 s.
 2. On a verified project, ask for "show the habit's category on the detail screen" (or a
@@ -436,7 +436,7 @@ passes.
 **Done when.** Tests pass; eval shows render-gate rejections being repaired; gate time within
 budget.
 
-**User tests.**
+**User tests.** Pending — these need a live AI_API_KEY top-up; do them once that's back.
 1. Restart dev with `VERIFY_DEBUG_INJECT=crash`, make an edit on a verified project. The crash
    never appears in the canvas; the chat shows the change was repaired or that it couldn't be
    applied, and the app is unchanged.

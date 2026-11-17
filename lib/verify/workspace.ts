@@ -1,9 +1,11 @@
 // Turns a project's AppDoc into the FileMap the gates work on, and back.
-// Ported from poc/verified-code/src/core/workspace.ts, without its manifest
-// and compiler integration (that lands in Phase 6).
+// Ported from poc/verified-code/src/core/workspace.ts, plus (Phase 6) the
+// manifest patch and recompile applyChangeSet now does.
 
-import { autoImport, projectExports } from "@/lib/app-project/project"
+import { autoImport, projectExports, screenPath } from "@/lib/app-project/project"
 import type { AppDoc } from "@/lib/app-runtime/app-doc"
+import { compileManifest } from "@/lib/manifest/compile"
+import { applyPatch, validateManifest, type AppManifest } from "@/lib/manifest/schema"
 import { isAppOwned, isCompilerOwned, isPlatformOwned } from "./ownership"
 import type { ChangeSet, Diagnostic, FileMap, Workspace } from "./types"
 
@@ -11,17 +13,34 @@ import type { ChangeSet, Diagnostic, FileMap, Workspace } from "./types"
 export function workspaceFromDoc(doc: AppDoc): Workspace {
   const files: FileMap = { ...(doc.files ?? {}) }
   for (const s of doc.screens) if (s.path && s.code !== undefined) files[s.path] = s.code
-  return { files }
+  return { files, manifest: doc.manifest }
 }
 
-/** Writes a workspace's files back: screen code by path, everything else into doc.files. */
+/**
+ * Writes a workspace's files back: screen code by path, everything else into
+ * doc.files, and the manifest if it changed. A manifest screen that gained a
+ * file becomes a new GeneratedScreen (so it shows up on the canvas); one the
+ * manifest patch removed drops its entry.
+ */
 export function docFromWorkspace(doc: AppDoc, ws: Workspace): AppDoc {
-  const screenPaths = new Set(doc.screens.filter((s) => s.path).map((s) => s.path!))
-  const screens = doc.screens.map((s) =>
+  const manifest = (ws.manifest as AppManifest | undefined) ?? doc.manifest
+  let screens = doc.screens.map((s) =>
     s.path && ws.files[s.path] !== undefined && ws.files[s.path] !== s.code ? { ...s, code: ws.files[s.path], state: "ready" as const, error: undefined } : s
   )
-  const files = Object.fromEntries(Object.entries(ws.files).filter(([p]) => !screenPaths.has(p)))
-  return { ...doc, screens, files }
+  if (manifest) {
+    screens = screens.filter((s) => manifest.screens[s.id])
+    const known = new Set(screens.map((s) => s.id))
+    for (const [id, screen] of Object.entries(manifest.screens)) {
+      if (known.has(id)) continue
+      const path = screenPath({ id, presentation: screen.presentation })
+      const code = ws.files[path]
+      if (code === undefined) continue
+      screens.push({ id, name: screen.title, state: "ready", path, code })
+    }
+  }
+  const allScreenPaths = new Set(screens.filter((s) => s.path).map((s) => s.path!))
+  const files = Object.fromEntries(Object.entries(ws.files).filter(([p]) => !allScreenPaths.has(p)))
+  return { ...doc, screens, files, manifest }
 }
 
 /** Finds `search` in `code`: exactly once, or once when comparing trimmed lines. */
@@ -50,6 +69,16 @@ export function applyChangeSet(base: Workspace, cs: ChangeSet): { ws?: Workspace
   const diagnostics: Diagnostic[] = []
   const files: FileMap = { ...base.files }
   const changed = new Set<string>()
+  let manifest = base.manifest as AppManifest | undefined
+
+  if (cs.manifestPatch.length) {
+    if (!manifest) return { changed: [], diagnostics: [{ gate: "manifest", code: "no_manifest", severity: "error", message: "This project has no manifest to patch yet." }] }
+    const patched = applyPatch(manifest, cs.manifestPatch)
+    if (patched.error) return { changed: [], diagnostics: [{ gate: "manifest", code: "patch_failed", severity: "error", message: patched.error }] }
+    const validated = validateManifest(patched.doc)
+    if (!validated.manifest) return { changed: [], diagnostics: validated.diagnostics }
+    manifest = validated.manifest
+  }
 
   for (const ch of cs.files) {
     if (ch.path.includes("..")) {
@@ -118,5 +147,27 @@ export function applyChangeSet(base: Workspace, cs: ChangeSet): { ws?: Workspace
     }
   }
 
-  return { ws: { manifest: base.manifest, files }, changed: [...changed].sort(), diagnostics: [] }
+  if (manifest && cs.manifestPatch.length) {
+    const generated = compileManifest(manifest)
+    for (const [path, code] of Object.entries(generated)) {
+      if (files[path] !== code) changed.add(path)
+      files[path] = code
+    }
+    // A screen declared in the manifest needs a file in the same change (or already written earlier); the model forgetting one is the mistake this catches.
+    for (const [id, screen] of Object.entries(manifest.screens)) {
+      const path = screenPath({ id, presentation: screen.presentation })
+      if (files[path] === undefined) {
+        diagnostics.push({
+          gate: "manifest",
+          code: "screen_missing_file",
+          severity: "error",
+          file: path,
+          message: `The manifest has a screen "${id}" but no file at ${path}. Add it with a <file path="${path}"> block in the same change.`,
+        })
+      }
+    }
+    if (diagnostics.length) return { changed: [...changed], diagnostics }
+  }
+
+  return { ws: { manifest, files }, changed: [...changed].sort(), diagnostics: [] }
 }
