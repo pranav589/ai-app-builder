@@ -1,0 +1,364 @@
+// Platform-owned files of every generated app. These are not UI: they are
+// the config Expo needs, and the device versions of the two modules the
+// platform owns (@/theme and @/lib/backend). The preview runs its own
+// versions of those two (preview-runtime/shims) with the same API.
+
+import type { AppPlan } from "@/lib/agent/types"
+import type { DataModel } from "@/lib/app-runtime/data-model"
+import type { ThemePackage } from "@/lib/app-runtime/theme"
+import { screenHref, type ProjectFiles } from "./project"
+
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "my-app"
+
+const json = (v: unknown) => JSON.stringify(v, null, 2) + "\n"
+
+function packageJson(name: string) {
+  return json({
+    name: slug(name),
+    version: "1.0.0",
+    main: "expo-router/entry",
+    private: true,
+    scripts: { start: "expo start", ios: "expo start --ios", android: "expo start --android", web: "expo start --web" },
+    // Versions from Expo SDK 58's bundledNativeModules.json (expo 58.0.25) and its default template.
+    dependencies: {
+      expo: "~58.0.25",
+      "expo-router": "~58.0.31",
+      react: "19.3.0",
+      "react-dom": "19.3.0",
+      "react-native": "0.88.1",
+      "react-native-web": "~0.21.4",
+      "react-native-safe-area-context": "~5.11.1",
+      "react-native-screens": "~4.30.1",
+      "react-native-gesture-handler": "~3.3.0",
+      "@expo/vector-icons": "^15.0.2",
+      "@react-native-async-storage/async-storage": "2.2.0",
+      "expo-status-bar": "~58.0.5",
+      "expo-symbols": "~58.0.5",
+      "expo-glass-effect": "~58.0.5",
+      "expo-linear-gradient": "~58.0.4",
+      "expo-blur": "~58.0.6",
+      "expo-image": "~58.0.18",
+      "expo-haptics": "~58.0.8",
+      "expo-image-picker": "~58.0.10",
+      "expo-location": "~58.0.22",
+      "expo-local-authentication": "~58.0.3",
+      "expo-notifications": "~58.1.9",
+      "expo-clipboard": "~58.0.4",
+      "expo-sharing": "~58.0.23",
+      "expo-linking": "~58.0.17",
+      "expo-constants": "~58.0.16",
+      "expo-font": "~58.0.12",
+      "expo-splash-screen": "~58.0.14",
+    },
+    devDependencies: { typescript: "~6.0.3", "@types/react": "~19.3.0" },
+  })
+}
+
+function appJson(plan: AppPlan, themes: ThemePackage) {
+  const t = themes.themes.find((x) => x.id === themes.activeId) ?? themes.themes[0]
+  return json({
+    expo: {
+      name: plan.appName,
+      slug: slug(plan.appName),
+      scheme: slug(plan.appName).replace(/-/g, ""),
+      version: "1.0.0",
+      orientation: "portrait",
+      userInterfaceStyle: "automatic",
+      newArchEnabled: true,
+      ios: { supportsTablet: false, bundleIdentifier: `com.anything.${slug(plan.appName).replace(/-/g, "")}` },
+      android: { package: `com.anything.${slug(plan.appName).replace(/-/g, "")}`, adaptiveIcon: { backgroundColor: t.colors.primary } },
+      plugins: ["expo-router", "expo-font", "expo-notifications", "expo-local-authentication", "expo-location", "expo-image-picker"],
+      // SDK 58 defaults: React Compiler on, typed routes on.
+      experiments: { typedRoutes: true, reactCompiler: true },
+    },
+  })
+}
+
+const TSCONFIG = json({ extends: "expo/tsconfig.base", compilerOptions: { strict: true, paths: { "@/*": ["./*"] } }, include: ["**/*.ts", "**/*.tsx"] })
+
+const THEME_DEVICE = String.raw`// Platform module: app themes. Screens read colors only through useTheme()
+// or createStyles(), so switching theme restyles the whole app instantly.
+import * as React from "react"
+import AsyncStorage from "@react-native-async-storage/async-storage"
+import pkg from "./themes.json"
+
+type Colors = {
+  primary: string; onPrimary: string; primarySoft: string; accent: string; onAccent: string
+  background: string; surface: string; surfaceAlt: string; text: string; textMuted: string
+  border: string; success: string; warning: string; danger: string; overlay: string
+}
+type RawTheme = { id: string; name: string; mode: "light" | "dark"; radius: "sharp" | "soft" | "round"; colors: Omit<Colors, "overlay"> }
+
+const RADII = {
+  sharp: { sm: 4, md: 6, lg: 8, xl: 12, pill: 999 },
+  soft: { sm: 8, md: 12, lg: 16, xl: 24, pill: 999 },
+  round: { sm: 12, md: 18, lg: 24, xl: 32, pill: 999 },
+}
+export const spacing = { xxs: 2, xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, xxxl: 48 }
+
+export type Theme = { id: string; name: string; mode: "light" | "dark"; dark: boolean; colors: Colors; radius: typeof RADII.soft; spacing: typeof spacing }
+
+function toTheme(t: RawTheme): Theme {
+  return {
+    id: t.id, name: t.name, mode: t.mode, dark: t.mode === "dark",
+    colors: { ...t.colors, overlay: t.mode === "dark" ? "rgba(0,0,0,0.6)" : "rgba(15,18,25,0.38)" },
+    radius: RADII[t.radius] ?? RADII.soft,
+    spacing,
+  }
+}
+
+const themes = (pkg.themes as RawTheme[]).map(toTheme)
+const KEY = "app:theme"
+const Ctx = React.createContext<{ theme: Theme; setTheme: (id: string) => void }>({ theme: themes[0], setTheme: () => {} })
+
+export function ThemeProvider({ children }: { children?: React.ReactNode }) {
+  const [id, setId] = React.useState<string>(pkg.activeId)
+  React.useEffect(() => {
+    AsyncStorage.getItem(KEY).then((v) => v && setId(v))
+  }, [])
+  const theme = themes.find((t) => t.id === id) ?? themes[0]
+  const value = React.useMemo(() => ({ theme, setTheme: (next: string) => { setId(next); AsyncStorage.setItem(KEY, next) } }), [theme])
+  return React.createElement(Ctx.Provider, { value }, children)
+}
+
+export const useTheme = () => React.useContext(Ctx).theme
+
+export function createStyles<T>(factory: (t: Theme) => T): () => T {
+  const memo = new WeakMap<Theme, T>()
+  return function useStyles() {
+    const t = useTheme()
+    let s = memo.get(t)
+    if (!s) { s = factory(t); memo.set(t, s) }
+    return s
+  }
+}
+
+export function useThemeSwitcher() {
+  const { theme, setTheme } = React.useContext(Ctx)
+  return { themes, activeId: theme.id, setTheme }
+}
+`
+
+const BACKEND_DEVICE = String.raw`// Platform module: the app's data, auth and file storage.
+// Runs on the device's local storage until the app is connected to
+// CloudHike; then the same functions call CloudHike Database, Storage and
+// Auth, and no screen has to change.
+import * as React from "react"
+import AsyncStorage from "@react-native-async-storage/async-storage"
+import seed from "@/data/seed.json"
+
+type Rec = Record<string, unknown> & { id: string; createdAt: string; updatedAt?: string }
+type Where = Partial<Record<string, unknown>> | ((r: Rec) => boolean)
+type QueryOpts = { where?: Where; sort?: string; limit?: number }
+type User = { id: string; name: string; email: string }
+type State = { seedHash: string; collections: Record<string, Rec[]>; settings: Record<string, unknown>; users: (User & { password: string })[]; session: string | null }
+
+const KEY = "app:data"
+let state: State | null = null
+const listeners = new Set<() => void>()
+let version = 0
+
+function fresh(): State {
+  const collections: Record<string, Rec[]> = {}
+  for (const [name, rows] of Object.entries(seed.collections as Record<string, Record<string, unknown>[]>)) {
+    collections[name] = rows.map((r, i) => ({ ...r, id: String(r.id), createdAt: (r.createdAt as string) ?? new Date(Date.now() - i * 3600000).toISOString() }))
+  }
+  return { seedHash: seed.hash, collections, settings: { ...(seed.settings as Record<string, unknown>) }, users: [], session: null }
+}
+
+async function load(): Promise<State> {
+  if (state) return state
+  const raw = await AsyncStorage.getItem(KEY)
+  const parsed = raw ? (JSON.parse(raw) as State) : null
+  state = parsed && parsed.seedHash === seed.hash ? parsed : fresh()
+  return state
+}
+
+function changed() {
+  version++
+  if (state) void AsyncStorage.setItem(KEY, JSON.stringify(state))
+  for (const l of listeners) l()
+}
+
+const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+
+function query(rows: Rec[], opts: QueryOpts = {}) {
+  let out = rows.slice()
+  const w = opts.where
+  if (typeof w === "function") out = out.filter(w)
+  else if (w) out = out.filter((r) => Object.entries(w).every(([k, v]) => r[k] === v))
+  if (opts.sort) {
+    const desc = opts.sort.startsWith("-")
+    const key = desc ? opts.sort.slice(1) : opts.sort
+    out.sort((a, b) => {
+      const x = a[key] as never, y = b[key] as never
+      if (x === y) return 0
+      if (x == null) return 1
+      if (y == null) return -1
+      const r = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true })
+      return desc ? -r : r
+    })
+  }
+  return opts.limit ? out.slice(0, opts.limit) : out
+}
+
+export const db = {
+  async list(collection: string, opts?: QueryOpts) { return query((await load()).collections[collection] ?? [], opts) },
+  async get(collection: string, id: string) { return ((await load()).collections[collection] ?? []).find((r) => r.id === id) ?? null },
+  async insert(collection: string, values: Record<string, unknown>) {
+    const s = await load()
+    const rec: Rec = { ...values, id: newId(), createdAt: new Date().toISOString() }
+    s.collections[collection] = [rec, ...(s.collections[collection] ?? [])]
+    changed()
+    return rec
+  },
+  async update(collection: string, id: string, patch: Record<string, unknown>) {
+    const s = await load()
+    const rows = s.collections[collection] ?? []
+    const i = rows.findIndex((r) => r.id === id)
+    if (i === -1) throw new Error("That item no longer exists.")
+    rows[i] = { ...rows[i], ...patch, id, updatedAt: new Date().toISOString() }
+    changed()
+    return rows[i]
+  },
+  async remove(collection: string, id: string) {
+    const s = await load()
+    s.collections[collection] = (s.collections[collection] ?? []).filter((r) => r.id !== id)
+    changed()
+  },
+}
+
+export const kv = {
+  async get<T = unknown>(key: string, fallback?: T) { return ((await load()).settings[key] ?? fallback) as T },
+  async set(key: string, value: unknown) { (await load()).settings[key] = value; changed() },
+}
+
+export const auth = {
+  async current(): Promise<User | null> {
+    const s = await load()
+    const u = s.users.find((x) => x.id === s.session)
+    return u ? { id: u.id, name: u.name, email: u.email } : null
+  },
+  async signUp(input: { name?: string; email: string; password: string }) {
+    const s = await load()
+    const email = input.email.trim().toLowerCase()
+    if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error("Enter a valid email address.")
+    if (input.password.length < 6) throw new Error("Use at least 6 characters for the password.")
+    if (s.users.some((u) => u.email === email)) throw new Error("An account with this email already exists.")
+    const user = { id: newId(), name: input.name?.trim() || email.split("@")[0], email, password: input.password }
+    s.users.push(user)
+    s.session = user.id
+    changed()
+    return { id: user.id, name: user.name, email }
+  },
+  async signIn(input: { email: string; password: string }) {
+    const s = await load()
+    const email = input.email.trim().toLowerCase()
+    const u = s.users.find((x) => x.email === email)
+    if (!u) return auth.signUp({ email, password: input.password })
+    if (u.password !== input.password) throw new Error("That password isn't right.")
+    s.session = u.id
+    changed()
+    return { id: u.id, name: u.name, email: u.email }
+  },
+  async signOut() { (await load()).session = null; changed() },
+  async resetPassword(_input: { email: string }) {},
+}
+
+export const storage = {
+  async upload(input: { uri: string; name?: string }) { return { url: input.uri } },
+}
+
+function useStoreVersion() {
+  const [, force] = React.useReducer((n: number) => n + 1, 0)
+  React.useEffect(() => {
+    listeners.add(force)
+    if (!state) void load().then(force)
+    return () => { listeners.delete(force) }
+  }, [])
+  return version
+}
+
+export function useCollection(collection: string, opts: QueryOpts = {}) {
+  useStoreVersion()
+  const data = state ? query(state.collections[collection] ?? [], opts) : []
+  return {
+    data,
+    loading: !state,
+    insert: (values: Record<string, unknown>) => db.insert(collection, values),
+    update: (id: string, patch: Record<string, unknown>) => db.update(collection, id, patch),
+    remove: (id: string) => db.remove(collection, id),
+  }
+}
+
+export function useRecord(collection: string, id: string | undefined | null) {
+  useStoreVersion()
+  const rows = state?.collections[collection] ?? []
+  const data = (id ? rows.find((r) => r.id === String(id)) : rows[0]) ?? null
+  return {
+    data,
+    loading: !state,
+    update: (patch: Record<string, unknown>) => (data ? db.update(collection, data.id, patch) : Promise.reject(new Error("Not found"))),
+    remove: () => (data ? db.remove(collection, data.id) : Promise.resolve()),
+  }
+}
+
+export function useSetting<T>(key: string, fallback: T): [T, (value: T) => Promise<void>] {
+  useStoreVersion()
+  const value = (state && key in state.settings ? state.settings[key] : fallback) as T
+  return [value, (v: T) => kv.set(key, v)]
+}
+
+export function useUser() {
+  useStoreVersion()
+  const u = state?.users.find((x) => x.id === state?.session) ?? null
+  const fallback = seed.user as User
+  return {
+    user: u ? { id: u.id, name: u.name, email: u.email } : fallback,
+    signedIn: !!u,
+    signIn: auth.signIn,
+    signUp: auth.signUp,
+    signOut: auth.signOut,
+  }
+}
+`
+
+/** The platform files for an app. Regenerated whenever the plan, themes or data change. */
+export function platformFiles(plan: AppPlan, themes: ThemePackage, data: DataModel): ProjectFiles {
+  const first = plan.screens[0]
+  return {
+    "package.json": packageJson(plan.appName),
+    "app.json": appJson(plan, themes),
+    "tsconfig.json": TSCONFIG,
+    "app/index.tsx": `import { Redirect } from "expo-router"\n\n// The app opens on its first screen.\nexport default function Index() {\n  return <Redirect href="${first ? screenHref(first) : "/"}" />\n}\n`,
+    "theme/themes.json": json({ activeId: themes.activeId, themes: themes.themes }),
+    "theme/index.tsx": THEME_DEVICE,
+    "lib/backend/index.ts": BACKEND_DEVICE,
+    "data/seed.json": json({
+      hash: data.hash,
+      collections: Object.fromEntries(data.collections.map((c) => [c.name, c.seed])),
+      settings: data.settings,
+      user: data.user,
+    }),
+    "data/schema.json": json(data.collections.map(({ seed: _seed, ...c }) => c)),
+  }
+}
+
+/** The API docs of the platform modules, for the AI. Kept in sync with the code above and the preview shims. */
+export const PLATFORM_API_DOCS = `@/theme (platform module; import, never rewrite):
+  useTheme(): Theme  // { id, name, mode: "light"|"dark", dark: boolean, colors, radius, spacing }
+  createStyles((t: Theme) => ({ ...StyleSheet-like object })): () => styles   // define at module level: const useStyles = createStyles((t) => ({ container: { backgroundColor: t.colors.background } })); then inside the component: const s = useStyles()
+  useThemeSwitcher(): { themes: Theme[]; activeId: string; setTheme(id: string): void }   // for an in-app appearance picker
+  ThemeProvider   // wrap the root layout
+  spacing: { xxs:2, xs:4, sm:8, md:12, lg:16, xl:24, xxl:32, xxxl:48 }
+  t.colors: primary, onPrimary, primarySoft, accent, onAccent, background, surface, surfaceAlt, text, textMuted, border, success, warning, danger, overlay
+  t.radius: { sm, md, lg, xl, pill }
+
+@/lib/backend (platform module: local storage now, CloudHike later; import, never rewrite):
+  useCollection(name, { where?: {field: value} | (record) => boolean, sort?: "field" | "-field", limit?: number })
+     -> { data: Record[], loading, insert(values), update(id, patch), remove(id) }   // records have id, createdAt, updatedAt + their fields
+  useRecord(name, id) -> { data: Record | null, loading, update(patch), remove() }
+  useSetting(key, fallback) -> [value, setValue]
+  useUser() -> { user: { name, email }, signedIn, signIn({email,password}), signUp({name,email,password}), signOut() }
+  db.list/get/insert/update/remove, kv.get/set, auth.*, storage.upload({ uri }) -> { url }   // non-hook versions
+  All writes are async and every screen using the hooks updates automatically.`

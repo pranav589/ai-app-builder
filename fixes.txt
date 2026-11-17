@@ -1,0 +1,9 @@
+1. Screen Generation Prompt Upgrade. Latest tech stack.
+2. When i ask for a simple edit like add a scroll, agent went into planning mode and started to write entire screen again.
+3. When the task of making design is running, SSE is there. Its throwing event almost every second. and this events are same most of the times and later changes. But can we have like through even only when it changes or something like that. DO we want this way?
+4. Its taking a lot of time even for a simple change in app. How can we reduce that?
+5. Whats the least model u think we should use for this?
+6. Repair api fails. It retrying infintely. Max 2 calls
+7. expo skills- https://expo.dev/expo-skills
+8. Langgraph with workflow parallel
+9. Adding a screen not working. AI says its added, but not showing

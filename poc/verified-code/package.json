@@ -1,0 +1,38 @@
+{
+  "name": "verified-code-poc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Proof of concept: manifest compiler, typed SDK, real verification gates and a bounded AI repair loop.",
+  "scripts": {
+    "init": "tsx src/cli/init.ts",
+    "selftest": "tsx src/cli/selftest.ts",
+    "test": "tsx src/cli/selftest.ts",
+    "change": "tsx --env-file=../../.env src/cli/run.ts",
+    "history": "tsx src/cli/history.ts",
+    "preview": "tsx src/cli/preview.ts",
+    "export:expo": "tsx --env-file=../../.env src/cli/export-expo.ts",
+    "eval": "tsx --env-file=../../.env src/cli/eval.ts",
+    "chain": "tsx --env-file=../../.env src/cli/chain.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "jsdom": "^26.1.0",
+    "openai": "^6.3.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-web": "0.21.4",
+    "sucrase": "^3.35.0",
+    "typescript": "5.9.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.1",
+    "@types/react-dom": "^19.1.1",
+    "esbuild": "^0.25.12",
+    "tsx": "^4.20.3"
+  }
+}
