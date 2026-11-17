@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest"
 import { runChange, type ModelAdapter } from "@/lib/verify/run"
 import type { Workspace } from "@/lib/verify/types"
 
-const base: Workspace = { files: { "app/home.tsx": "export default function Home() {\n  return null\n}\n" } }
+const base: Workspace = { files: { "app/home.tsx": 'import { Text } from "react-native"\nexport default function Home() {\n  return <Text>Hi</Text>\n}\n' } }
 
-const okReply = `<intent>Fix the header</intent>\n<file path="app/home.tsx">\nexport default function Home() {\n  return null\n}\n</file>`
+const okReply = `<intent>Fix the header</intent>\n<file path="app/home.tsx">\nimport { Text } from "react-native"\nexport default function Home() {\n  return <Text>Hi</Text>\n}\n</file>`
 const badReply = `<intent>Fix the header</intent>\n<file path="app/home.tsx">\nimport { pad } from "left-pad"\nexport default function Home() {\n  return null\n}\n</file>`
 
 const adapter = (replies: string[]): ModelAdapter => {

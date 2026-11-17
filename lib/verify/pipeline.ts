@@ -1,11 +1,11 @@
-// Fast tier: cheapest gate first, stop at the first failure. Phase 5 adds
-// `render` to GATES; nothing else here changes.
+// Fast tier: cheapest gate first, stop at the first failure.
 
 import type { ChangeSet, GateName, GateResult, Workspace } from "./types"
 import { applyChangeSet } from "./workspace"
 import { parseGate } from "./gates/parse"
 import { policyGate } from "./gates/policy"
 import { typecheckGate } from "./gates/typecheck"
+import { renderGate } from "./gates/render"
 
 export type Verdict = {
   ok: boolean
@@ -18,7 +18,7 @@ export type Verdict = {
 
 type Gate = (ws: Workspace, changed?: string[], key?: string) => GateResult | Promise<GateResult>
 
-const GATES: Gate[] = [parseGate, policyGate, typecheckGate]
+const GATES: Gate[] = [parseGate, policyGate, typecheckGate, renderGate]
 
 /**
  * `changed` scopes the gates to the files this attempt actually touched, so

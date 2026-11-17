@@ -412,7 +412,7 @@ function StackLayer({ entry, index, isTop, level, screenOptions, childOptions, t
       <OptionsContext.Provider value={setOptions}>
         <InsetsContext.Provider value={sheet ? { ...INSETS, top: 0 } : INSETS}>
           {showHeader && <Header opts={opts} name={name} canGoBack={index > 0 && !sheet} />}
-          <RN.View style={{ flex: 1 }}>
+          <RN.View style={{ flex: 1 }} testID="pv-screen-body">
             <ErrorBoundary resetKey={moduleStore.get().version} file={m?.route.file}>{m ? renderBelow(m.route, level + 1, entry) : <UnknownRoute pathname={entry.pathname} />}</ErrorBoundary>
           </RN.View>
         </InsetsContext.Provider>
@@ -495,7 +495,7 @@ export function Tabs({ screenOptions, children }: { screenOptions?: unknown; chi
     <RN.View style={{ flex: 1 }}>
       <OptionsContext.Provider value={setOptions}>
         {active.headerShown !== false && <Header opts={active} name={activeName} canGoBack={false} tabs />}
-        <RN.View style={{ flex: 1 }}>
+        <RN.View style={{ flex: 1 }} testID="pv-screen-body">
           <ErrorBoundary resetKey={`${ctx.entry.pathname}:${moduleStore.get().version}`} file={m.route.file}>{renderBelow(m.route, level + 1, ctx.entry)}</ErrorBoundary>
         </RN.View>
       </OptionsContext.Provider>
@@ -690,7 +690,7 @@ export function NativeTabs({
 
   return (
     <RN.View style={{ flex: 1 }}>
-      <RN.View style={{ flex: 1 }}>
+      <RN.View style={{ flex: 1 }} testID="pv-screen-body">
         <ErrorBoundary resetKey={`${ctx.entry.pathname}:${moduleStore.get().version}`} file={m.route.file}>
           {renderBelow(m.route, level + 1, ctx.entry)}
         </ErrorBoundary>
