@@ -11,7 +11,8 @@ import { MAX_REPAIRS, runChange } from "@/lib/verify/run"
 import { verifiedEditPrompt, verifiedNewScreenPrompt } from "@/lib/verify/prompts"
 import { applyElementEdit, parseEid } from "@/lib/verify/codemod"
 import { isAppOwned } from "@/lib/verify/ownership"
-import type { ElementEdit } from "@/lib/preview/protocol"
+import type { ElementEdit, ElementRef } from "@/lib/preview/protocol"
+import { describeElement, elementFile, parseElementRef } from "./element-context"
 import { docFromWorkspace, workspaceFromDoc } from "@/lib/verify/workspace"
 import { ensureManifest, syncManifest } from "@/lib/manifest/migrate"
 import { selectFiles } from "@/lib/verify/context"
@@ -116,6 +117,7 @@ export function toStoredMessage(m: DbMessage): StoredMessage {
     plan: kind === "plan" ? ((m.plan as AppPlan | null) ?? undefined) : undefined,
     build: kind === "build" ? ((m.pipelineData as BuildProgress | null) ?? undefined) : undefined,
     version: (m.pipelineData as { version?: number } | null)?.version,
+    element: m.sender === "user" ? parseElementRef((m.pipelineData as { element?: unknown } | null)?.element) : undefined,
   }
 }
 
@@ -154,8 +156,9 @@ async function saveMessage(
   return toStoredMessage(row)
 }
 
-export async function saveUserMessage(projectId: string, text: string, screenId?: string) {
-  return saveMessage(projectId, { sender: "user", kind: "standard", text, meta: screenId ? { screenId } : undefined })
+export async function saveUserMessage(projectId: string, text: string, screenId?: string, element?: ElementRef) {
+  const meta = screenId || element ? { ...(screenId ? { screenId } : {}), ...(element ? { element } : {}) } : undefined
+  return saveMessage(projectId, { sender: "user", kind: "standard", text, meta })
 }
 
 export async function setPhase(projectId: string, phase: AgentPhase, extra: Partial<Project> = {}) {
@@ -334,7 +337,9 @@ export function historyToInput(
     if (m.sender === "user") {
       const screenId = (m.pipelineData as { screenId?: string } | null)?.screenId
       const about = screenId && names.get(screenId) ? `[About the "${names.get(screenId)}" screen] ` : ""
-      items.push(user(about + m.text))
+      const el = parseElementRef((m.pipelineData as { element?: unknown } | null)?.element)
+      items.push(user(`${el ? `${describeElement(el)}
+` : ""}${about}${m.text}`))
     } else if (m.type === "plan" && m.plan) {
       items.push(assistant(`${m.text}\n\n<plan>\n${JSON.stringify(m.plan)}\n</plan>`))
     } else if (m.type === "build") {
@@ -367,12 +372,17 @@ export async function routeMessage(run: LiveRun, projectId: string): Promise<{ h
   if (!doc.screens.some((s) => s.state === "ready")) return { handled: false }
 
   const [lastUser] = await db
-    .select({ text: messages.text })
+    .select({ text: messages.text, pipelineData: messages.pipelineData })
     .from(messages)
     .where(and(eq(messages.projectId, projectId), eq(messages.sender, "user")))
     .orderBy(desc(messages.createdAt))
     .limit(1)
   if (!lastUser?.text) return { handled: false }
+  // A selected element makes "this"/"it" mean something specific: both the
+  // router and the coder are told which one, and the edit targets its file.
+  const element = parseElementRef((lastUser.pipelineData as { element?: unknown } | null)?.element)
+  const message = element ? `${describeElement(element)}
+${lastUser.text}` : lastUser.text
 
   const manifest = ensureManifest(doc, await latestPlan(projectId))
   if (!manifest) return { handled: false }
@@ -381,7 +391,7 @@ export async function routeMessage(run: LiveRun, projectId: string): Promise<{ h
   const { router } = agents()
   let raw = ""
   try {
-    raw = await streamText(router, routerPrompt(manifest, lastUser.text), () => {})
+    raw = await streamText(router, routerPrompt(manifest, message), () => {})
   } catch (e) {
     console.warn("router call failed, falling back to the planner", e instanceof Error ? e.message : e)
     return { handled: false }
@@ -391,7 +401,10 @@ export async function routeMessage(run: LiveRun, projectId: string): Promise<{ h
 
   if (reply.route === "edit") {
     run.emit({ type: "run_state", state: "routed" })
-    const { needsPlan } = await runVerifiedEdit(run, projectId, { targets: reply.targets, instruction: lastUser.text })
+    const { needsPlan } = await runVerifiedEdit(run, projectId, {
+      targets: element ? [...new Set([elementFile(element), ...reply.targets])] : reply.targets,
+      instruction: message,
+    })
     return { handled: !needsPlan }
   }
 
@@ -701,7 +714,9 @@ export type CanvasEditResult = { path: string; code: string; version: number; ex
  * result goes through the same gates an AI edit does (parse/policy/tsc/
  * render) before it's kept.
  */
-export async function applyCanvasEdit(projectId: string, edit: ElementEdit): Promise<CanvasEditResult> {
+export async function applyCanvasEdit(projectId: string, edit: ElementEdit, signal?: AbortSignal): Promise<CanvasEditResult> {
+  // The browser abandons a save when a newer edit supersedes it; nothing is kept for it.
+  const superseded = { error: "Superseded by a newer edit." }
   const target = parseEid(edit.eid)
   if (!target) return { error: "Couldn't place that element in the source." }
 
@@ -725,12 +740,18 @@ export async function applyCanvasEdit(projectId: string, edit: ElementEdit): Pro
   const code = ws.files[target.file]
   if (code === undefined) return { error: "That file isn't part of the project anymore.", extraFiles }
 
-  const result = applyElementEdit(code, target, { text: edit.text, from: edit.from, style: edit.style })
+  let result = applyElementEdit(code, target, { text: edit.text, from: edit.from, style: edit.style })
+  // The abandoned save before this one may have landed, leaving its text in the source.
+  if ("error" in result && edit.text !== undefined && edit.fromAlt !== undefined) {
+    result = applyElementEdit(code, target, { text: edit.text, from: edit.fromAlt, style: edit.style })
+  }
   if ("error" in result) return { error: result.error, extraFiles }
+  if (signal?.aborted) return superseded
   const next = result.code
   if (next === code) return { error: "Nothing to change.", extraFiles }
 
   const verdict = await verifyChange(ws, { intent: "Inline edit", manifestPatch: [], files: [{ path: target.file, op: "write", content: next }] }, projectId)
+  if (signal?.aborted) return superseded
   if (!verdict.ok) return { error: formatDiagnostics(verdict), extraFiles }
 
   const updatedDoc = docFromWorkspace(doc, verdict.ws!)

@@ -6,7 +6,32 @@
 
 import ts from "typescript"
 
+import { THEME_COLOR_KEYS } from "@/lib/app-runtime/theme"
 import type { ElementEdit } from "@/lib/preview/protocol"
+
+/** Style properties the inline editor may write into source (the key is written as code, so it's a closed list). */
+export const EDITABLE_STYLE_KEYS: ReadonlySet<string> = new Set([
+  "color", "backgroundColor", "fontSize", "fontWeight", "fontStyle", "textAlign", "lineHeight", "letterSpacing", "textDecorationLine",
+  "borderRadius", "borderWidth", "borderColor", "borderStyle", "opacity", "width", "height", "gap",
+  "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+  "margin", "marginTop", "marginRight", "marginBottom", "marginLeft",
+  "flexDirection", "justifyContent", "alignItems", "flexWrap", "alignSelf", "flexGrow", "overflow",
+  "borderTopLeftRadius", "borderTopRightRadius", "borderBottomLeftRadius", "borderBottomRightRadius",
+  "shadowColor", "shadowOffset", "shadowOpacity", "shadowRadius", "elevation",
+])
+
+/** Properties whose value may be a theme color: written as `theme.colors.<token>`. */
+const COLOR_KEYS: ReadonlySet<string> = new Set(["color", "backgroundColor", "borderColor", "shadowColor"])
+const TOKENS: ReadonlySet<string> = new Set(THEME_COLOR_KEYS)
+
+/** Written as bare numbers: React Native takes no units. */
+const RN_NUMERIC_KEYS: ReadonlySet<string> = new Set([
+  "fontSize", "borderRadius", "borderWidth", "lineHeight", "letterSpacing", "opacity", "gap",
+  "flexGrow", "shadowOpacity", "shadowRadius", "elevation",
+  "borderTopLeftRadius", "borderTopRightRadius", "borderBottomLeftRadius", "borderBottomRightRadius",
+  "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+  "margin", "marginTop", "marginRight", "marginBottom", "marginLeft",
+])
 
 export type EidTarget = { file: string; line: number; tag: string }
 
@@ -82,6 +107,39 @@ function textSpan(sf: ts.SourceFile, node: JsxNode, from: string | undefined, te
   return matches.length === 1 ? { span: matches[0], current: from } : null
 }
 
+/**
+ * How to reach the theme from this element's code: the variable a component
+ * already holds `useTheme()` in, or one added on the same line as the
+ * component's opening brace (line numbers must not move: every element id is
+ * a line number). Null when there's no safe way (no useTheme import, a class
+ * component...), and the caller writes the color's hex instead.
+ */
+function themeAccess(sf: ts.SourceFile, node: ts.Node, code: string): { name: string; insert?: Span } | null {
+  let fn: ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction | ts.MethodDeclaration | undefined
+  for (let n: ts.Node | undefined = node; n; n = n.parent) if (ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) || ts.isMethodDeclaration(n)) fn = n as typeof fn
+  // A class component's method can't hold a hook.
+  if (!fn || ts.isMethodDeclaration(fn) || !fn.body || !ts.isBlock(fn.body)) return null
+  for (const st of fn.body.statements) {
+    if (!ts.isVariableStatement(st)) continue
+    for (const d of st.declarationList.declarations) {
+      const call = d.initializer
+      if (ts.isIdentifier(d.name) && call && ts.isCallExpression(call) && ts.isIdentifier(call.expression) && call.expression.text === "useTheme") return { name: d.name.text }
+    }
+  }
+  let local: string | null = null
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || st.moduleSpecifier.text !== "@/theme") continue
+    const named = st.importClause?.namedBindings
+    if (named && ts.isNamedImports(named)) for (const e of named.elements) if ((e.propertyName ?? e.name).text === "useTheme") local = e.name.text
+  }
+  if (!local) return null
+  const body = code.replace(/^import .*$/gm, "")
+  const name = !/\btheme\b/.test(body) ? "theme" : !/\bappTheme\b/.test(body) ? "appTheme" : null
+  if (!name) return null
+  const at = fn.body.getStart(sf) + 1
+  return { name, insert: { start: at, end: at, text: ` const ${name} = ${local}();` } }
+}
+
 export type CodemodResult = { code: string } | { error: string }
 
 /**
@@ -136,14 +194,27 @@ export function applyElementEdit(
   }
 
   if (edit.style && Object.keys(edit.style).length) {
+    const bad = Object.keys(edit.style).find((k) => !EDITABLE_STYLE_KEYS.has(k))
+    if (bad) return { error: `"${bad}" can't be edited here.` }
     // React Native expects a bare number (no unit) for these; everything
     // else (colors, fontWeight, textAlign...) is a string, same as the DOM
     // CSS value the inspector read it from.
-    const RN_NUMERIC_KEYS = new Set(["fontSize", "borderRadius", "borderWidth", "lineHeight", "padding", "margin", "gap"])
-    const literal = (k: string, v: string) => {
-      if (RN_NUMERIC_KEYS.has(k)) {
-        const n = parseFloat(v)
-        if (Number.isFinite(n)) return String(n)
+    let theme: ReturnType<typeof themeAccess> | undefined
+    const literal = (k: string, v: string): string => {
+      // "theme:<token>:<hex>": follows the app's theme when it can be reached, else the hex as of now.
+      const tok = /^theme:([A-Za-z]+):(#[0-9a-fA-F]{3,8})$/.exec(v)
+      if (tok && COLOR_KEYS.has(k) && TOKENS.has(tok[1])) {
+        theme ??= themeAccess(sf, found, code)
+        if (!theme) return JSON.stringify(tok[2])
+        if (theme.insert && !spans.includes(theme.insert)) spans.push(theme.insert)
+        return `${theme.name}.colors.${tok[1]}`
+      }
+      if (k === "shadowOffset") {
+        const m = /^(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)$/.exec(v.trim())
+        return m ? `{ width: ${Number(m[1])}, height: ${Number(m[2])} }` : "{ width: 0, height: 0 }"
+      }
+      if (RN_NUMERIC_KEYS.has(k) || ((k === "width" || k === "height") && /^-?\d+(\.\d+)?px$/.test(v.trim()))) {
+        if (/^-?\d+(\.\d+)?(px)?$/.test(v.trim())) return String(parseFloat(v))
       }
       return JSON.stringify(v)
     }

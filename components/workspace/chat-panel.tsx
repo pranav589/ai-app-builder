@@ -13,10 +13,13 @@ import {
   RotateCw,
   Sparkles,
   X,
+  MousePointerClick,
 } from "lucide-react"
 import { cn } from "cn"
 
 import type { AgentPhase, AppPlan, BuildProgress } from "@/lib/agent/types"
+import { elementLabel } from "@/lib/agent/element-context"
+import type { ElementRef } from "@/lib/preview/protocol"
 import { MAX_PROMPT_LENGTH } from "@/lib/project-rules"
 import { Button } from "@/components/ui/button"
 import type { AgentError } from "./use-agent"
@@ -256,6 +259,12 @@ function UserMessage({ message }: { message: ChatMessage }) {
   return (
     <div className="flex flex-col items-end gap-2">
       <div className="max-w-[88%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2.5 text-sm leading-relaxed text-primary-foreground">
+        {message.element && (
+          <p className="mb-1.5 inline-flex max-w-full items-center gap-1 rounded-full bg-primary-foreground/15 px-2 py-0.5 text-xs">
+            <MousePointerClick className="size-3 shrink-0" />
+            <span className="truncate">{elementLabel(message.element)}</span>
+          </p>
+        )}
         <p className="break-words whitespace-pre-wrap">{message.text}</p>
       </div>
       {message.assets && message.assets.length > 0 && (
@@ -339,6 +348,8 @@ export function ChatPanel({
   onDismissError,
   editTarget,
   onClearEditTarget,
+  attachedElement,
+  onClearAttachedElement,
   inputRef,
 }: {
   messages: ChatMessage[]
@@ -355,6 +366,9 @@ export function ChatPanel({
   onDismissError: () => void
   editTarget: ScreenNode | null
   onClearEditTarget: () => void
+  /** The canvas element selected in Edit Mode: sent along with the next message. */
+  attachedElement: ElementRef | null
+  onClearAttachedElement: () => void
   inputRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
   const [value, setValue] = React.useState("")
@@ -480,7 +494,29 @@ export function ChatPanel({
 
       <div className="shrink-0 p-3 pt-0">
         <div className="rounded-(--r-lg) border border-border bg-card p-2 shadow-[0_1px_2px_rgba(17,17,17,0.04),0_12px_24px_-12px_rgba(17,17,17,0.12)] transition-all focus-within:border-primary/40 focus-within:shadow-[0_0_0_3px_color-mix(in_oklch,var(--action),transparent_88%)]">
-          {editTarget && (
+          {attachedElement && (
+            <div className="mb-1 flex px-1 pt-0.5">
+              <span
+                className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-primary/10 py-0.5 pr-1 pl-2.5 text-xs font-medium text-primary animate-in fade-in-0 zoom-in-95 duration-150"
+                title={`${attachedElement.eid}`}
+              >
+                <MousePointerClick className="size-3 shrink-0" />
+                <span className="truncate">
+                  {elementLabel(attachedElement)}
+                  {attachedElement.screenName ? <span className="font-normal opacity-70"> · {attachedElement.screenName}</span> : null}
+                </span>
+                <button
+                  type="button"
+                  onClick={onClearAttachedElement}
+                  aria-label="Detach the selected element"
+                  className="flex size-4 shrink-0 items-center justify-center rounded-full hover:bg-primary/15"
+                >
+                  <X className="size-3" />
+                </button>
+              </span>
+            </div>
+          )}
+          {editTarget && !attachedElement && (
             <div className="mb-1 flex px-1 pt-0.5">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 py-0.5 pr-1 pl-2.5 text-xs font-medium text-primary">
                 Editing: {editTarget.name}
@@ -508,7 +544,9 @@ export function ChatPanel({
               }
             }}
             placeholder={
-              editTarget
+              attachedElement
+                ? `Describe the change to this ${attachedElement.tag}…`
+                : editTarget
                 ? `Describe changes to ${editTarget.name}…`
                 : phase === "awaiting_approval"
                   ? "Ask for changes to the plan, or approve it…"

@@ -1,12 +1,15 @@
 "use client"
 
 import * as React from "react"
-import { AlertTriangle, Clock, Hand, Loader2, Maximize, Minus, MousePointer2, Plus, Smartphone, Sparkles } from "lucide-react"
+import { AlertTriangle, Check, Clock, Hand, Loader2, Maximize, Minus, MousePointer2, Pencil, Plus, Smartphone, Sparkles } from "lucide-react"
 import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
-import { SCREEN_HEIGHT, SCREEN_WIDTH } from "./dummy-data"
+import type { ElementEdit, SelectedElement } from "@/lib/preview/protocol"
+import { DEVICE_HEIGHT, DEVICE_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH } from "./dummy-data"
+import { ElementEditor } from "./element-editor"
 import { PhoneFrame, ScreenView } from "./screen-mock"
+import type { FrameHandlers } from "./app-runtime"
 import { ThemeSwitcher } from "./theme-switcher"
 import type { ThemePackage } from "@/lib/app-runtime/theme"
 import type { ScreenNode } from "./types"
@@ -20,11 +23,37 @@ type Drag =
 const MIN_ZOOM = 0.2
 const MAX_ZOOM = 2
 const LABEL_HEIGHT = 32
+// The device is drawn inside the bezel (PhoneFrame's 7px padding), scaled to fit.
+const BEZEL = 7
+const DEVICE_SCALE = Math.min((SCREEN_WIDTH - BEZEL * 2) / DEVICE_WIDTH, (SCREEN_HEIGHT - BEZEL * 2) / DEVICE_HEIGHT)
+
+/** Inline editing (Edit Mode), owned by the workspace so the chat can see the selected element. */
+export type InlineEditing = {
+  /** The screen in Edit Mode, if any. */
+  screenId: string | null
+  element: SelectedElement | null
+  edit: ElementEdit | null
+  deselectKey: number
+  selectParentKey: number
+  advanced: boolean
+  onAdvancedChange: (advanced: boolean) => void
+  onToggle: (screen: ScreenNode) => void
+  onSelectElement: (screenId: string, el: SelectedElement) => void
+  onDeselect: () => void
+  onSelectParent: () => void
+  onRect: (eid: string, rect: SelectedElement["rect"]) => void
+  onPreview: (edit: ElementEdit) => void
+  onSave: (edit: ElementEdit, signal?: AbortSignal) => Promise<{ ok: boolean; error?: string; resynced?: boolean; aborted?: boolean }>
+  onViewCode: () => void
+  onAskAI: (instruction: string) => void
+  aiDisabled: boolean
+}
+
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))
 
-function ScreenLabel({ screen, zoom }: { screen: ScreenNode; zoom: number }) {
+function ScreenLabel({ screen, zoom, editing, canEdit, onToggleEdit }: { screen: ScreenNode; zoom: number; editing: boolean; canEdit: boolean; onToggleEdit: () => void }) {
   return (
     // Rendered at a constant on-screen size, whatever the zoom.
     <div
@@ -46,6 +75,24 @@ function ScreenLabel({ screen, zoom }: { screen: ScreenNode; zoom: number }) {
       >
         {screen.name}
       </span>
+      {screen.state === "ready" && (
+        <button
+          type="button"
+          data-canvas-ui
+          disabled={!canEdit}
+          aria-pressed={editing}
+          aria-label={editing ? `Finish editing ${screen.name}` : `Edit ${screen.name}`}
+          title={editing ? "Done editing" : "Edit this screen: click any element to change it"}
+          onClick={onToggleEdit}
+          className={cn(
+            "ml-auto flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs transition-colors disabled:pointer-events-none disabled:opacity-40",
+            editing ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-background hover:text-foreground"
+          )}
+        >
+          {editing ? <Check className="size-3.5" /> : <Pencil className="size-3.5" />}
+          {editing && "Done"}
+        </button>
+      )}
     </div>
   )
 }
@@ -65,6 +112,43 @@ function SelectionToolbar({ zoom, disabled, onEdit }: { zoom: number; disabled: 
   )
 }
 
+/** The editor, placed next to the selected element on its screen, at a constant on-screen size whatever the zoom. */
+function EditorPopover({ zoom, element, screenName, inline }: { zoom: number; element: SelectedElement; screenName: string; inline: InlineEditing }) {
+  const { rect } = element
+  const top = BEZEL + rect.y * DEVICE_SCALE
+  const bottom = top + rect.height * DEVICE_SCALE
+  // Opens below the element, or above it when the element sits in the lower half.
+  const above = (top + bottom) / 2 > SCREEN_HEIGHT / 2
+  const gap = 10 / zoom
+  return (
+    <div
+      data-canvas-ui
+      className="absolute z-10"
+      style={{
+        left: SCREEN_WIDTH / 2,
+        ...(above ? { bottom: SCREEN_HEIGHT - Math.max(top, 0) + gap } : { top: Math.min(bottom, SCREEN_HEIGHT) + gap }),
+        transform: `translateX(-50%) scale(${1 / zoom})`,
+        transformOrigin: above ? "bottom center" : "top center",
+      }}
+    >
+      <ElementEditor
+        key={`${element.eid}|${element.text ?? ""}`}
+        element={element}
+        screenName={screenName}
+        onSelectParent={inline.onSelectParent}
+        advanced={inline.advanced}
+        onAdvancedChange={inline.onAdvancedChange}
+        onClose={inline.onDeselect}
+        onPreview={inline.onPreview}
+        onSave={inline.onSave}
+        onViewCode={inline.onViewCode}
+        onAskAI={inline.onAskAI}
+        disabledAI={inline.aiDisabled}
+      />
+    </div>
+  )
+}
+
 export function CanvasPanel({
   screens,
   onScreensChange,
@@ -77,7 +161,9 @@ export function CanvasPanel({
   buildingThemes,
   appName,
   notice,
+  inline,
 }: {
+  inline: InlineEditing
   appName: string
   /** A short status shown under the theme menu, e.g. a crash being repaired. */
   notice?: string | null
@@ -101,7 +187,22 @@ export function CanvasPanel({
   const dragRef = React.useRef<Drag | null>(null)
   const fitted = React.useRef(false)
 
+  const inlineRef = React.useRef(inline)
+  inlineRef.current = inline
+
   const panning = tool === "hand" || spaceHeld
+
+  // What the screen in Edit Mode reports back, each routed to that screen.
+  const editingId = inline.screenId
+  const { onSelectElement, onDeselect, onRect } = inline
+  const frameHandlers = React.useMemo<FrameHandlers>(
+    () => ({
+      onSelectElement: (el) => editingId && onSelectElement(editingId, el),
+      onDeselectElement: onDeselect,
+      onElementRect: onRect,
+    }),
+    [editingId, onSelectElement, onDeselect, onRect]
+  )
 
   const fit = React.useCallback(() => {
     const el = viewportRef.current
@@ -182,7 +283,10 @@ export function CanvasPanel({
       if (!inCanvas || e.metaKey || e.ctrlKey || e.altKey) return
       if (e.key === "v" || e.key === "V") setTool("select")
       if (e.key === "h" || e.key === "H") setTool("hand")
-      if (e.key === "Escape") onSelect(null)
+      if (e.key === "Escape") {
+        if (inlineRef.current.screenId) inlineRef.current.onDeselect()
+        else onSelect(null)
+      }
       if (e.key === "!" || (e.shiftKey && e.code === "Digit1")) fit()
     }
     const up = (e: KeyboardEvent) => e.code === "Space" && setSpaceHeld(false)
@@ -277,6 +381,8 @@ export function CanvasPanel({
         >
           {screens.map((s) => {
             const selected = s.id === selectedId
+            const editing = s.id === editingId
+            const el = editing ? inline.element : null
             return (
               <div
                 key={s.id}
@@ -284,22 +390,32 @@ export function CanvasPanel({
                 className="absolute"
                 style={{ left: s.x, top: s.y, width: SCREEN_WIDTH, height: SCREEN_HEIGHT, zIndex: selected ? 2 : 1 }}
               >
-                {selected && !drag && (
+                {selected && !drag && !editing && (
                   <SelectionToolbar zoom={cam.zoom} disabled={busy || s.state !== "ready"} onEdit={() => onEdit(s)} />
                 )}
-                <ScreenLabel screen={s} zoom={cam.zoom} />
+                <ScreenLabel screen={s} zoom={cam.zoom} editing={editing} canEdit={!busy || editing} onToggleEdit={() => inline.onToggle(s)} />
                 <div
                   className={cn(
                     "rounded-[48px] transition-shadow",
-                    !panning && "cursor-grab active:cursor-grabbing",
+                    !panning && !editing && "cursor-grab active:cursor-grabbing",
+                    editing && "cursor-default",
                     selected ? "ring-[3px] ring-primary ring-offset-4 ring-offset-(--surface)" : "hover:ring-2 hover:ring-primary/30 hover:ring-offset-4 hover:ring-offset-(--surface)"
                   )}
                   style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}
                 >
                   <PhoneFrame className="size-full">
-                    <ScreenView id={s.id} name={s.name} state={s.state} code={s.code} error={s.error} appName={appName} />
+                    <ScreenView
+                      id={s.id}
+                      name={s.name}
+                      state={s.state}
+                      code={s.code}
+                      error={s.error}
+                      appName={appName}
+                      editing={editing ? { edit: inline.edit, deselectKey: inline.deselectKey, selectParentKey: inline.selectParentKey, handlers: frameHandlers } : undefined}
+                    />
                   </PhoneFrame>
                 </div>
+                {el && !drag && <EditorPopover zoom={cam.zoom} element={el} screenName={s.name} inline={inline} />}
               </div>
             )
           })}

@@ -2,9 +2,10 @@ import { and, eq } from "drizzle-orm"
 
 import { db, projects } from "@/db"
 import { applyCanvasEdit } from "@/lib/agent/orchestrator"
-import { finishRun, holdRun, openRun } from "@/lib/agent/run-store"
+import { activeRun, finishRun, holdRun, openRun } from "@/lib/agent/run-store"
 import { getCurrentUser, ServiceUnavailableError } from "@/lib/current-user"
 import { isSameOriginJson, json, readJson, str } from "@/lib/http"
+import { EDITABLE_STYLE_KEYS } from "@/lib/verify/codemod"
 import type { ElementEdit } from "@/lib/preview/protocol"
 
 export const runtime = "nodejs"
@@ -13,7 +14,7 @@ export const dynamic = "force-dynamic"
 const styleOf = (v: unknown): Record<string, string> | undefined => {
   if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
   const out: Record<string, string> = {}
-  for (const [k, val] of Object.entries(v as Record<string, unknown>)) if (typeof val === "string") out[k] = val
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) if (typeof val === "string" && val.length <= 200 && EDITABLE_STYLE_KEYS.has(k)) out[k] = val
   return Object.keys(out).length ? out : undefined
 }
 
@@ -42,7 +43,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
   const style = styleOf(body?.style)
   if (text === undefined && !style) return json({ error: "Bad request" }, 400)
   const from = typeof body?.from === "string" ? (body.from as string) : undefined
-  const edit: ElementEdit = { eid, text, from, style }
+  const fromAlt = typeof body?.fromAlt === "string" ? (body.fromAlt as string) : undefined
+  const edit: ElementEdit = { eid, text, from, fromAlt, style }
 
   const [project] = await db
     .select({ id: projects.id })
@@ -52,12 +54,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
   if (!project) return json({ error: "Project not found." }, 404)
 
   // One agent job per project at a time; a build or edit in progress wins.
-  const lock = await openRun(projectId, "canvas-edit")
+  let lock = await openRun(projectId, "canvas-edit")
+  // A newer edit supersedes one still winding down (the browser aborted it):
+  // wait briefly for that one to let go, instead of refusing.
+  for (let i = 0; !lock && i < 40 && !req.signal.aborted; i++) {
+    if ((await activeRun(projectId))?.kind !== "canvas-edit") break
+    await new Promise((r) => setTimeout(r, 100))
+    lock = await openRun(projectId, "canvas-edit")
+  }
   if (!lock) return json({ error: "The agent is busy." }, 409)
   const release = holdRun(lock.id)
   let ok = false
   try {
-    const result = await applyCanvasEdit(projectId, edit)
+    const result = await applyCanvasEdit(projectId, edit, req.signal)
     ok = true
     if ("error" in result) return json({ error: result.error, extraFiles: result.extraFiles }, 422)
     return json(result)

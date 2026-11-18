@@ -5,7 +5,7 @@ import { LayoutGrid, MessageSquare, Smartphone } from "lucide-react"
 import { cn } from "cn"
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
-import { CanvasPanel } from "./canvas-panel"
+import { CanvasPanel, type InlineEditing } from "./canvas-panel"
 import { ChatPanel } from "./chat-panel"
 import type { BackendConfig } from "@/lib/app-runtime/app-doc"
 import { AppRuntimeProvider } from "./app-runtime"
@@ -15,6 +15,7 @@ import { PreviewPanel } from "./preview-panel"
 import type { ChatMessage, ScreenNode, WorkspaceProject } from "./types"
 import { useAgent } from "./use-agent"
 import { WorkspaceHeader } from "./workspace-header"
+import type { ElementEdit, ElementRef, SelectedElement } from "@/lib/preview/protocol"
 
 type Pane = "chat" | "canvas" | "preview"
 
@@ -48,6 +49,7 @@ export function WorkspaceShell({
     initialData: project.dataModel,
     initialFiles: project.files ?? {},
     initialBackend: project.backendInfo,
+    initialCloudhike: project.cloudhike,
   })
 
   const [pane, setPane] = React.useState<Pane>(project.phase === "draft" || project.phase === "planning" ? "chat" : "canvas")
@@ -116,9 +118,114 @@ export function WorkspaceShell({
     requestAnimationFrame(() => chatInputRef.current?.focus())
   }
 
+  // ---- Inline editing (Edit Mode on a canvas screen)
+  const [editingId, setEditingId] = React.useState<string | null>(null)
+  const [element, setElement] = React.useState<SelectedElement | null>(null)
+  const [previewEdit, setPreviewEdit] = React.useState<ElementEdit | null>(null)
+  const [deselectKey, setDeselectKey] = React.useState(0)
+  const [selectParentKey, setSelectParentKey] = React.useState(0)
+  const [advanced, setAdvanced] = React.useState(false)
+  const [inlineNotice, setInlineNotice] = React.useState<string | null>(null)
+  const [codeJump, setCodeJump] = React.useState<{ path: string; line: number; nonce: number } | null>(null)
+  const editingScreen = nodes.find((s) => s.id === editingId) ?? null
+
+  const deselect = React.useCallback(() => {
+    setElement(null)
+    setPreviewEdit(null)
+    setDeselectKey((k) => k + 1)
+  }, [])
+  const toggleEdit = React.useCallback(
+    (screen: ScreenNode) => {
+      setInlineNotice(null)
+      setElement(null)
+      setPreviewEdit(null)
+      setEditingId((id) => (id === screen.id ? null : screen.id))
+      select(screen.id)
+    },
+    [select]
+  )
+  const selectElement = React.useCallback((_screenId: string, el: SelectedElement) => {
+    setElement(el)
+    setPreviewEdit(null)
+  }, [])
+  const moveElement = React.useCallback(
+    (eid: string, rect: SelectedElement["rect"]) => setElement((el) => (el && el.eid === eid ? { ...el, rect } : el)),
+    []
+  )
+  // A screen that stops being ready (e.g. rebuilt) can't be edited in place.
+  React.useEffect(() => {
+    if (editingId && editingScreen?.state !== "ready") {
+      setEditingId(null)
+      setElement(null)
+    }
+  }, [editingId, editingScreen?.state])
+  React.useEffect(() => {
+    if (!inlineNotice) return
+    const t = setTimeout(() => setInlineNotice(null), 5000)
+    return () => clearTimeout(t)
+  }, [inlineNotice])
+
+  // A resync (e.g. an already-built project picking up a kit fix) means the
+  // selected element's location may be stale: ask for a fresh tap rather than
+  // letting the user keep editing something that no longer means what they think.
+  const saveElementEdit = React.useCallback(
+    async (edit: ElementEdit, signal?: AbortSignal) => {
+      const r = await agent.applyElementEdit(edit, signal)
+      if (!r.ok && "resynced" in r && r.resynced) {
+        deselect()
+        setInlineNotice("The preview just updated behind the scenes — tap the element again.")
+      }
+      return r
+    },
+    [agent.applyElementEdit, deselect] // eslint-disable-line react-hooks/exhaustive-deps
+  )
+
+  // The selected element rides along with the next chat message, so "make this button blue" is unambiguous.
+  const attached = React.useMemo<ElementRef | null>(
+    () =>
+      element && editingScreen
+        ? { eid: element.eid, tag: element.tag, text: element.text, screenId: editingScreen.id, screenName: editingScreen.name }
+        : null,
+    [element, editingScreen]
+  )
+
+  const viewElementInCode = () => {
+    const m = element && /^(.*):(\d+):[^:]+$/.exec(element.eid)
+    if (!m) return
+    setCodeJump({ path: m[1], line: Number(m[2]), nonce: Date.now() })
+    if (!isDesktop) setPane("preview")
+  }
+
+  const askAboutElement = (instruction: string) => {
+    if (!attached || !instruction) return
+    agent.sendMessage(instruction, attached.screenId, attached)
+    deselect()
+  }
+
+  const inline: InlineEditing = {
+    screenId: editingId,
+    element,
+    edit: previewEdit,
+    deselectKey,
+    selectParentKey,
+    advanced,
+    onAdvancedChange: setAdvanced,
+    onToggle: toggleEdit,
+    onSelectElement: selectElement,
+    onDeselect: deselect,
+    onSelectParent: () => setSelectParentKey((k) => k + 1),
+    onRect: moveElement,
+    onPreview: setPreviewEdit,
+    onSave: saveElementEdit,
+    onViewCode: viewElementInCode,
+    onAskAI: askAboutElement,
+    aiDisabled: agent.busy,
+  }
+
   const send = (text: string) => {
-    agent.sendMessage(text, editTarget?.id)
+    agent.sendMessage(text, attached?.screenId ?? editTarget?.id, attached ?? undefined)
     setEditTargetId(null)
+    if (attached) deselect()
   }
 
   // On small screens, jump to the canvas when the build starts.
@@ -144,6 +251,8 @@ export function WorkspaceShell({
       onDismissError={agent.dismissError}
       editTarget={editTarget}
       onClearEditTarget={() => setEditTargetId(null)}
+      attachedElement={attached}
+      onClearAttachedElement={deselect}
       inputRef={chatInputRef}
     />
   )
@@ -159,7 +268,8 @@ export function WorkspaceShell({
       onThemeChange={agent.setActiveTheme}
       buildingThemes={agent.phase === "generating"}
       appName={agent.name}
-      notice={agent.repairing ? `Fixing a crash in ${agent.screens.find((x) => x.path === agent.repairing)?.name ?? agent.repairing.split("/").pop()}…` : null}
+      inline={inline}
+      notice={agent.repairing ? `Fixing a crash in ${agent.screens.find((x) => x.path === agent.repairing)?.name ?? agent.repairing.split("/").pop()}…` : inlineNotice}
     />
   )
   const preview = (
@@ -173,7 +283,7 @@ export function WorkspaceShell({
         setSelectedId(id)
       }}
       files={files}
-      onApplyElementEdit={agent.applyElementEdit}
+      jumpTo={codeJump}
     />
   )
 
@@ -202,10 +312,11 @@ export function WorkspaceShell({
         status={agent.phase}
         onRename={agent.setName}
         backend={agent.backend}
-        cloudhike={project.cloudhike}
+        cloudhike={agent.cloudhike}
         agentBusy={agent.busy}
         onSetupBackend={agent.setupBackend}
         onBackendDisconnected={() => agent.setBackend(null)}
+        onRefreshBackend={agent.refreshBackend}
       />
 
       {isDesktop ? (

@@ -4,23 +4,27 @@
 
 import type { ElementEdit, SelectedElement } from "@/lib/preview/protocol"
 import { isAppOwned } from "@/lib/verify/ownership"
+import { elementName } from "@/lib/preview/element-names"
 import { handlers, post } from "./bridge"
 
 let inspecting = false
 let selected: HTMLElement | null = null
 
-function box(id: string, css: string) {
+function box(id: string, css: string, labelCss: string) {
   let b = document.getElementById(id)
   if (!b) {
     b = document.createElement("div")
     b.id = id
     b.style.cssText = `position:fixed;z-index:2147483646;pointer-events:none;display:none;border-radius:3px;${css}`
+    const label = document.createElement("span")
+    label.style.cssText = `position:absolute;left:-1px;white-space:nowrap;font:600 10px/16px -apple-system,system-ui,sans-serif;padding:0 5px;border-radius:3px;color:#fff;${labelCss}`
+    b.appendChild(label)
     document.body.appendChild(b)
   }
   return b
 }
-const hoverBox = () => box("__pv-hover", "outline:1.5px dashed #3b82f6;background:rgba(59,130,246,.06)")
-const selectBox = () => box("__pv-select", "outline:2px solid #3b82f6")
+const hoverBox = () => box("__pv-hover", "outline:1.5px dashed #8b5cf6;background:rgba(139,92,246,.06)", "background:#8b5cf6;opacity:.85")
+const selectBox = () => box("__pv-select", "outline:2px solid #7c3aed", "background:#7c3aed")
 
 function place(b: HTMLElement, el: HTMLElement | null) {
   if (!el || !el.isConnected) {
@@ -29,7 +33,14 @@ function place(b: HTMLElement, el: HTMLElement | null) {
   }
   const r = el.getBoundingClientRect()
   Object.assign(b.style, { display: "block", left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` })
+  // The element's plain name sits on its top edge (inside it, when there's no room above).
+  const label = b.firstElementChild as HTMLElement | null
+  if (label) {
+    label.textContent = elementName(eidTag(el))
+    label.style.top = r.top < 18 ? "0px" : "-17px"
+  }
 }
+const eidTag = (el: Element) => (el.getAttribute("data-eid") ?? "").split(":").pop() ?? el.tagName.toLowerCase()
 
 // The element to select for a tap: the nearest one written in the app's own
 // files. Kit internals (e.g. the <RNText> inside a kit <Button>) and
@@ -40,6 +51,14 @@ function target(e: Event): HTMLElement | null {
   let el = e.target instanceof Element ? e.target.closest("[data-eid]") : null
   while (el && !isAppOwned(eidFile(el))) el = el.parentElement?.closest("[data-eid]") ?? null
   return el as HTMLElement | null
+}
+
+// The editable element around `el`: the next one up written in the app's own
+// files, and not another rendering of the same source line.
+function parentOf(el: HTMLElement): HTMLElement | null {
+  let p = el.parentElement?.closest("[data-eid]") ?? null
+  while (p && (!isAppOwned(eidFile(p)) || p.getAttribute("data-eid") === el.getAttribute("data-eid"))) p = p.parentElement?.closest("[data-eid]") ?? null
+  return p as HTMLElement | null
 }
 
 // Where the editable text sits inside the selected element, as child
@@ -77,17 +96,23 @@ function describe(el: HTMLElement, tapped: Element | null): SelectedElement {
     text: textPath ? (atPath(el, textPath)?.textContent ?? null) : null,
     kit: el.dataset.kit === "1",
     rect: { x: r.left, y: r.top, width: r.width, height: r.height },
-    styles: {
-      color: cs.color,
-      backgroundColor: cs.backgroundColor,
-      fontSize: cs.fontSize,
-      fontWeight: cs.fontWeight,
-      borderRadius: cs.borderRadius,
-      padding: cs.padding,
-      margin: cs.margin,
-    },
+    styles: Object.fromEntries(READ_STYLES.map((k) => [k, (cs as unknown as Record<string, string>)[k]])),
+    parent: (() => {
+      const p = parentOf(el)
+      return p ? eidTag(p) : null
+    })(),
   }
 }
+
+// What the editor shows for an element: its computed style, as the app renders it now.
+const READ_STYLES = [
+  "color", "backgroundColor", "fontSize", "fontWeight", "fontStyle", "textAlign", "lineHeight", "letterSpacing", "textDecorationLine",
+  "borderRadius", "borderTopWidth", "borderTopColor", "borderTopStyle", "opacity", "width", "height", "gap",
+  "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "marginTop", "marginRight", "marginBottom", "marginLeft",
+  "flexDirection", "justifyContent", "alignItems", "display", "flexWrap", "alignSelf", "flexGrow", "overflow", "boxShadow",
+  "borderTopLeftRadius", "borderTopRightRadius", "borderBottomLeftRadius", "borderBottomRightRadius", "borderTopStyle",
+  "rowGap", "columnGap",
+]
 
 document.addEventListener(
   "mousemove",
@@ -109,7 +134,11 @@ for (const type of ["click", "pointerdown", "pointerup", "mousedown", "mouseup"]
       e.stopPropagation()
       if (type !== "click") return
       const el = target(e)
-      if (!el) return
+      if (!el) {
+        clearSelection()
+        post({ kind: "deselect" })
+        return
+      }
       selected = el
       place(selectBox(), el)
       place(hoverBox(), null)
@@ -119,30 +148,76 @@ for (const type of ["click", "pointerdown", "pointerup", "mousedown", "mouseup"]
   )
 }
 
+function clearSelection() {
+  selected = null
+  textPath = null
+  place(hoverBox(), null)
+  place(selectBox(), null)
+}
+
 handlers.inspect = (on) => {
   inspecting = on
   document.documentElement.style.cursor = on ? "default" : ""
-  if (!on) {
-    selected = null
-    textPath = null
-    place(hoverBox(), null)
-    place(selectBox(), null)
-  }
+  if (!on) clearSelection()
 }
+handlers.deselect = clearSelection
+handlers.selectParent = () => {
+  const p = selected && parentOf(selected)
+  if (!p) return
+  selected = p
+  textPath = textPathFor(p, null)
+  place(selectBox(), p)
+  post({ kind: "select", element: describe(p, null) })
+}
+
+// The host's popover follows the element: tell it where the element is now.
+let rectFrame = 0
+function reportRect() {
+  if (rectFrame) return
+  rectFrame = requestAnimationFrame(() => {
+    rectFrame = 0
+    if (!selected || !selected.isConnected) return
+    place(selectBox(), selected)
+    const r = selected.getBoundingClientRect()
+    post({ kind: "element-rect", eid: selected.dataset.eid ?? "", rect: { x: r.left, y: r.top, width: r.width, height: r.height } })
+  })
+}
+document.addEventListener("scroll", () => selected && reportRect(), true)
 
 // Every element from the same source line gets the edit (e.g. each row of a
 // list): that's what the saved source change will do too.
 const cssName = (k: string) => k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
+// React Native style -> what the DOM preview needs. Theme colors arrive as
+// "theme:<token>:<hex>" (the hex is what shows now); shadows are several RN
+// props that react-native-web turns into one box-shadow.
+const RN_ONLY = new Set(["shadowColor", "shadowOffset", "shadowOpacity", "shadowRadius", "elevation"])
+
+function domStyle(style: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, raw] of Object.entries(style)) {
+    if (RN_ONLY.has(k)) continue
+    const tok = /^theme:[A-Za-z]+:(#[0-9a-fA-F]{3,8})$/.exec(raw)
+    out[cssName(k)] = tok ? tok[1] : raw
+  }
+  if (["shadowOpacity", "shadowRadius", "shadowOffset"].some((k) => k in style)) {
+    const [x = "0", y = "0"] = (style.shadowOffset ?? "0,0").split(",")
+    const opacity = Number(style.shadowOpacity ?? 0)
+    out["box-shadow"] = opacity > 0 ? `${Number(x) || 0}px ${Number(y) || 0}px ${Number(style.shadowRadius) || 0}px rgba(0,0,0,${opacity})` : "none"
+  }
+  return out
+}
+
 handlers.applyEdit = (edit: ElementEdit) => {
   const els = document.querySelectorAll<HTMLElement>(`[data-eid="${CSS.escape(edit.eid)}"]`)
   if (!els.length) return
   if (selected && !selected.isConnected) selected = els[0]
+  const css = edit.style ? domStyle(edit.style) : null
   for (const el of els) {
     if (typeof edit.text === "string" && textPath) {
       const t = atPath(el, textPath)
       if (t) t.textContent = edit.text
     }
-    if (edit.style) for (const [k, v] of Object.entries(edit.style)) el.style.setProperty(cssName(k), v)
+    if (css) for (const [k, v] of Object.entries(css)) el.style.setProperty(k, v)
   }
-  if (selected) place(selectBox(), selected)
+  if (selected) reportRect()
 }

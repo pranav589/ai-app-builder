@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm"
 
 import { db, messages, projects } from "@/db"
 import { executeRun } from "@/lib/agent/execute"
+import { parseElementRef } from "@/lib/agent/element-context"
 import { latestPlan, saveUserMessage } from "@/lib/agent/orchestrator"
 import {
   activeRun,
@@ -48,6 +49,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
   if (!ACTIONS.includes(action)) return json({ error: "Bad request" }, 400)
   const text = str(body?.text).trim()
   const screenId = str(body?.screenId) || undefined
+  const element = parseElementRef(body?.element)
   if (action === "message" && !text) return json({ error: "Write a message first." }, 400)
   if (text.length > MAX_PROMPT_LENGTH) return json({ error: `Keep messages under ${MAX_PROMPT_LENGTH} characters.` }, 400)
 
@@ -106,7 +108,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
 
   // Saved before the run is queued, so a reload shows the message even while it waits for a worker.
   try {
-    if (action === "message") await saveUserMessage(projectId, text, screenId)
+    if (action === "message") await saveUserMessage(projectId, text, screenId, element)
     if (action === "approve") await saveUserMessage(projectId, text || "Looks good, start building.")
   } catch (e) {
     await failQueuedRun(run.id, "saving the user message failed", "Couldn't save your message. Please try again.")

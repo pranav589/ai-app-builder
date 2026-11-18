@@ -2,6 +2,7 @@
 
 import type { DataModel } from "@/lib/app-runtime/data-model"
 import type { ThemePackage } from "@/lib/app-runtime/theme"
+import type { ElementRef } from "@/lib/preview/protocol"
 import type { GateName, RunState } from "@/lib/verify/types"
 
 export type PlanScreen = {
@@ -70,6 +71,8 @@ export type StoredMessage = {
   build?: BuildProgress
   /** Set when this message committed a new version (lib/versions/store.ts). */
   version?: number
+  /** A canvas element the creator attached to this (user) message. */
+  element?: ElementRef
 }
 
 /** The app's backend as the workspace shows it. Never carries credentials. */

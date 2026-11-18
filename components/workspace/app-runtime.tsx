@@ -36,6 +36,8 @@ export type FrameHandlers = {
   onRoute?: (pathname: string) => void
   onError?: (message: string, file?: string) => void
   onSelectElement?: (el: SelectedElement) => void
+  onDeselectElement?: () => void
+  onElementRect?: (eid: string, rect: SelectedElement["rect"]) => void
 }
 
 type Entry = { handlers: React.RefObject<FrameHandlers> }
@@ -286,6 +288,12 @@ export function AppRuntimeProvider({
         case "select":
           entry.handlers.current?.onSelectElement?.(msg.element)
           break
+        case "deselect":
+          entry.handlers.current?.onDeselectElement?.()
+          break
+        case "element-rect":
+          entry.handlers.current?.onElementRect?.(msg.eid, msg.rect)
+          break
       }
     }
     window.addEventListener("message", onMessage)
@@ -333,6 +341,8 @@ export function RuntimeFrame({
   handlers,
   inspect = false,
   edit,
+  deselectKey,
+  selectParentKey,
   resetKey,
   className,
   style,
@@ -346,6 +356,10 @@ export function RuntimeFrame({
   /** Hover/select elements (for the inline editor). */
   inspect?: boolean
   edit?: ElementEdit | null
+  /** Changing it clears the frame's current selection (Edit Mode stays on). */
+  deselectKey?: unknown
+  /** Changing it selects the element around the current selection. */
+  selectParentKey?: unknown
   /** Changing it sends the app back to `route` without reloading. */
   resetKey?: unknown
   className?: string
@@ -386,6 +400,26 @@ export function RuntimeFrame({
     const win = ref.current?.contentWindow
     if (win && edit) post(win, { kind: "apply-edit", edit })
   }, [edit, post])
+
+  const firstDeselect = React.useRef(true)
+  React.useEffect(() => {
+    if (firstDeselect.current) {
+      firstDeselect.current = false
+      return
+    }
+    const win = ref.current?.contentWindow
+    if (win) post(win, { kind: "deselect" })
+  }, [deselectKey, post])
+
+  const firstParent = React.useRef(true)
+  React.useEffect(() => {
+    if (firstParent.current) {
+      firstParent.current = false
+      return
+    }
+    const win = ref.current?.contentWindow
+    if (win) post(win, { kind: "select-parent" })
+  }, [selectParentKey, post])
 
   return (
     <iframe

@@ -24,21 +24,20 @@ project (new and existing) runs the one pipeline. The `projects.engine` column i
 
 ## 3. Manual tests
 
-All manual tests across every phase were run and confirmed by the user (2026-11-18), as of that
-point in the plan.
+All manual tests across every phase were run and confirmed by the user, including the ones
+below, as of 2026-11-18.
 
-**New since then:**
-- Phase 7 item 4 (needs a live `AI_API_KEY`): new-screen generation rewritten to go through the
-  verified coder + `@/kit` + gateway, with streaming restored — see verified-code-plan.md
-  Phase 7's status note. Its own manual test 1 (and the "new screen" half of test 2) needs
-  re-running against this new code path: create a fresh project and confirm screens still
-  stream into view live and come out built from `@/kit`.
-- Phase 8 item 3 (no AI involved, can be done any time): the canvas inspector UI (an "Inspect"
-  toggle in the Preview toolbar, tap an element, edit its text/style in the panel that appears)
-  is built but not yet clicked through by hand — see verified-code-plan.md Phase 8's user test 3.
-- Phase 9 item 3 (no AI involved, can be done any time), done 2026-11-18: the inspector's "View
-  in Code tab" button — tap an element, press the code icon, confirm the Code tab opens to the
-  right file and line. See verified-code-plan.md Phase 9's user test 3.
+- Phase 7 item 4 (needs a live `AI_API_KEY`), done: new-screen generation rewritten to go
+  through the verified coder + `@/kit` + gateway, with streaming restored — see
+  verified-code-plan.md Phase 7's status note. Manual test 1 (and the "new screen" half of
+  test 2) re-run against this new code path: screens stream into view live and come out built
+  from `@/kit`.
+- Phase 8 item 3, done: the canvas inspector UI (an "Inspect" toggle in the Preview toolbar, tap
+  an element, edit its text/style in the panel that appears) clicked through by hand — see
+  verified-code-plan.md Phase 8's user test 3.
+- Phase 9 item 3, done: the inspector's "View in Code tab" button — tap an element, press the
+  code icon, confirm the Code tab opens to the right file and line. See verified-code-plan.md
+  Phase 9's user test 3.
 
 ## 4. Decisions still to make
 

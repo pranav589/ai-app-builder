@@ -11,6 +11,7 @@ import {
   KeyRound,
   Mail,
   RefreshCw,
+  Settings2,
   ShieldCheck,
   Timer,
   Unplug,
@@ -197,6 +198,12 @@ function ConnectDialog({
           })}
         </fieldset>
 
+        {backend && !needsAuth && (
+          <p className="-mt-2 text-xs text-muted-foreground">
+            Unchecking a service stops this app from using it; anything already deployed stays in your CloudHike workspace.
+          </p>
+        )}
+
         <div className="flex items-start gap-2.5 rounded-(--r-md) bg-muted/60 p-3 text-xs text-muted-foreground">
           <ShieldCheck className="mt-0.5 size-4 shrink-0 text-foreground/70" />
           <p>
@@ -216,7 +223,7 @@ function ConnectDialog({
           </Button>
           <Button onClick={go} disabled={!cloudhike.configured || leaving || agentBusy}>
             {leaving ? <Spinner /> : <Cloud />}
-            {needsAuth ? (reconnect ? "Reconnect CloudHike" : "Continue with CloudHike") : backend ? "Set up again" : "Set up backend"}
+            {needsAuth ? (reconnect ? "Reconnect CloudHike" : "Continue with CloudHike") : backend ? "Save and deploy" : "Set up backend"}
           </Button>
         </div>
         {agentBusy && <p className="-mt-3 text-right text-xs text-muted-foreground">Available once the agent finishes its current task.</p>}
@@ -229,11 +236,14 @@ function ConnectedPopover({
   backend,
   agentBusy,
   onRerun,
+  onEditServices,
   onDisconnect,
 }: {
   backend: BackendInfo
   agentBusy: boolean
   onRerun: () => void
+  /** Opens the provider dialog again, pre-filled, so services can be added or dropped. */
+  onEditServices: () => void
   onDisconnect: () => void
 }) {
   return (
@@ -274,6 +284,9 @@ function ConnectedPopover({
           <Button variant="outline" className="h-8 justify-start" render={<a href="https://cloudhike.dev" target="_blank" rel="noreferrer noopener" />}>
             <ExternalLink /> Open CloudHike dashboard
           </Button>
+          <Button variant="ghost" className="h-8 justify-start" onClick={onEditServices} disabled={agentBusy}>
+            <Settings2 /> Edit services
+          </Button>
           <Button variant="ghost" className="h-8 justify-start" onClick={onRerun} disabled={agentBusy}>
             <RefreshCw /> Check and repair setup
           </Button>
@@ -297,6 +310,7 @@ export function BackendControl({
   agentBusy,
   onSetupBackend,
   onDisconnected,
+  onRefresh,
 }: {
   projectId: string
   backend: BackendInfo | null
@@ -304,6 +318,8 @@ export function BackendControl({
   agentBusy: boolean
   onSetupBackend: (services: string[]) => void
   onDisconnected: () => void
+  /** Re-checks the CloudHike connection and this app's backend with the server, in case either went stale (disconnected elsewhere, revoked on CloudHike's side). */
+  onRefresh: () => void
 }) {
   const [open, setOpen] = React.useState(false)
   const [notice, setNotice] = React.useState<string | null>(null)
@@ -354,6 +370,14 @@ export function BackendControl({
     }
   }
 
+  // The connection/backend state shown here is a snapshot: resync before
+  // opening anything, so the dialog's needsAuth and the buttons below reflect
+  // the real thing (not a connection dropped in another tab, or on CloudHike's side).
+  const openDialog = () => {
+    onRefresh()
+    setOpen(true)
+  }
+
   const status = backend?.status
   let trigger: React.ReactNode
   if (status === "provisioning") {
@@ -369,6 +393,7 @@ export function BackendControl({
         backend={backend!}
         agentBusy={agentBusy}
         onRerun={() => onSetupBackend(backend!.services)}
+        onEditServices={openDialog}
         onDisconnect={() => setConfirm(true)}
       />
     )
@@ -377,7 +402,7 @@ export function BackendControl({
       <Button
         variant="outline"
         className="h-8 border-amber-500/40 px-2.5 text-amber-700 hover:text-amber-800 dark:text-amber-300 max-sm:w-8 max-sm:px-0"
-        onClick={() => setOpen(true)}
+        onClick={openDialog}
         aria-label="Backend needs attention"
       >
         <AlertTriangle />
@@ -386,7 +411,7 @@ export function BackendControl({
     )
   } else {
     trigger = (
-      <Button variant="outline" className="h-8 px-2.5 max-sm:w-8 max-sm:px-0" onClick={() => setOpen(true)} aria-label="Connect Backend">
+      <Button variant="outline" className="h-8 px-2.5 max-sm:w-8 max-sm:px-0" onClick={openDialog} aria-label="Connect Backend">
         <Database />
         <span className="hidden sm:inline">Connect Backend</span>
       </Button>

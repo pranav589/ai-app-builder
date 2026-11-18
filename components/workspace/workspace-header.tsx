@@ -258,6 +258,7 @@ export function WorkspaceHeader({
   agentBusy,
   onSetupBackend,
   onBackendDisconnected,
+  onRefreshBackend,
 }: {
   projectId: string
   name: string
@@ -268,6 +269,7 @@ export function WorkspaceHeader({
   agentBusy: boolean
   onSetupBackend: (services: string[]) => void
   onBackendDisconnected: () => void
+  onRefreshBackend: () => void
 }) {
   const [shareOpen, setShareOpen] = React.useState(false)
 
@@ -298,6 +300,7 @@ export function WorkspaceHeader({
           agentBusy={agentBusy}
           onSetupBackend={onSetupBackend}
           onDisconnected={onBackendDisconnected}
+          onRefresh={onRefreshBackend}
         />
 
         <VersionsMenu projectId={projectId} />

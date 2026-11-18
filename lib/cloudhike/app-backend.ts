@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm"
 import postgres from "postgres"
 
 import { appBackends, db, type AppBackendRow } from "@/db"
-import type { DataModel } from "@/lib/app-runtime/data-model"
+import type { DataField, DataModel, FieldType } from "@/lib/app-runtime/data-model"
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-box"
 
 // The data plane of a generated app on CloudHike. CloudHike has no client
@@ -15,7 +15,11 @@ import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-box"
 // its Database, Storage and Auth. Credentials never reach the browser or the AI.
 //
 // Layout in the app's database:
-//   app_c_<collection>  one table per collection: id, data jsonb, created_at, updated_at
+//   app_c_<collection>  one table per collection: id, created_at, updated_at, one real
+//                        column per field the data model declares (text/numeric/boolean/
+//                        timestamptz), plus an `extra` jsonb catch-all for anything a
+//                        screen writes that isn't declared (keeps ad-hoc collections and
+//                        fields working without a migration).
 //   app_settings        key -> jsonb value (useSetting)
 //   app_meta            'version': bumped on every write, polled for live sync
 
@@ -96,37 +100,118 @@ create table if not exists app_settings (key text primary key, value jsonb, upda
 create table if not exists app_meta (key text primary key, value bigint not null default 0);
 insert into app_meta (key, value) values ('version', 0) on conflict (key) do nothing;`
 
-const collectionDdl = (table: string) => `
+/** Field type -> the real Postgres column type it's given. */
+const PG_TYPE: Record<FieldType, string> = {
+  string: "text",
+  text: "text",
+  number: "numeric",
+  boolean: "boolean",
+  date: "timestamptz",
+  image: "text",
+  enum: "text",
+}
+
+// These names are the record's own fixed columns (or the catch-all); a data
+// model field with one of these names would collide with them, so it's left
+// out of the typed columns and falls back to living in `extra` instead.
+const RESERVED_FIELD_NAMES = new Set(["id", "createdAt", "updatedAt", "extra"])
+const COLUMN = /^[A-Za-z][A-Za-z0-9_]{0,47}$/
+
+type EffectiveField = { name: string; column: string; type: FieldType }
+
+/**
+ * The data model's fields for one collection, as real (quoted, validated)
+ * column names. A field whose name can't be made a safe identifier, or that
+ * collides with a reserved column or another field once sanitized, is
+ * dropped here (its value still round-trips, just through `extra`) rather
+ * than failing the whole sync over one bad field.
+ */
+function effectiveFields(fields: DataField[]): EffectiveField[] {
+  const out: EffectiveField[] = []
+  const seen = new Set<string>()
+  for (const f of fields) {
+    if (RESERVED_FIELD_NAMES.has(f.name)) continue
+    const column = f.name.replace(/-/g, "_")
+    if (!COLUMN.test(column) || seen.has(column)) continue
+    seen.add(column)
+    out.push({ name: f.name, column, type: f.type })
+  }
+  return out
+}
+
+const baseDdl = (table: string) => `
 create table if not exists ${table} (
   id text primary key,
-  data jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
-  updated_at timestamptz
+  updated_at timestamptz,
+  extra jsonb not null default '{}'::jsonb
 );
 create index if not exists ${table}_created_idx on ${table} (created_at desc);`
 
+const columnDdl = (table: string, f: EffectiveField) => `alter table ${table} add column if not exists "${f.column}" ${PG_TYPE[f.type]};`
+
 /**
- * Creates the tables for the app's data model and seeds collections that are
- * still empty. Idempotent, and never deletes data: a revised plan adds tables,
- * it doesn't drop the old ones.
+ * A table from before fields had their own columns (everything lived in one
+ * `data` jsonb blob): renames that column to `extra` (the same role, new
+ * name) and backfills each declared field's new column from it. Idempotent
+ * either way — a table that never had a `data` column, or was already
+ * migrated, just runs the (then-empty) backfill updates as a no-op.
+ */
+const migrateLegacyDdl = (table: string, fields: EffectiveField[]) => {
+  const rename = `
+do $$
+begin
+  if exists (select 1 from information_schema.columns where table_name = '${table}' and column_name = 'data')
+     and not exists (select 1 from information_schema.columns where table_name = '${table}' and column_name = 'extra') then
+    alter table ${table} rename column data to extra;
+  end if;
+end $$;`
+  const casts: Record<FieldType, string> = { string: "", text: "", number: "::numeric", boolean: "::boolean", date: "::timestamptz", image: "", enum: "" }
+  const backfills = fields.map((f) => {
+    const raw = `extra->>'${f.name}'`
+    // A field left blank (e.g. no expiry date set) stored "" in the old blob; casting "" straight
+    // to numeric/boolean/timestamptz errors, so an empty string becomes null instead, same as unset.
+    const value = casts[f.type] ? `nullif(${raw}, '')${casts[f.type]}` : raw
+    return `update ${table} set "${f.column}" = ${value} where "${f.column}" is null and extra ? '${f.name}';`
+  })
+  return [rename, ...backfills].join("\n")
+}
+
+/** Ensures a collection's table has every current field as a real column (new table or an older one). */
+async function ensureTable(sql: postgres.Sql, table: string, fields: EffectiveField[]) {
+  await sql.unsafe(baseDdl(table))
+  for (const f of fields) await sql.unsafe(columnDdl(table, f))
+  await sql.unsafe(migrateLegacyDdl(table, fields))
+}
+
+/**
+ * Creates the tables for the app's data model (one real column per declared
+ * field, migrating an older single-jsonb-column table in place) and seeds
+ * collections that are still empty. Idempotent, and never deletes data: a
+ * revised plan adds tables and columns, it doesn't drop the old ones.
  */
 export async function syncSchema(env: AppEnv, model: DataModel) {
   await withDirect(env, async (sql) => {
     await sql.unsafe(META_DDL)
     for (const c of model.collections) {
       const table = tableName(c.name)
-      await sql.unsafe(collectionDdl(table))
+      const fields = effectiveFields(c.fields)
+      await ensureTable(sql, table, fields)
       const [{ n }] = await sql.unsafe<{ n: number }[]>(`select count(*)::int as n from ${table}`)
       if (n === 0 && c.seed.length) {
         const stamp = Date.now()
         for (const [i, r] of c.seed.entries()) {
-          const { id, createdAt, updatedAt: _u, ...data } = r as Record<string, unknown>
+          const { id, createdAt, updatedAt: _u, ...rest } = r as Record<string, unknown>
           const created = typeof createdAt === "string" ? createdAt : new Date(stamp - i * 3_600_000).toISOString()
-          await sql.unsafe(`insert into ${table} (id, data, created_at) values ($1, $2::jsonb, $3) on conflict (id) do nothing`, [
+          const { columns, values, extra } = splitRecord(fields, rest)
+          const cols = ["id", "created_at", ...columns.map((col) => `"${col}"`), "extra"]
+          const placeholders = cols.map((_, idx) => (idx === cols.length - 1 ? `$${idx + 1}::jsonb` : `$${idx + 1}`))
+          await sql.unsafe(`insert into ${table} (${cols.join(", ")}) values (${placeholders.join(", ")}) on conflict (id) do nothing`, [
             String(id ?? randomUUID()),
-            JSON.stringify(data),
             created,
-          ])
+            ...values,
+            sql.json(extra as postgres.JSONValue),
+          ] as postgres.ParameterOrJSON<never>[])
         }
       }
     }
@@ -136,19 +221,65 @@ export async function syncSchema(env: AppEnv, model: DataModel) {
   })
 }
 
-type Row = { id: string; data: Record<string, unknown>; created_at: Date; updated_at: Date | null }
-const toRecord = (r: Row) => ({
-  ...r.data,
-  id: r.id,
-  createdAt: new Date(r.created_at).toISOString(),
-  ...(r.updated_at ? { updatedAt: new Date(r.updated_at).toISOString() } : {}),
-})
+/** A field's JS value as its column expects it. `undefined` (absent) becomes a plain null. */
+function toColumnValue(type: FieldType, v: unknown): unknown {
+  if (v === undefined || v === null) return null
+  if (type === "number") return typeof v === "number" ? v : Number(v)
+  if (type === "boolean") return typeof v === "boolean" ? v : Boolean(v)
+  return v
+}
 
+/** Splits a full record's values into its declared columns (in the model's order) plus anything left over, for an insert. */
+function splitRecord(fields: EffectiveField[], values: Record<string, unknown>) {
+  const columns: string[] = []
+  const vals: unknown[] = []
+  const used = new Set<string>()
+  for (const f of fields) {
+    used.add(f.name)
+    columns.push(f.column)
+    vals.push(toColumnValue(f.type, values[f.name]))
+  }
+  const extra: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(values)) if (!used.has(k)) extra[k] = v
+  return { columns, values: vals, extra }
+}
+
+/** Same split, but for a partial patch: only the keys actually present move to their column (so an unset field is left alone, not nulled out). */
+function splitPatch(fields: EffectiveField[], patch: Record<string, unknown>) {
+  const sets: { column: string; value: unknown }[] = []
+  const used = new Set<string>()
+  for (const f of fields) {
+    if (!(f.name in patch)) continue
+    used.add(f.name)
+    sets.push({ column: f.column, value: toColumnValue(f.type, patch[f.name]) })
+  }
+  const extraPatch: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(patch)) if (!used.has(k)) extraPatch[k] = v
+  return { sets, extraPatch }
+}
+
+/** A row (every real column, plus `extra`) back into the record shape a screen expects. */
+function toRecord(row: Record<string, unknown>, fields: EffectiveField[]) {
+  const out: Record<string, unknown> = { ...((row.extra as Record<string, unknown> | null) ?? {}) }
+  for (const f of fields) {
+    const v = row[f.column]
+    out[f.name] = v === null || v === undefined ? null : f.type === "number" ? Number(v) : f.type === "date" ? new Date(v as string).toISOString() : v
+  }
+  out.id = row.id as string
+  out.createdAt = new Date(row.created_at as string).toISOString()
+  if (row.updated_at) out.updatedAt = new Date(row.updated_at as string).toISOString()
+  return out
+}
+
+/**
+ * The size limit applies to everything a write carries (id/timestamps
+ * stripped, those are separate columns), whichever columns or `extra` it
+ * ends up in.
+ */
 const clean = (values: Record<string, unknown>) => {
   const { id: _i, createdAt: _c, updatedAt: _u, ...rest } = values ?? {}
-  const json = JSON.stringify(rest)
-  if (json.length > 256_000) throw new AppBackendError("That item is too large to save.")
-  return json
+  if (JSON.stringify(rest).length > 256_000) throw new AppBackendError("That item is too large to save.")
+  return rest
 }
 
 const missingTable = (e: unknown) => (e as { code?: string })?.code === "42P01"
@@ -159,17 +290,18 @@ async function bump(sql: postgres.Sql) {
 
 const newId = () => `r${Date.now().toString(36)}${randomUUID().slice(0, 8)}`
 
-export function dataApi(projectId: string, env: AppEnv) {
+/** `model` is the project's current data model, so each collection's writes land in its declared columns. A collection it doesn't name (or no model at all) just keeps everything in `extra`. */
+export function dataApi(projectId: string, env: AppEnv, model?: DataModel | null) {
   const sql = appSql(projectId, env)
-  // A collection the screens use that isn't in the data model yet: create it on first write.
-  const ensure = (table: string) => sql.unsafe(collectionDdl(table))
+  const fieldsOf = (collection: string) => effectiveFields(model?.collections.find((c) => c.name === collection)?.fields ?? [])
 
   return {
     async list(collection: string) {
       const table = tableName(collection)
+      const fields = fieldsOf(collection)
       try {
-        const rows = await sql.unsafe<Row[]>(`select id, data, created_at, updated_at from ${table} order by created_at desc limit 1000`)
-        return rows.map(toRecord)
+        const rows = await sql.unsafe<Record<string, unknown>[]>(`select * from ${table} order by created_at desc limit 1000`)
+        return rows.map((r) => toRecord(r, fields))
       } catch (e) {
         if (missingTable(e)) return []
         throw e
@@ -177,9 +309,10 @@ export function dataApi(projectId: string, env: AppEnv) {
     },
     async get(collection: string, id: string) {
       const table = tableName(collection)
+      const fields = fieldsOf(collection)
       try {
-        const [row] = await sql.unsafe<Row[]>(`select id, data, created_at, updated_at from ${table} where id = $1`, [id])
-        return row ? toRecord(row) : null
+        const [row] = await sql.unsafe<Record<string, unknown>[]>(`select * from ${table} where id = $1`, [id])
+        return row ? toRecord(row, fields) : null
       } catch (e) {
         if (missingTable(e)) return null
         throw e
@@ -187,31 +320,44 @@ export function dataApi(projectId: string, env: AppEnv) {
     },
     async insert(collection: string, values: Record<string, unknown>) {
       const table = tableName(collection)
-      const data = clean(values)
+      const fields = fieldsOf(collection)
+      const { columns, values: vals, extra } = splitRecord(fields, clean(values))
+      const cols = ["id", ...columns.map((c) => `"${c}"`), "extra"]
+      const placeholders = cols.map((_, i) => (i === cols.length - 1 ? `$${i + 1}::jsonb` : `$${i + 1}`))
       const run = () =>
-        sql.unsafe<Row[]>(`insert into ${table} (id, data) values ($1, $2::jsonb) returning id, data, created_at, updated_at`, [newId(), data])
-      let rows: Row[]
+        sql.unsafe<Record<string, unknown>[]>(`insert into ${table} (${cols.join(", ")}) values (${placeholders.join(", ")}) returning *`, [
+          newId(),
+          ...vals,
+          sql.json(extra as postgres.JSONValue),
+        ] as postgres.ParameterOrJSON<never>[])
+      let rows: Record<string, unknown>[]
       try {
         rows = await run()
       } catch (e) {
         if (!missingTable(e)) throw e
-        await ensure(table)
+        await ensureTable(sql, table, fields)
         rows = await run()
       }
       await bump(sql)
-      return toRecord(rows[0])
+      return toRecord(rows[0], fields)
     },
     async update(collection: string, id: string, patch: Record<string, unknown>) {
       const table = tableName(collection)
+      const fields = fieldsOf(collection)
+      const { sets, extraPatch } = splitPatch(fields, clean(patch))
+      const assigns = sets.map((s, i) => `"${s.column}" = $${i + 2}`)
+      const params: postgres.ParameterOrJSON<never>[] = [id, ...sets.map((s) => s.value)] as postgres.ParameterOrJSON<never>[]
+      if (Object.keys(extraPatch).length) {
+        assigns.push(`extra = extra || $${params.length + 1}::jsonb`)
+        params.push(sql.json(extraPatch as postgres.JSONValue))
+      }
+      assigns.push("updated_at = now()")
       const rows = await sql
-        .unsafe<Row[]>(
-          `update ${table} set data = data || $2::jsonb, updated_at = now() where id = $1 returning id, data, created_at, updated_at`,
-          [id, clean(patch)]
-        )
+        .unsafe<Record<string, unknown>[]>(`update ${table} set ${assigns.join(", ")} where id = $1 returning *`, params)
         .catch((e) => (missingTable(e) ? [] : Promise.reject(e)))
       if (!rows.length) throw new AppBackendError("That item no longer exists.", 404)
       await bump(sql)
-      return toRecord(rows[0])
+      return toRecord(rows[0], fields)
     },
     async remove(collection: string, id: string) {
       const table = tableName(collection)

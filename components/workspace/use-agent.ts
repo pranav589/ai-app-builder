@@ -5,10 +5,11 @@ import * as React from "react"
 import type { AgentEvent, AgentPhase, BackendInfo, GeneratedScreen } from "@/lib/agent/types"
 import type { DataModel } from "@/lib/app-runtime/data-model"
 import type { ThemePackage } from "@/lib/app-runtime/theme"
+import type { ElementRef } from "@/lib/preview/protocol"
 import type { ChatMessage } from "./types"
 
 type Action = "start" | "resume" | "message" | "approve" | "backend"
-type Request = { action: Action; text?: string; screenId?: string; services?: string[] }
+type Request = { action: Action; text?: string; screenId?: string; element?: ElementRef; services?: string[] }
 
 export type AgentError = { message: string; retry?: Request }
 
@@ -30,6 +31,7 @@ export function useAgent({
   initialData,
   initialFiles,
   initialBackend,
+  initialCloudhike,
 }: {
   initialBackend: BackendInfo | null
   initialFiles: Record<string, string>
@@ -40,6 +42,8 @@ export function useAgent({
   initialMessages: ChatMessage[]
   initialScreens: GeneratedScreen[]
   initialName: string
+  /** Whether the creator's CloudHike account is connected. Can go stale (a disconnect in another tab, another project); refreshed on a failed backend action. */
+  initialCloudhike: { configured: boolean; accountConnected: boolean }
 }) {
   const [phase, setPhase] = React.useState<AgentPhase>(initialPhase)
   const [messages, setMessages] = React.useState<ChatMessage[]>(initialMessages)
@@ -59,6 +63,27 @@ export function useAgent({
   const filesRef = React.useRef(files)
   filesRef.current = files
   const [backend, setBackend] = React.useState<BackendInfo | null>(initialBackend)
+  const [cloudhike, setCloudhike] = React.useState(initialCloudhike)
+
+  /**
+   * The CloudHike connection and backend state as the server sees them right
+   * now: both are rendered once at page load and otherwise only move through
+   * SSE events, so they can go stale (the account disconnected from another
+   * tab or another project, or revoked directly in CloudHike). Called after
+   * a "backend" action fails, so the header's next state (and the dialog's
+   * needsAuth) reflect reality instead of repeating the same failure.
+   */
+  const refreshBackend = React.useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/backend`)
+      if (!res.ok) return
+      const data = (await res.json()) as { configured: boolean; accountConnected: boolean; backend: BackendInfo | null }
+      setCloudhike({ configured: data.configured, accountConnected: data.accountConnected })
+      setBackend(data.backend)
+    } catch {
+      // Keep whatever we had; the next action will try again.
+    }
+  }, [projectId])
 
   // Streaming code is buffered and flushed on a timer, not per token.
   const codeBuf = React.useRef(new Map<string, string>())
@@ -177,6 +202,10 @@ export function useAgent({
         })
         if (!res.ok || !res.body) {
           const data = (await res.json().catch(() => ({}))) as { error?: string }
+          // The account/backend state this request relied on may be stale (disconnected
+          // elsewhere, revoked on CloudHike's side): resync it so the header and the
+          // Connect dialog show what's actually true, instead of repeating the same failure.
+          if (req.action === "backend") void refreshBackend()
           setError({ message: data.error ?? "The agent couldn't start. Please try again.", retry: res.status === 409 ? undefined : req })
           return
         }
@@ -200,7 +229,10 @@ export function useAgent({
             try {
               const event = JSON.parse(data) as AgentEvent
               if (event.type === "done") sawDone = true
-              if (event.type === "error") setError({ message: event.message, retry: event.retryable ? retryFor(req) : undefined })
+              if (event.type === "error") {
+                if (req.action === "backend") void refreshBackend()
+                setError({ message: event.message, retry: event.retryable ? retryFor(req) : undefined })
+              }
               else handle(event)
             } catch {
               // Ignore a malformed event rather than dropping the stream.
@@ -223,7 +255,7 @@ export function useAgent({
         setStreaming((s) => (s && s.text ? s : null))
       }
     },
-    [projectId, handle, flushCode]
+    [projectId, handle, flushCode, refreshBackend]
   )
 
   // Start working as soon as the workspace opens on a fresh project, or
@@ -236,9 +268,9 @@ export function useAgent({
   }, [initialPhase, send])
 
   const sendMessage = React.useCallback(
-    (text: string, screenId?: string) => {
-      upsertMessage({ id: `local-${Date.now()}`, sender: "user", kind: "standard", text, createdAt: new Date().toISOString() })
-      void send({ action: "message", text, screenId })
+    (text: string, screenId?: string, element?: ElementRef) => {
+      upsertMessage({ id: `local-${Date.now()}`, sender: "user", kind: "standard", text, createdAt: new Date().toISOString(), element })
+      void send({ action: "message", text, screenId, element })
     },
     [send]
   )
@@ -359,12 +391,13 @@ export function useAgent({
    * `screens`/`files` holds that path, same as a repair result.
    */
   const applyElementEdit = React.useCallback(
-    async (edit: { eid: string; text?: string; from?: string; style?: Record<string, string> }) => {
+    async (edit: { eid: string; text?: string; from?: string; fromAlt?: string; style?: Record<string, string> }, signal?: AbortSignal) => {
       try {
         const res = await fetch(`/api/projects/${projectId}/canvas-edit`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(edit),
+          signal,
         })
         const data = (await res.json().catch(() => null)) as { path?: string; code?: string; error?: string; extraFiles?: Record<string, string> } | null
         // A platform file (e.g. a kit fix) that this project's stored copy
@@ -380,7 +413,9 @@ export function useAgent({
         setScreens((prev) => (prev.some((s) => s.path === path) ? prev.map((s) => (s.path === path ? { ...s, code } : s)) : prev))
         setFiles((prev) => (prev[path] !== undefined ? { ...prev, [path]: code } : prev))
         return { ok: true as const, resynced }
-      } catch {
+      } catch (e) {
+        // Abandoned on purpose (a newer edit replaced it): not an error.
+        if (e instanceof DOMException && e.name === "AbortError") return { ok: false as const, aborted: true as const }
         return { ok: false as const, error: "Couldn't reach the server." }
       }
     },
@@ -412,6 +447,8 @@ export function useAgent({
     dismissError: () => setError(null),
     backend,
     setBackend,
+    cloudhike,
+    refreshBackend,
     /** Sets up (or repairs) the app's CloudHike backend; progress streams into the chat. */
     setupBackend: (services: string[]) => send({ action: "backend", services }),
     applyElementEdit,

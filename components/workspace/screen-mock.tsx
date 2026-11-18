@@ -5,7 +5,8 @@ import { AlertTriangle, Clock } from "lucide-react"
 import { cn } from "cn"
 
 import type { ScreenState } from "@/lib/agent/types"
-import { RuntimeFrame, useAppTheme } from "./app-runtime"
+import type { ElementEdit } from "@/lib/preview/protocol"
+import { RuntimeFrame, useAppTheme, type FrameHandlers } from "./app-runtime"
 import { DEVICE_HEIGHT, DEVICE_WIDTH } from "./dummy-data"
 
 export type DevicePlatform = "ios" | "android"
@@ -110,6 +111,7 @@ export function ScreenView({
   error,
   appName,
   platform = "ios",
+  editing,
 }: {
   id: string
   name: string
@@ -118,6 +120,13 @@ export function ScreenView({
   error?: string
   appName: string
   platform?: DevicePlatform
+  /** Edit Mode (inline editor): taps select elements instead of using the app. */
+  editing?: {
+    edit: ElementEdit | null
+    deselectKey: unknown
+    selectParentKey: unknown
+    handlers: FrameHandlers
+  }
 }) {
   const ref = React.useRef<HTMLDivElement>(null)
   const scale = useDeviceScale(ref)
@@ -140,7 +149,12 @@ export function ScreenView({
             mode="static"
             platform={platform}
             appName={appName}
-            className="pointer-events-none absolute inset-0 size-full border-0 bg-transparent"
+            handlers={editing?.handlers}
+            inspect={!!editing}
+            edit={editing?.edit}
+            deselectKey={editing?.deselectKey}
+            selectParentKey={editing?.selectParentKey}
+            className={cn("absolute inset-0 size-full border-0 bg-transparent", !editing && "pointer-events-none")}
             style={{ width: DEVICE_WIDTH, height: DEVICE_HEIGHT }}
           />
         ) : (

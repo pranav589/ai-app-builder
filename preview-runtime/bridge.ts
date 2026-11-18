@@ -84,6 +84,8 @@ export const moduleStore = createStore<{ modules: Record<string, string>; planne
 type Handlers = {
   reset?: (route: string) => void
   inspect?: (enabled: boolean) => void
+  deselect?: () => void
+  selectParent?: () => void
   applyEdit?: (edit: Extract<HostMessage, { kind: "apply-edit" }>["edit"]) => void
 }
 export const handlers: Handlers = {}
@@ -118,6 +120,12 @@ window.addEventListener("message", (e) => {
       break
     case "apply-edit":
       handlers.applyEdit?.(m.edit)
+      break
+    case "deselect":
+      handlers.deselect?.()
+      break
+    case "select-parent":
+      handlers.selectParent?.()
       break
   }
 })

@@ -169,4 +169,66 @@ describe("applyElementEdit", () => {
 `
     expect(applyElementEdit(code, { line: 2, tag: "Text" }, { style: { fontWeight: "700" } })).toContain(`{{ color: "red", fontWeight: "700", }}`)
   })
+
+  it("writes spacing, opacity and percentage sizes the way React Native wants them", () => {
+    const code = `export default function Home() {
+  return <View style={{ flex: 1 }} />
+}
+`
+    const out = applyElementEdit(code, { line: 2, tag: "View" }, { style: { paddingTop: "12px", opacity: "0.5", width: "100%", height: "48px", gap: "8px" } })
+    expect(out).toContain("paddingTop: 12")
+    expect(out).toContain("opacity: 0.5")
+    expect(out).toContain(`width: "100%"`)
+    expect(out).toContain("height: 48")
+    expect(out).toContain("gap: 8")
+  })
+
+  it("refuses a style key that isn't on the editable list, since the key is written as code", () => {
+    const code = `export default function Home() {
+  return <View />
+}
+`
+    expect(applyElementEdit(code, { line: 2, tag: "View" }, { style: { "color: 1, onPress": "x" } })).toBeNull()
+    expect(applyElementEdit(code, { line: 2, tag: "View" }, { style: { position: "absolute" } })).toBeNull()
+  })
+
+  describe("theme colors", () => {
+    const edit = { style: { backgroundColor: "theme:primarySoft:#e8eefd" } }
+
+    it("writes a token through the useTheme() variable the component already has", () => {
+      const code = `import { useTheme } from "@/theme"\nexport default function Home() {\n  const t = useTheme()\n  return <View style={{ flex: 1 }} />\n}\n`
+      const out = applyElementEdit(code, { line: 4, tag: "View" }, edit)
+      expect(out).toContain("backgroundColor: t.colors.primarySoft")
+      expect(out).not.toContain("#e8eefd")
+    })
+
+    it("adds the hook on the component's opening line, so no line numbers move", () => {
+      const code = `import { useTheme } from "@/theme"\nexport default function Home() {\n  return <View />\n}\n`
+      const out = applyElementEdit(code, { line: 3, tag: "View" }, edit)!
+      expect(out).toContain("function Home() { const theme = useTheme();")
+      expect(out).toContain("backgroundColor: theme.colors.primarySoft")
+      expect(out.split("\n")).toHaveLength(code.split("\n").length)
+    })
+
+    it("falls back to the hex when the theme can't be reached from the file", () => {
+      const code = `export default function Home() {\n  return <View />\n}\n`
+      const out = applyElementEdit(code, { line: 2, tag: "View" }, edit)
+      expect(out).toContain(`backgroundColor: "#e8eefd"`)
+    })
+
+    it("only accepts known tokens on color properties", () => {
+      const code = `import { useTheme } from "@/theme"\nexport default function Home() {\n  const t = useTheme()\n  return <View />\n}\n`
+      expect(applyElementEdit(code, { line: 4, tag: "View" }, { style: { backgroundColor: "theme:nope:#111111" } })).toContain(`"theme:nope:#111111"`)
+      expect(applyElementEdit(code, { line: 4, tag: "View" }, { style: { gap: "theme:primary:#111111" } })).not.toContain("colors.primary")
+    })
+  })
+
+  it("writes a shadow offset as an object and a corner radius as a number", () => {
+    const code = `export default function Home() {\n  return <View />\n}\n`
+    const out = applyElementEdit(code, { line: 2, tag: "View" }, { style: { shadowOffset: "0,4", shadowOpacity: "0.12", borderTopLeftRadius: "8px", flexGrow: "1" } })
+    expect(out).toContain("shadowOffset: { width: 0, height: 4 }")
+    expect(out).toContain("shadowOpacity: 0.12")
+    expect(out).toContain("borderTopLeftRadius: 8")
+    expect(out).toContain("flexGrow: 1")
+  })
 })

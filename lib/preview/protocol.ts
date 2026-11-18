@@ -41,6 +41,19 @@ export type SelectedElement = {
   kit: boolean
   rect: { x: number; y: number; width: number; height: number }
   styles: Record<string, string>
+  /** The tag of the nearest editable element around this one, or null at the top: what "select parent" would pick. */
+  parent: string | null
+}
+
+/** A selected element as the chat and the AI agent see it: enough to find it again in the source. */
+export type ElementRef = {
+  /** "file:line:Type", the JSX the element came from. */
+  eid: string
+  tag: string
+  /** What it shows, when it has one piece of text. */
+  text: string | null
+  screenId?: string
+  screenName?: string
 }
 
 export type ElementEdit = {
@@ -48,6 +61,8 @@ export type ElementEdit = {
   text?: string
   /** The text being replaced, as it currently is in the source: picks the right element/prop when a line has several. */
   from?: string
+  /** Set when an earlier save of this element was abandoned mid-flight: it may or may not have landed, so the text may already be this. */
+  fromAlt?: string
   style?: Record<string, string>
 }
 
@@ -58,6 +73,10 @@ export type FrameMessage =
   | { kind: "route"; pathname: string }
   | { kind: "error"; message: string; file?: string }
   | { kind: "select"; element: SelectedElement }
+  /** Edit Mode: a tap on nothing editable. */
+  | { kind: "deselect" }
+  /** The selected element moved or resized (after an edit, or a scroll inside the app). */
+  | { kind: "element-rect"; eid: string; rect: SelectedElement["rect"] }
 
 /** Host -> frame. */
 export type HostMessage =
@@ -69,3 +88,7 @@ export type HostMessage =
   | { kind: "reset"; route: string }
   | { kind: "inspect"; enabled: boolean }
   | { kind: "apply-edit"; edit: ElementEdit }
+  /** Clears the current selection but keeps Edit Mode on. */
+  | { kind: "deselect" }
+  /** Selects the editable element around the current selection. */
+  | { kind: "select-parent" }

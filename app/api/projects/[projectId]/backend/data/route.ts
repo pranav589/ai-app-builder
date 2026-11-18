@@ -31,12 +31,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
 
   try {
     const env = readEnv(row)
-    const data = dataApi(projectId, env)
+    // The project's current data model: writes for a collection it declares
+    // land in that collection's real columns, not a generic blob.
+    const model = readAppDoc(owned.project.previewScreens).data
+    const data = dataApi(projectId, env, model)
     const auth = authApi(env)
     switch (op) {
       case "init": {
-        // Tables for the current data model (taken from the saved project, not from the browser).
-        const model = readAppDoc(owned.project.previewScreens).data
         if (model && model.hash !== row.schemaHash) await syncSchema(env, model)
         return json({ result: null })
       }
