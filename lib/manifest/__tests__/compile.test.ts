@@ -66,7 +66,7 @@ describe("compileManifest", () => {
     expect(out["data/types.ts"]).toContain("export type Habit = {")
   })
 
-  it("every compiler-written file starts with the generated-file header (data/types.ts has its own, shared with the legacy engine's generator)", () => {
+  it("every compiler-written file starts with the generated-file header (data/types.ts has its own, shared with lib/app-project/templates.ts's generator)", () => {
     for (const [path, code] of Object.entries(out)) {
       if (path === "data/types.ts") expect(code.startsWith("// Generated from")).toBe(true)
       else expect(code.startsWith("// @generated")).toBe(true)

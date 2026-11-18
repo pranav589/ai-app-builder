@@ -27,7 +27,13 @@ const options = {
   sourcemap: false,
   legalComments: "none",
   tsconfig: join(root, "tsconfig.json"),
-  define: { "process.env.NODE_ENV": '"production"', __DEV__: "false" },
+  // `global` is Node's, not a browser's; some bundled packages (react-native-web's
+  // Animated among them) still reference it bare. esbuild doesn't shim this for
+  // platform: "browser" on its own, so without this define any screen that uses
+  // Animated throws "global is not defined" the moment it actually runs -- in the
+  // real preview iframe and in the render gate's jsdom alike, since both load this
+  // same built file.
+  define: { "process.env.NODE_ENV": '"production"', __DEV__: "false", global: "globalThis" },
   loader: { ".json": "json" },
   logLevel: "info",
 }

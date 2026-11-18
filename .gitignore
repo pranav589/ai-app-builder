@@ -50,3 +50,6 @@ next-env.d.ts
 
 # vendored type packages (npm run typebundle:install); package.json + lock are committed
 /vendor/type-bundle/node_modules
+
+# local device-preview exports and the shared Expo SDK deps they link to (npm run device:deps / device)
+/.device

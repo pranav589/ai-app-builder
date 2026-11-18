@@ -3,9 +3,8 @@ import { and, eq } from "drizzle-orm"
 
 import { db, messages, projects } from "@/db"
 import { readAppDoc } from "@/lib/app-runtime/app-doc"
-import { engineOf } from "@/lib/verify/engine"
 import { AgentConfigError } from "./config"
-import { latestPlan, NEW_SCREEN_NUDGE, routeMessage, runEdit, runGeneration, runPlanning, runVerifiedEdit, setPhase } from "./orchestrator"
+import { latestPlan, NEW_SCREEN_NUDGE, routeMessage, runGeneration, runPlanning, runVerifiedEdit, setPhase } from "./orchestrator"
 import { claimRun, createEventSink, finishRun, holdRun, type RunInput } from "./run-store"
 import { parseServices } from "@/lib/cloudhike/config"
 import { runBackendSetup, syncBackendSchema } from "@/lib/cloudhike/provision"
@@ -96,10 +95,9 @@ async function generate(run: Parameters<typeof runGeneration>[0], projectId: str
   await syncBackendSchema(projectId)
 }
 
-/** Sends an edit through the verified engine's change gateway, or the legacy editor, by the project's own engine. */
+/** Sends an edit through the change gateway. */
 async function dispatchEdit(run: LiveRun, projectId: string, edit: EditRequest, opts: { escalate?: boolean } = {}) {
-  const [project] = await db.select({ engine: projects.engine }).from(projects).where(eq(projects.id, projectId)).limit(1)
-  return engineOf(project ?? {}) === "verified" ? runVerifiedEdit(run, projectId, edit, opts) : runEdit(run, projectId, edit, opts)
+  return runVerifiedEdit(run, projectId, edit, opts)
 }
 
 /** Where a failed run leaves the project. */

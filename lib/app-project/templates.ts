@@ -12,7 +12,8 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
 
 const json = (v: unknown) => JSON.stringify(v, null, 2) + "\n"
 
-function packageJson(name: string) {
+/** Exported too (lib/device/export.ts): the shared Expo SDK deps a device-preview export links to are installed from the same dependency list, so they never drift from what a real export actually needs. */
+export function packageJson(name: string) {
   return json({
     name: slug(name),
     version: "1.0.0",
@@ -76,7 +77,18 @@ function appJson(plan: AppPlan, themes: ThemePackage) {
 
 const TSCONFIG = json({ extends: "expo/tsconfig.base", compilerOptions: { strict: true, paths: { "@/*": ["./*"] } }, include: ["**/*.ts", "**/*.tsx"] })
 
-const THEME_DEVICE = String.raw`// Platform module: app themes. Screens read colors only through useTheme()
+/**
+ * Expo Go runs every scanned project under its own single app install, not a
+ * separate native container per project (Phase 10's device lane reuses one
+ * exp:// URL for whichever project is currently exported) -- so a storage key
+ * that isn't unique per app leaks one project's saved theme/data into the
+ * next one tested on the same phone, which can look exactly like "the old app
+ * is still open" even though the new JS bundle is the one actually running.
+ * Exported so a one-off fix to this platform file can be pushed to an
+ * already-built project without a full rebuild.
+ */
+export function themeDevice(appSlug = "app"): string {
+  return String.raw`// Platform module: app themes. Screens read colors only through useTheme()
 // or createStyles(), so switching theme restyles the whole app instantly.
 import * as React from "react"
 import AsyncStorage from "@react-native-async-storage/async-storage"
@@ -108,7 +120,7 @@ function toTheme(t: RawTheme): Theme {
 }
 
 const themes = (pkg.themes as RawTheme[]).map(toTheme)
-const KEY = "app:theme"
+const KEY = ${JSON.stringify(`app:${appSlug}:theme`)}
 const Ctx = React.createContext<{ theme: Theme; setTheme: (id: string) => void }>({ theme: themes[0], setTheme: () => {} })
 
 export function ThemeProvider({ children }: { children?: React.ReactNode }) {
@@ -138,6 +150,7 @@ export function useThemeSwitcher() {
   return { themes, activeId: theme.id, setTheme }
 }
 `
+}
 
 /**
  * The device backend. useCollection/useRecord get a typed overload per
@@ -148,7 +161,15 @@ export function useThemeSwitcher() {
  * used only by the live preview bundle and isn't part of the type-checked
  * project, so it's untouched.
  */
-function backendDevice(): string {
+/**
+ * `appSlug` namespaces the AsyncStorage key per app, for the same reason
+ * `themeDevice` does above: Expo Go hosts every scanned project in one
+ * install, so an unscoped key would leak one project's saved data into the
+ * next project tested on the same phone.
+ * Exported so a one-off fix to this platform file can be pushed to an
+ * already-built project without a full rebuild.
+ */
+export function backendDevice(appSlug = "app"): string {
   return String.raw`// Platform module: the app's data, auth and file storage.
 // Runs on the device's local storage until the app is connected to
 // CloudHike; then the same functions call CloudHike Database, Storage and
@@ -164,10 +185,9 @@ type QueryOpts = { where?: Where; sort?: string; limit?: number }
 type User = { id: string; name: string; email: string }
 type State = { seedHash: string; collections: Record<string, Rec[]>; settings: Record<string, unknown>; users: (User & { password: string })[]; session: string | null }
 
-const KEY = "app:data"
+const KEY = ${JSON.stringify(`app:${appSlug}:data`)}
 let state: State | null = null
 const listeners = new Set<() => void>()
-let version = 0
 
 function fresh(): State {
   const collections: Record<string, Rec[]> = {}
@@ -179,16 +199,32 @@ function fresh(): State {
 
 async function load(): Promise<State> {
   if (state) return state
-  const raw = await AsyncStorage.getItem(KEY)
-  const parsed = raw ? (JSON.parse(raw) as State) : null
-  state = parsed && parsed.seedHash === seed.hash ? parsed : fresh()
+  // A read that fails OR one that never settles at all must still resolve to
+  // something, or useCollection/useSetting stay "loading" forever with
+  // nothing else awaiting this promise to report it.
+  const timedOut = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 3000))
+  try {
+    const raw = await Promise.race([AsyncStorage.getItem(KEY), timedOut])
+    const parsed = raw && raw !== "timeout" ? (JSON.parse(raw) as State) : null
+    state = parsed && parsed.seedHash === seed.hash ? parsed : fresh()
+  } catch (e) {
+    console.error("Couldn't read stored data; starting fresh.", e)
+    state = fresh()
+  }
   return state
 }
 
-function changed() {
-  version++
-  if (state) void AsyncStorage.setItem(KEY, JSON.stringify(state))
+function notify() {
   for (const l of listeners) l()
+}
+
+// Replaces "state" wholesale (never mutates it in place): useSyncExternalStore's
+// snapshot is "state" itself, so its reference must actually change for React,
+// and the React Compiler, to see a render as depending on anything new.
+function setState(next: State) {
+  state = next
+  void AsyncStorage.setItem(KEY, JSON.stringify(next))
+  notify()
 }
 
 const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
@@ -219,8 +255,7 @@ export const db = {
   async insert(collection: string, values: Record<string, unknown>) {
     const s = await load()
     const rec: Rec = { ...values, id: newId(), createdAt: new Date().toISOString() }
-    s.collections[collection] = [rec, ...(s.collections[collection] ?? [])]
-    changed()
+    setState({ ...s, collections: { ...s.collections, [collection]: [rec, ...(s.collections[collection] ?? [])] } })
     return rec
   },
   async update(collection: string, id: string, patch: Record<string, unknown>) {
@@ -228,20 +263,24 @@ export const db = {
     const rows = s.collections[collection] ?? []
     const i = rows.findIndex((r) => r.id === id)
     if (i === -1) throw new Error("That item no longer exists.")
-    rows[i] = { ...rows[i], ...patch, id, updatedAt: new Date().toISOString() }
-    changed()
-    return rows[i]
+    const updated: Rec = { ...rows[i], ...patch, id, updatedAt: new Date().toISOString() }
+    const nextRows = rows.slice()
+    nextRows[i] = updated
+    setState({ ...s, collections: { ...s.collections, [collection]: nextRows } })
+    return updated
   },
   async remove(collection: string, id: string) {
     const s = await load()
-    s.collections[collection] = (s.collections[collection] ?? []).filter((r) => r.id !== id)
-    changed()
+    setState({ ...s, collections: { ...s.collections, [collection]: (s.collections[collection] ?? []).filter((r) => r.id !== id) } })
   },
 }
 
 export const kv = {
   async get<T = unknown>(key: string, fallback?: T) { return ((await load()).settings[key] ?? fallback) as T },
-  async set(key: string, value: unknown) { (await load()).settings[key] = value; changed() },
+  async set(key: string, value: unknown) {
+    const s = await load()
+    setState({ ...s, settings: { ...s.settings, [key]: value } })
+  },
 }
 
 export const auth = {
@@ -257,9 +296,7 @@ export const auth = {
     if (input.password.length < 6) throw new Error("Use at least 6 characters for the password.")
     if (s.users.some((u) => u.email === email)) throw new Error("An account with this email already exists.")
     const user = { id: newId(), name: input.name?.trim() || email.split("@")[0], email, password: input.password }
-    s.users.push(user)
-    s.session = user.id
-    changed()
+    setState({ ...s, users: [...s.users, user], session: user.id })
     return { id: user.id, name: user.name, email }
   },
   async signIn(input: { email: string; password: string }) {
@@ -268,11 +305,13 @@ export const auth = {
     const u = s.users.find((x) => x.email === email)
     if (!u) return auth.signUp({ email, password: input.password })
     if (u.password !== input.password) throw new Error("That password isn't right.")
-    s.session = u.id
-    changed()
+    setState({ ...s, session: u.id })
     return { id: u.id, name: u.name, email: u.email }
   },
-  async signOut() { (await load()).session = null; changed() },
+  async signOut() {
+    const s = await load()
+    setState({ ...s, session: null })
+  },
   async resetPassword(_input: { email: string }) {},
 }
 
@@ -280,14 +319,25 @@ export const storage = {
   async upload(input: { uri: string; name?: string }) { return { url: input.uri } },
 }
 
-function useStoreVersion() {
-  const [, force] = React.useReducer((n: number) => n + 1, 0)
-  React.useEffect(() => {
-    listeners.add(force)
-    if (!state) void load().then(force)
-    return () => { listeners.delete(force) }
-  }, [])
-  return version
+// useSyncExternalStore, not a manual useReducer+useEffect "force a render"
+// pattern: with the React Compiler on (every exported app's app.json sets
+// experiments.reactCompiler), a component may only be guaranteed to see
+// fresh data when it reads it from a hook's own return value -- reading
+// "state" again afterwards, by closure, is exactly the kind of impure read
+// the compiler's memoization can serve stale. Every hook below uses only
+// the snapshot useStore() returns, never "state" directly.
+function getSnapshot() {
+  return state
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  if (!state) void load().then(notify)
+  return () => { listeners.delete(listener) }
+}
+
+function useStore(): State | null {
+  return React.useSyncExternalStore(subscribe, getSnapshot)
 }
 
 export function useCollection<K extends keyof Collections>(
@@ -299,11 +349,11 @@ export function useCollection(
   opts?: QueryOpts
 ): { data: Rec[]; loading: boolean; insert: (values: Record<string, unknown>) => Promise<Rec>; update: (id: string, patch: Record<string, unknown>) => Promise<Rec>; remove: (id: string) => Promise<void> }
 export function useCollection(collection: string, opts: QueryOpts = {}) {
-  useStoreVersion()
-  const data = state ? query(state.collections[collection] ?? [], opts) : []
+  const snapshot = useStore()
+  const data = snapshot ? query(snapshot.collections[collection] ?? [], opts) : []
   return {
     data,
-    loading: !state,
+    loading: !snapshot,
     insert: (values: Record<string, unknown>) => db.insert(collection, values),
     update: (id: string, patch: Record<string, unknown>) => db.update(collection, id, patch),
     remove: (id: string) => db.remove(collection, id),
@@ -319,26 +369,26 @@ export function useRecord(
   id: string | undefined | null
 ): { data: Rec | null; loading: boolean; update: (patch: Record<string, unknown>) => Promise<Rec>; remove: () => Promise<void> }
 export function useRecord(collection: string, id: string | undefined | null) {
-  useStoreVersion()
-  const rows = state?.collections[collection] ?? []
+  const snapshot = useStore()
+  const rows = snapshot?.collections[collection] ?? []
   const data = (id ? rows.find((r) => r.id === String(id)) : rows[0]) ?? null
   return {
     data,
-    loading: !state,
+    loading: !snapshot,
     update: (patch: Record<string, unknown>) => (data ? db.update(collection, data.id, patch) : Promise.reject(new Error("Not found"))),
     remove: () => (data ? db.remove(collection, data.id) : Promise.resolve()),
   }
 }
 
 export function useSetting<T>(key: string, fallback: T): [T, (value: T) => Promise<void>] {
-  useStoreVersion()
-  const value = (state && key in state.settings ? state.settings[key] : fallback) as T
+  const snapshot = useStore()
+  const value = (snapshot && key in snapshot.settings ? snapshot.settings[key] : fallback) as T
   return [value, (v: T) => kv.set(key, v)]
 }
 
 export function useUser() {
-  useStoreVersion()
-  const u = state?.users.find((x) => x.id === state?.session) ?? null
+  const snapshot = useStore()
+  const u = snapshot?.users.find((x) => x.id === snapshot?.session) ?? null
   const fallback = seed.user as User
   return {
     user: u ? { id: u.id, name: u.name, email: u.email } : fallback,
@@ -354,14 +404,15 @@ export function useUser() {
 /** The platform files for an app. Regenerated whenever the plan, themes or data change. */
 export function platformFiles(plan: AppPlan, themes: ThemePackage, data: DataModel): ProjectFiles {
   const first = plan.screens[0]
+  const appSlug = slug(plan.appName)
   return {
     "package.json": packageJson(plan.appName),
     "app.json": appJson(plan, themes),
     "tsconfig.json": TSCONFIG,
     "app/index.tsx": `import { Redirect } from "expo-router"\n\n// The app opens on its first screen.\nexport default function Index() {\n  return <Redirect href="${first ? screenHref(first) : "/"}" />\n}\n`,
     "theme/themes.json": json({ activeId: themes.activeId, themes: themes.themes }),
-    "theme/index.tsx": THEME_DEVICE,
-    "lib/backend/index.ts": backendDevice(),
+    "theme/index.tsx": themeDevice(appSlug),
+    "lib/backend/index.ts": backendDevice(appSlug),
     "data/seed.json": json({
       hash: data.hash,
       collections: Object.fromEntries(data.collections.map((c) => [c.name, c.seed])),

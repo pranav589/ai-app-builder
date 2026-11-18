@@ -12,7 +12,6 @@ import {
 } from "@/lib/project-rules";
 import { generateProjectName } from "@/lib/project-name";
 import { deleteObjects, putObject } from "@/lib/storage";
-import { DEFAULT_ENGINE } from "@/lib/verify/engine";
 
 const UNAVAILABLE = "We're having trouble reaching our servers. Please try again in a moment.";
 
@@ -126,7 +125,7 @@ export async function POST(req: Request) {
         prompt,
         assets: uploaded,
         status: "draft",
-        engine: DEFAULT_ENGINE,
+        engine: "verified",
       });
       await tx.insert(messages).values({
         id: `msg-${Date.now()}-${hex(3)}`,

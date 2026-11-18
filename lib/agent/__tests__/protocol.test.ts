@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { TagStreamFilter, parseEditTag, parsePlannerReply } from "@/lib/agent/protocol"
+import { TagStreamFilter, componentsHash, parseEditTag, parsePlannerReply, screenBuildHash, shellHash, themeHash } from "@/lib/agent/protocol"
+import type { AppPlan, PlanScreen } from "@/lib/agent/types"
 
 describe("parsePlannerReply", () => {
   it("extracts a valid plan and strips the tag from the visible text", () => {
@@ -71,6 +72,50 @@ describe("parseEditTag", () => {
 
   it("defaults to no targets", () => {
     expect(parseEditTag("<edit>Fix the bug.</edit>")).toEqual({ targets: [], instruction: "Fix the bug." })
+  })
+})
+
+describe("plan hashes (screenBuildHash, shellHash, componentsHash, themeHash)", () => {
+  // Postgres jsonb reorders object keys on storage (shorter keys first, then
+  // alphabetical), unlike the in-memory object the planner just produced.
+  // Rebuilding the same plan object with its keys inserted in that jsonb
+  // order simulates reading a plan back from the database, which is exactly
+  // what lib/agent/orchestrator.ts latestPlan() does on every build.
+  const design = {
+    style: "Clean",
+    primaryColor: "#1a4be0",
+    accentColor: "#f59e0b",
+    backgroundColor: "#f6f7f9",
+    surfaceColor: "#ffffff",
+    textColor: "#111111",
+    cornerRadius: "soft" as const,
+    typography: "System sans-serif",
+  }
+  const screen: PlanScreen = { id: "home", name: "Home", purpose: "p", keyElements: ["a", "b"], navigatesTo: ["about"], presentation: "stack" }
+  const makePlan = (keyOrder: "insertion" | "jsonb-like"): AppPlan => {
+    const d = keyOrder === "insertion" ? design : Object.fromEntries(Object.entries(design).sort(([a], [b]) => a.length - b.length || a.localeCompare(b)))
+    return { appName: "App", summary: "s", targetUsers: "t", coreFeatures: ["f"], design: d as typeof design, navigation: "n", screens: [screen] }
+  }
+
+  it("screenBuildHash doesn't depend on the plan object's key order", () => {
+    expect(screenBuildHash(makePlan("insertion"), screen)).toBe(screenBuildHash(makePlan("jsonb-like"), screen))
+  })
+
+  it("shellHash doesn't depend on the plan object's key order", () => {
+    expect(shellHash(makePlan("insertion"))).toBe(shellHash(makePlan("jsonb-like")))
+  })
+
+  it("componentsHash doesn't depend on the plan object's key order", () => {
+    expect(componentsHash(makePlan("insertion"))).toBe(componentsHash(makePlan("jsonb-like")))
+  })
+
+  it("themeHash doesn't depend on the plan object's key order", () => {
+    expect(themeHash(makePlan("insertion"))).toBe(themeHash(makePlan("jsonb-like")))
+  })
+
+  it("still changes when the content actually changes", () => {
+    const changed: PlanScreen = { ...screen, keyElements: ["a", "b", "c"] }
+    expect(screenBuildHash(makePlan("insertion"), screen)).not.toBe(screenBuildHash(makePlan("insertion"), changed))
   })
 })
 

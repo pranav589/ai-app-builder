@@ -244,7 +244,29 @@ export class TagStreamFilter {
   }
 }
 
-const hash = (v: unknown) => createHash("sha1").update(JSON.stringify(v)).digest("hex").slice(0, 16)
+/**
+ * `JSON.stringify` serializes object keys in insertion order, but a plan
+ * read back from Postgres jsonb (messages.plan, projects.preview_screens)
+ * comes back with keys reordered by jsonb's own storage rule (shorter keys
+ * first, alphabetical among same-length keys) -- not the order anything
+ * in this file inserted them in. Hashing a plan straight out of the
+ * database therefore produced a different hash than the same plan content
+ * computed in-memory, which made every build hash mismatch (and so rebuild
+ * everything) the first time this ran after a project's stored plan had
+ * round-tripped through the database. Sorting keys recursively before
+ * stringifying makes the hash depend only on content, never on wherever
+ * the object last happened to pass through.
+ */
+function stableStringify(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`
+  if (v && typeof v === "object") {
+    const keys = Object.keys(v as Record<string, unknown>).sort()
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify((v as Record<string, unknown>)[k])}`).join(",")}}`
+  }
+  return JSON.stringify(v)
+}
+
+const hash = (v: unknown) => createHash("sha1").update(stableStringify(v)).digest("hex").slice(0, 16)
 
 /** Bump when the screen contract changes, so screens made under the old one are rebuilt. */
 const SCREEN_CONTRACT = "expo-sdk58-v1"

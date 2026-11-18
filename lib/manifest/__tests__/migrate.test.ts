@@ -22,7 +22,12 @@ const plan: AppPlan = {
 const doc: AppDoc = {
   v: 2,
   backend: { provider: "local" },
-  screens: [],
+  screens: [
+    { id: "home", name: "Home", state: "ready", code: "export default function Home() { return null }" },
+    { id: "profile", name: "Profile", state: "ready", code: "export default function Profile() { return null }" },
+    { id: "habit-detail", name: "Habit Detail", state: "ready", code: "export default function HabitDetail() { return null }" },
+    { id: "add-habit", name: "Add Habit", state: "ready", code: "export default function AddHabit() { return null }" },
+  ],
   data: {
     hash: "h",
     settings: {},
@@ -77,6 +82,13 @@ describe("fromLegacy", () => {
   it("gives every tab screen a valid icon", () => {
     const m = fromLegacy(plan, doc)
     expect(m.screens.home.icon).toBeTruthy()
+  })
+
+  it("excludes a plan screen that was never actually built (real bug: a planned-but-unbuilt screen became a manifest entry with no file behind it)", () => {
+    const planWithUnbuilt: AppPlan = { ...plan, screens: [...plan.screens, { id: "settings", name: "Settings", purpose: "", keyElements: [], navigatesTo: [], presentation: "stack" }] }
+    const m = fromLegacy(planWithUnbuilt, doc)
+    expect(m.screens.settings).toBeUndefined()
+    expect(Object.keys(m.screens).sort()).toEqual(["add-habit", "habit-detail", "home", "profile"])
   })
 })
 

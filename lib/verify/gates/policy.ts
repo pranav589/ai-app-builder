@@ -19,13 +19,18 @@ const lineOf = (code: string, index: number) => code.slice(0, index).split("\n")
 
 /**
  * Only checks the files this change touched (`changed`); a project built
- * before this gate existed, or by the legacy engine, can have unrelated
- * files that would never pass it, and an edit elsewhere shouldn't be blocked
- * by those. Import resolution still sees every file, so a changed file can
- * still reference an unchanged one. `changed` omitted means check everything
- * (a fresh build).
+ * before this gate existed can have unrelated files that would never pass
+ * it, and an edit elsewhere shouldn't be blocked by those. Import resolution
+ * still sees every file, so a changed file can still reference an unchanged
+ * one. `changed` omitted means check everything (a fresh build).
+ *
+ * `base` is the workspace before this attempt, if any. The line-count check
+ * only blocks a file for getting *longer*: a file already over the limit
+ * before the edit (common on real projects built before stricter
+ * decomposition guidance existed) is allowed to stay as it was, just not to
+ * grow. A brand-new file (no `base` entry) is held to the limit outright.
  */
-export function policyGate(ws: Workspace, changed?: string[]): GateResult {
+export function policyGate(ws: Workspace, changed?: string[], _key?: string, base?: Workspace): GateResult {
   const t0 = performance.now()
   const diagnostics: Diagnostic[] = []
   const scope = changed ? new Set(changed) : null
@@ -35,7 +40,10 @@ export function policyGate(ws: Workspace, changed?: string[]): GateResult {
     if (scope && !scope.has(file)) continue
 
     const lines = code.split("\n").length
-    if (lines > MAX_LINES)
+    const prevCode = base?.files[file]
+    const prevLines = prevCode !== undefined ? prevCode.split("\n").length : null
+    const grew = prevLines === null || lines > prevLines
+    if (lines > MAX_LINES && grew)
       diagnostics.push({ gate: "policy", code: "file_too_long", severity: "error", file, message: `${file} has ${lines} lines (limit ${MAX_LINES}). Move parts into components/<name>.tsx.` })
 
     for (const spec of importsOf(code)) {

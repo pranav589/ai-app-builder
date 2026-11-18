@@ -188,6 +188,7 @@ MODERN API CHOICES (use these, avoid the legacy ones)
 
 APP RULES
 - Colors ONLY from the theme (useTheme / createStyles). Never write hex/rgb colors except "#fff"/"#000" and rgba(0,0,0,a) / rgba(255,255,255,a) for shadows, scrims and tiny details. Never call StyleSheet.create with colors at module level: use createStyles so theme switching works live.
+- createStyles((t) => ({ ... })) must end with "as const" on the returned object: createStyles((t) => ({ title: { fontWeight: "600" } }) as const). Without it, TypeScript widens values like fontWeight, textAlign or flexDirection to plain string, and the strict type check rejects them against React Native's narrower style types (fontWeight only accepts "normal" | "bold" | "100".."900", not string).
 - Navigation: router.push("/screen-id"), router.push({ pathname: "/screen-id", params: { id } }), router.back(), router.replace(...) from "expo-router"; read params with useLocalSearchParams<{ id?: string }>(). Every screen id is a URL: "/" + id. Groups like (tabs) never appear in URLs.
 - Data: read and write only through "@/lib/backend" hooks, so data persists and every screen stays in sync.
 - Native features through Expo modules: expo-haptics (light impact on key taps, selection on toggles and pickers, success notification after saving), expo-image-picker, expo-location, expo-local-authentication, expo-notifications, expo-clipboard, Share from react-native, Alert.alert for confirmations (destructive ones with style "destructive").
@@ -283,6 +284,7 @@ ${CRAFT_RULES}
 
 SCREEN RULES
 - One file, one default-exported screen component. Small helper components inside the file are fine; use the app's shared components (provided below) for anything they cover, importing each one you use from its file.
+- Keep this file under 280 lines (a verifier blocks anything over 300, and this is a single file: there is no separate file to move parts into). Lean on the shared components for anything they already cover instead of re-implementing their styles inline, keep style objects compact, and skip comments. If the screen's key elements genuinely need more room, prioritize the ones listed above over extra polish rather than let the file grow past the limit.
 - Import every name you use. Never use a component, hook or helper that isn't imported or defined in this file.
 - Tab screens and pushed screens draw their own header (layouts hide the default header). The native tab bar sits at the bottom of tab screens: don't draw your own. Pushed screens need a back button (router.back()). Modal screens are page sheets: a grabber or a Cancel/Close button, a clear title, and the primary action.
 - Every button, row, tab and link must do something real: navigate, save, toggle, delete (with an Alert confirmation), or trigger a native feature. Create/edit forms save through the backend, give success haptics, then go back or close.

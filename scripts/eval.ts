@@ -1,33 +1,27 @@
 // Runs the fixed task set (eval/tasks.ts) against a fixture, entirely in
-// memory (no DB, no commits), and reports first-pass rate, repair rounds,
-// time to verified, token use, and rejections by gate.
+// memory (no DB, no commits), through the real change gateway (lib/verify/*):
+// write -> verify -> repair x<=3 -> committed | needs_user. Reports
+// first-pass rate, repair rounds, time to verified, token use, and
+// rejections by gate. Also judges each first attempt against the simpler,
+// pre-gateway checks (eval/legacy-check.ts, kept only as a lighter baseline
+// for this comparison) to show how much the full gate pipeline actually buys
+// over a quick regex/noResolve check.
 //
-// Usage: npm run eval -- --engine verified|legacy --fixture <name> [--only 1,3] [--concurrency 4] [--context all|focused]
-//
-// --engine verified runs the real change gateway (lib/verify/*): write ->
-// verify -> repair x<=3 -> committed | needs_user.
-//
-// --engine legacy is a proxy, not a real run of the legacy engine: adapting
-// the legacy editor (lib/agent/orchestrator.ts runEdit) to run in memory
-// without the database it's woven into isn't practical for this harness, so
-// legacy mode takes the SAME coder model's first reply and judges it with
-// today's real checks (eval/legacy-check.ts) instead of the full gates, with
-// no repair round (the legacy engine's repair is a different shape: whole-file
-// rewrites from a fixer, not this gateway's ChangeSet loop).
+// Usage: npm run eval -- --fixture <name> [--only 1,3] [--concurrency 4] [--context all|focused]
 //
 // --context (default "focused") controls how much of the app each model call
 // sees. "focused" sends only the first ready screen plus whatever local
-// components/lib files it imports -- the same default the real engine falls
-// back to for an edit that doesn't name a screen (lib/agent/orchestrator.ts
-// runVerifiedEdit/runEdit: `if (!targetPaths.size && ready[0]) ...`), so this
-// mirrors what a real underspecified request would actually cost. "all" sends
-// every app-owned file on every call instead (the POC's default): far more
-// faithful to "the model can see the whole app", but multiplies token cost by
-// the number of screens, which gets expensive fast on a fixture with several
-// large screens (e.g. ~4x on a 4-screen fixture). The real edit path
-// (runVerifiedEdit) always scopes to the targets a chat message actually
-// names, so neither eval mode's cost reflects real per-edit chat cost exactly
-// -- "focused" is just the closer approximation.
+// components/lib files it imports -- the same default the real edit path
+// falls back to for a request that doesn't name a screen
+// (lib/agent/orchestrator.ts runVerifiedEdit: `if (!targetPaths.size &&
+// ready[0]) ...`), so this mirrors what a real underspecified request would
+// actually cost. "all" sends every app-owned file on every call instead (the
+// POC's default): far more faithful to "the model can see the whole app",
+// but multiplies token cost by the number of screens, which gets expensive
+// fast on a fixture with several large screens (e.g. ~4x on a 4-screen
+// fixture). The real edit path always scopes to the targets a chat message
+// actually names, so neither eval mode's cost reflects real per-edit chat
+// cost exactly -- "focused" is just the closer approximation.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
@@ -48,7 +42,6 @@ import { workspaceFromDoc } from "@/lib/verify/workspace"
 import { legacyCheck } from "../eval/legacy-check"
 import { CEILING_TASKS, TASKS, type Task } from "../eval/tasks"
 
-type Engine = "verified" | "legacy"
 type Context = "all" | "focused"
 
 const MAX_REPAIRS = 3
@@ -58,14 +51,9 @@ const arg = (name: string) => {
   const i = args.indexOf(name)
   return i >= 0 ? args[i + 1] : undefined
 }
-const engine = (arg("--engine") ?? "verified") as Engine
-if (engine !== "verified" && engine !== "legacy") {
-  console.error(`--engine must be "verified" or "legacy"`)
-  process.exit(1)
-}
 const fixtureName = arg("--fixture")
 if (!fixtureName) {
-  console.error("Usage: npm run eval -- --engine verified|legacy --fixture <name> [--only 1,3] [--concurrency 4] [--context all|focused]")
+  console.error("Usage: npm run eval -- --fixture <name> [--only 1,3] [--concurrency 4] [--context all|focused]")
   process.exit(1)
 }
 const only = arg("--only") ? new Set(arg("--only")!.split(",").map((n) => Number(n) - 1)) : null
@@ -186,51 +174,12 @@ async function runVerified(task: Task, n: number): Promise<TaskResult> {
   return { task: n, category: task.category, text: task.text, state: "needs_user", attempts, totalMs: performance.now() - t0 }
 }
 
-/** Proxy for the legacy engine: the same model's first reply, judged by today's checks, no repair. */
-async function runLegacyProxy(task: Task, n: number): Promise<TaskResult> {
-  const t0 = performance.now()
-  const out = await coderAdapter([{ role: "user", content: buildPrompt(task) }])
-  const parsed = parseReply(out.text)
-  if (parsed.question && !parsed.changeSet.files.length) {
-    return {
-      task: n,
-      category: task.category,
-      text: task.text,
-      state: "needs_user",
-      question: parsed.question,
-      attempts: [{ n: 1, modelMs: out.modelMs, gatesMs: 0, ok: false, tokens: out.tokens }],
-      totalMs: performance.now() - t0,
-    }
-  }
-  const legacy = parsed.problems.length ? { accepted: false, problems: parsed.problems } : legacyCheck(base, parsed.changeSet)
-  return {
-    task: n,
-    category: task.category,
-    text: task.text,
-    state: legacy.accepted ? "committed" : "needs_user",
-    intent: parsed.changeSet.intent,
-    attempts: [
-      {
-        n: 1,
-        modelMs: out.modelMs,
-        gatesMs: 0,
-        ok: legacy.accepted,
-        diagnostics: legacy.accepted ? undefined : legacy.problems.map((p) => `[legacy] ${p}`).join("\n"),
-        tokens: out.tokens,
-        legacyAccepted: legacy.accepted,
-        legacyProblems: legacy.problems,
-      },
-    ],
-    totalMs: performance.now() - t0,
-  }
-}
-
-const runTask = engine === "verified" ? runVerified : runLegacyProxy
+const runTask = runVerified
 
 const queue = [...TASKS, ...CEILING_TASKS].map((t, i) => ({ ...t, n: i + 1 })).filter((t) => !only || only.has(t.n - 1))
 const rows: { task: number; category: Task["category"]; result?: TaskResult; error?: string }[] = []
 
-console.log(`Engine ${engine} · fixture ${fixtureName} · context ${context} · ${queue.length} task(s) · concurrency ${concurrency}${engine === "legacy" ? "\n(legacy mode is a proxy: see the comment at the top of scripts/eval.ts)" : ""}\n`)
+console.log(`fixture ${fixtureName} · context ${context} · ${queue.length} task(s) · concurrency ${concurrency}\n`)
 const started = performance.now()
 
 void main().catch((e) => {
@@ -275,11 +224,11 @@ const avg = (xs: (number | undefined)[]) => {
   return v.length ? Math.round(v.reduce((s, x) => s + x, 0) / v.length) : 0
 }
 
-// Today's checks vs the full gates, on the model's first output for each task (verified mode only).
+// Today's checks vs the full gates, on the model's first output for each task.
 const first = done.map((r) => r.result.attempts[0]).filter(Boolean)
-const escaped = engine === "verified" ? first.filter((a) => a.legacyAccepted && !a.ok) : []
-const caughtByBoth = engine === "verified" ? first.filter((a) => !a.legacyAccepted && !a.ok).length : 0
-const falseAlarms = engine === "verified" ? first.filter((a) => !a.legacyAccepted && a.ok).length : 0
+const escaped = first.filter((a) => a.legacyAccepted && !a.ok)
+const caughtByBoth = first.filter((a) => !a.legacyAccepted && !a.ok).length
+const falseAlarms = first.filter((a) => !a.legacyAccepted && a.ok).length
 
 const byGate: Record<string, number> = {}
 for (const a of attempts) {
@@ -300,12 +249,12 @@ Repair rounds (total)         ${repairs}
 Time to verified, p50 / p90   ${secs(quantile(0.5))} / ${secs(quantile(0.9))}
 Model vs gate time            ${secs(modelMs)} vs ${secs(gateMs)}
 Avg tokens in / out            ${avg(attempts.map((a) => a.tokens?.prompt))} / ${avg(attempts.map((a) => a.tokens?.completion))}
-${engine === "verified" ? `
+
 First outputs judged by today's checks vs the full gates
   Broken, but today's checks would accept    ${escaped.length}/${first.length}
   Broken, and today's checks also reject     ${caughtByBoth}
   Fine, but today's checks reject            ${falseAlarms}
-` : ""}
+
 Rejections by gate and code   ${Object.entries(byGate).sort((a, b) => b[1] - a[1]).map(([k, c]) => `${k} ×${c}`).join(", ") || "none"}
 ${Object.keys(warningTally).length ? `
 Most common warnings (never blocked; candidates to promote later)
@@ -342,8 +291,8 @@ if (escaped.length) {
 
 const runsDir = path.join(process.cwd(), "eval", "runs")
 mkdirSync(runsDir, { recursive: true })
-const logFile = path.join(runsDir, `${Date.now()}-${engine}-${fixtureName}.json`)
-writeFileSync(logFile, JSON.stringify({ engine, fixture: fixtureName, context, startedAt: new Date().toISOString(), rows: done.map((r) => r.result) }, null, 2))
+const logFile = path.join(runsDir, `${Date.now()}-${fixtureName}.json`)
+writeFileSync(logFile, JSON.stringify({ fixture: fixtureName, context, startedAt: new Date().toISOString(), rows: done.map((r) => r.result) }, null, 2))
 console.log(`\nFull log: ${logFile}`)
 process.exit(0)
 }

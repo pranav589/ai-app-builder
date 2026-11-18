@@ -5,9 +5,9 @@ import { isAppOwned } from "../ownership"
 
 /**
  * Syntax only, and only for files this change touched: a project built
- * before this gate existed (or by the legacy engine) can have unrelated
- * files that would never pass it, and an edit elsewhere shouldn't be blocked
- * by those. `changed` omitted means check everything (a fresh build).
+ * before this gate existed can have unrelated files that would never pass
+ * it, and an edit elsewhere shouldn't be blocked by those. `changed`
+ * omitted means check everything (a fresh build).
  */
 export function parseGate(ws: Workspace, changed?: string[]): GateResult {
   const t0 = performance.now()

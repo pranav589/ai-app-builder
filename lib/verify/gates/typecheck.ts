@@ -1,6 +1,6 @@
 // A real TypeScript check against the real types of React Native, Expo
-// Router and every allowed package (vendor/type-bundle), replacing the
-// noResolve name check the legacy engine uses. Ported from
+// Router and every allowed package (vendor/type-bundle), replacing a plain
+// noResolve name check with real type errors. Ported from
 // poc/verified-code/src/gates/typecheck.ts, with two differences: there is
 // no separate SDK (platform files like @/theme and @/lib/backend already
 // live in the workspace being checked, so they just need the same @/* alias

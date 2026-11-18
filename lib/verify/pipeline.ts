@@ -16,25 +16,31 @@ export type Verdict = {
   failedAt?: GateName
 }
 
-type Gate = (ws: Workspace, changed?: string[], key?: string) => GateResult | Promise<GateResult>
+type Gate = (ws: Workspace, changed?: string[], key?: string, base?: Workspace) => GateResult | Promise<GateResult>
 
 const GATES: Gate[] = [parseGate, policyGate, typecheckGate, renderGate]
 
 /**
  * `changed` scopes the gates to the files this attempt actually touched, so
- * a project with pre-existing files that predate these rules (migrated from
- * the legacy engine, or just older) isn't blocked by problems an edit
- * elsewhere didn't create. Omit it to check everything (a fresh build).
+ * a project with pre-existing files that predate these rules isn't blocked
+ * by problems an edit elsewhere didn't create. Omit it to check everything
+ * (a fresh build).
+ *
+ * `base` is the workspace before this attempt's changes, if any: the policy
+ * gate's line-count check uses it to only block a file for getting *longer*,
+ * not for having already been over the limit before the edit touched it
+ * (every real project built before stricter decomposition guidance existed
+ * has screens already over the limit).
  *
  * `key` identifies which project this is, so the tsc gate reuses its warm
  * LanguageService across repair rounds and repeat edits to the same project
  * instead of rebuilding it (and so an unrelated project's checks never
  * invalidate it). Omit it only for one-off checks (tests, a single eval task).
  */
-export async function verifyWorkspace(ws: Workspace, changed?: string[], key?: string): Promise<Verdict> {
+export async function verifyWorkspace(ws: Workspace, changed?: string[], key?: string, base?: Workspace): Promise<Verdict> {
   const results: GateResult[] = []
   for (const gate of GATES) {
-    const r = await gate(ws, changed, key)
+    const r = await gate(ws, changed, key, base)
     results.push(r)
     if (!r.ok) return { ok: false, ws, changed: changed ?? [], results, failedAt: r.gate }
   }
@@ -59,7 +65,7 @@ async function verifyChangeNow(base: Workspace, cs: ChangeSet, key?: string): Pr
     const gate = applied.diagnostics[0]?.gate ?? "policy"
     return { ok: false, changed: applied.changed, failedAt: gate, results: [{ gate, ok: false, ms: performance.now() - t0, diagnostics: applied.diagnostics }] }
   }
-  return verifyWorkspace(applied.ws, applied.changed, key)
+  return verifyWorkspace(applied.ws, applied.changed, key, base)
 }
 
 /** Blocking diagnostics as text, for the repair prompt and for logs. */

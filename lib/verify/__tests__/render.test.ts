@@ -54,6 +54,32 @@ export default function Home() {
     expect(r.ok).toBe(true)
   }, 15000)
 
+  // Regression: react-native-web's Animated referenced a bare `global`, which
+  // esbuild's platform:"browser" bundle (scripts/build-preview.mjs) doesn't
+  // define -- any screen using Animated.timing threw "global is not defined"
+  // the moment it actually ran, in this gate and in the real preview iframe
+  // alike (both load the same built public/preview/runtime.js). Fixed by
+  // adding `define: { global: "globalThis" }` to the esbuild options.
+  it("passes a screen that animates a value with Animated.timing", async () => {
+    const code = `import { useEffect, useRef } from "react"
+import { Animated, Text, View } from "react-native"
+export default function Home() {
+  const v = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    Animated.timing(v, { toValue: 1, duration: 100, useNativeDriver: false }).start()
+  }, [v])
+  return (
+    <View>
+      <Text>Progress</Text>
+      <Animated.View style={{ opacity: v, width: 10, height: 10, backgroundColor: "#000" }} />
+    </View>
+  )
+}
+`
+    const r = await renderGate(baseWorkspace(code), ["app/home.tsx"])
+    expect(r.ok).toBe(true)
+  }, 15000)
+
   it("rejects a screen that throws on mount", async () => {
     const code = `export default function Home() {
   throw new Error("boom on mount")

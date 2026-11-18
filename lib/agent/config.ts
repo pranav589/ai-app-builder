@@ -73,9 +73,9 @@ export function getFastModel() {
 }
 
 /**
- * The verified engine's coder model (writes ChangeSets). Set AI_MODEL_CODER
- * to a model good at small, precise diffs; without it the main model is used.
- * Only the verified engine reads this.
+ * The coder model (writes ChangeSets through the change gateway). Set
+ * AI_MODEL_CODER to a model good at small, precise diffs; without it the
+ * main model is used.
  */
 export function getCoderModel() {
   const name = process.env.AI_MODEL_CODER?.trim()

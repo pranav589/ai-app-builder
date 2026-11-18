@@ -6,7 +6,6 @@ import { and, asc, desc, eq, sql } from "drizzle-orm"
 import { db, messages, projects, type Project } from "@/db"
 import { readAppDoc, type AppDoc } from "@/lib/app-runtime/app-doc"
 import { commitSnapshot } from "@/lib/versions/store"
-import { engineOf } from "@/lib/verify/engine"
 import { coderAdapter } from "@/lib/verify/coder"
 import { runChange } from "@/lib/verify/run"
 import { verifiedEditPrompt } from "@/lib/verify/prompts"
@@ -33,8 +32,6 @@ import {
   SCREEN_INSTRUCTIONS,
   SHELL_INSTRUCTIONS,
   EDIT_INSTRUCTIONS,
-  editPrompt,
-  editRetryPrompt,
   fixPrompt,
   foundationPrompt,
   layoutsPrompt,
@@ -47,6 +44,7 @@ import {
   type EditRequest,
   dataHash,
   extractCode,
+  normalizePlan,
   parseFiles,
   parseFoundationJson,
   parsePlanJson,
@@ -75,7 +73,6 @@ let planFixer: Agent | null = null
 let foundation: Agent | null = null
 let shell: Agent | null = null
 let fixer: Agent | null = null
-let editor: Agent | null = null
 let router: Agent | null = null
 
 function agents() {
@@ -91,8 +88,7 @@ function agents() {
   planner ??= new Agent({ name: "Planner", instructions: PLANNER_INSTRUCTIONS, model, modelSettings: { maxTokens: 6000, reasoning, providerData } })
   designer ??= new Agent({ name: "Screen engineer", instructions: SCREEN_INSTRUCTIONS, model, modelSettings: { maxTokens: 24000, reasoning, providerData } })
   shell ??= new Agent({ name: "App shell", instructions: SHELL_INSTRUCTIONS, model, modelSettings: { maxTokens: 24000, reasoning, providerData } })
-  // Edits and fixes return only the changed lines (search/replace blocks).
-  editor ??= new Agent({ name: "Code editor", instructions: EDIT_INSTRUCTIONS, model: fast, modelSettings: { maxTokens: 12000, reasoning, providerData } })
+  // Fixes return only the changed lines (search/replace blocks).
   fixer ??= new Agent({ name: "Code fixer", instructions: EDIT_INSTRUCTIONS, model: fast, modelSettings: { maxTokens: 16000, reasoning, providerData } })
   planFixer ??= new Agent({
     name: "Plan fixer",
@@ -103,7 +99,7 @@ function agents() {
   })
   foundation ??= new Agent({ name: "Design system", instructions: FOUNDATION_INSTRUCTIONS, model: fast, modelSettings: { maxTokens: 12000, reasoning, providerData } })
   router ??= new Agent({ name: "Router", instructions: ROUTER_INSTRUCTIONS, model: fast, modelSettings: { maxTokens: 400, reasoning, providerData } })
-  return { planner, designer, planFixer, foundation, shell, fixer, editor, router }
+  return { planner, designer, planFixer, foundation, shell, fixer, router }
 }
 
 // ---------------------------------------------------------------- persistence
@@ -170,15 +166,28 @@ export async function setPhase(projectId: string, phase: AgentPhase, extra: Part
     .where(eq(projects.id, projectId))
 }
 
+/**
+ * The most recent valid plan. Validated through `normalizePlan`, not just
+ * cast: a handful of very old projects have a `plan` column from before the
+ * current AppPlan shape existed (different field names entirely, no
+ * `appName`), and treating that raw JSON as today's AppPlan crashes
+ * everything downstream that reads `plan.appName`/`plan.screens[].name`
+ * (manifest migration among them). Those projects are reported as having no
+ * usable plan, same as one that was never saved, rather than crashing.
+ */
 export async function latestPlan(projectId: string): Promise<AppPlan | null> {
-  const [row] = await db
+  const rows = await db
     .select({ plan: messages.plan })
     .from(messages)
     .where(eq(messages.projectId, projectId))
     .orderBy(desc(messages.createdAt))
     .limit(60)
     .then((rows) => rows.filter((r) => r.plan))
-  return (row?.plan as AppPlan | undefined) ?? null
+  for (const row of rows) {
+    const plan = normalizePlan(row.plan)
+    if (plan) return plan
+  }
+  return null
 }
 
 async function loadProject(projectId: string) {
@@ -275,11 +284,21 @@ async function streamText(
 
 // ---------------------------------------------------------------- planning
 
-function historyToInput(
+export function historyToInput(
   project: Project,
   history: DbMessage[],
   screens: GeneratedScreen[],
-  components: string[] = []
+  components: string[] = [],
+  /**
+   * The current plan, verbatim. Chat history is sliced to the most recent
+   * messages (see runPlanning), so on an active project the message that
+   * originally carried this <plan> can scroll out of that window. Without
+   * it the planner has to improvise wording for every existing screen when
+   * asked to add just one, which breaks the exact-text match that lets an
+   * addition build without another approval and keeps unrelated screens
+   * from being rebuilt.
+   */
+  plan: AppPlan | null = null
 ): AgentInputItem[] {
   const names = new Map(screens.map((s) => [s.id, s.name]))
   const assets = project.assets ?? []
@@ -292,6 +311,9 @@ function historyToInput(
       ? `Screens already built on the canvas (id: name): ${screens.filter((s) => s.state === "ready").map((s) => `${s.id}: ${s.name}`).join(", ") || "none yet"}. Changes to these screens are edits (<edit targets="...">); adding, removing or renaming screens is a plan change (the full updated <plan>).`
       : "No screens have been designed yet.",
     components.length ? `Shared component files: ${components.join(", ")}.` : "",
+    plan
+      ? `The current plan, exactly as last approved (reproduce every field for every unchanged screen character-for-character; only add, remove or edit what the person actually asked to change):\n<plan>\n${JSON.stringify(plan)}\n</plan>`
+      : "",
   ]
     .filter(Boolean)
     .join("\n")
@@ -320,17 +342,16 @@ export const NEW_SCREEN_NUDGE =
   "The person's latest request may need a new screen, which an <edit> cannot do (the editor can only change files that already exist). If it does, reply again: one short sentence saying you are adding it now, then the full updated <plan> with every existing screen unchanged and the new screen added, and no <edit> block. If it really is only a change to existing screens, reply with the <edit> as before."
 
 /**
- * Phase 8 fast path: for a verified project that already has a built app,
- * classify the latest message before running the slow, streaming planner on
- * it. "edit" goes straight to the coder with focused context; "question",
+ * Phase 8 fast path: for a project that already has a built app, classify
+ * the latest message before running the slow, streaming planner on it.
+ * "edit" goes straight to the coder with focused context; "question",
  * "integration" and "unsupported" are answered directly, no ChangeSet. Every
- * other case (add_screen, structure, an unparseable router reply, a legacy
- * project, or nothing built yet) returns `{ handled: false }` so the caller
- * falls back to the planner exactly as it did before this existed.
+ * other case (add_screen, structure, an unparseable router reply, or
+ * nothing built yet) returns `{ handled: false }` so the caller falls back
+ * to the planner exactly as it did before this existed.
  */
 export async function routeMessage(run: LiveRun, projectId: string): Promise<{ handled: boolean }> {
   const project = await loadProject(projectId)
-  if (engineOf(project) !== "verified") return { handled: false }
   const doc = readAppDoc(project.previewScreens)
   if (!doc.screens.some((s) => s.state === "ready")) return { handled: false }
 
@@ -402,7 +423,7 @@ export async function runPlanning(run: LiveRun, projectId: string, opts: { first
 
   let raw = ""
   try {
-    const input = historyToInput(project, recent, screens, components)
+    const input = historyToInput(project, recent, screens, components, prevPlan)
     if (opts.nudge) input.push(system(opts.nudge))
     raw = await streamText(planner, input, (delta) => {
       hb.touch()
@@ -441,7 +462,7 @@ export async function runPlanning(run: LiveRun, projectId: string, opts: { first
     run.emit({ type: "status", text: "Adding it to the plan" })
     const again = await streamText(
       planner,
-      [...historyToInput(project, recent, screens, components), system(NEW_SCREEN_NUDGE)],
+      [...historyToInput(project, recent, screens, components, prevPlan), system(NEW_SCREEN_NUDGE)],
       () => {}
     ).catch(() => "")
     const retried = parsePlannerReply(again)
@@ -540,14 +561,31 @@ function asksForNewScreen(userText: string, instruction: string) {
   })
 }
 
-/** True when `next` keeps the design and every screen of `prev` as they were, and adds at least one. */
-function onlyAddsScreens(prev: AppPlan, next: AppPlan) {
+/**
+ * True when `next` keeps the design and every existing screen's identity
+ * (id, name, presentation) as it was, adds at least one screen, and the
+ * only way an existing screen's `navigatesTo` differs is by gaining a link
+ * to one of the newly added screens -- never dropping or changing a link to
+ * one that already existed. That covers the common case of adding a screen
+ * that's reached from an existing one (e.g. a gear icon added to an
+ * existing screen's header to open the new Settings screen): the existing
+ * screen's `keyElements`/`purpose` legitimately change to describe that new
+ * link, which would otherwise make this look like a non-additive replan.
+ * Those existing-screen changes still rebuild that one screen
+ * (screenBuildHash hashes the full spec); this check only decides whether
+ * the change builds right away or waits for approval.
+ */
+export function onlyAddsScreens(prev: AppPlan, next: AppPlan) {
   if (next.screens.length <= prev.screens.length) return false
   if (JSON.stringify(prev.design) !== JSON.stringify(next.design)) return false
+  const addedIds = new Set(next.screens.filter((s) => !prev.screens.some((p) => p.id === s.id)).map((s) => s.id))
   const nextById = new Map(next.screens.map((s) => [s.id, s]))
   return prev.screens.every((s) => {
     const n = nextById.get(s.id)
-    return n && n.presentation === s.presentation && n.name === s.name && JSON.stringify(n.keyElements) === JSON.stringify(s.keyElements) && n.purpose === s.purpose
+    if (!n || n.presentation !== s.presentation || n.name !== s.name) return false
+    const keptOld = n.navigatesTo.filter((id) => !addedIds.has(id))
+    const oldTargets = new Set(s.navigatesTo)
+    return keptOld.length === s.navigatesTo.length && keptOld.every((id) => oldTargets.has(id))
   })
 }
 
@@ -604,10 +642,10 @@ function emitAttempts(run: LiveRun, attempts: { n: number; modelMs: number; gate
 export type RepairResult = { path: string; code: string; screenId?: string } | null
 
 /**
- * Fixes a file that crashed in the preview. On the legacy engine, the crash
- * message goes to the fixer together with the file and what the project
- * actually exports; the repaired file is saved only if it passes every check.
- * On the verified engine, it goes through the same change gateway as an edit.
+ * Fixes a file that crashed in the preview, through the same change gateway
+ * as an edit: the crash message becomes the instruction, the gates
+ * (parse/policy/tsc/render) decide whether the fix is safe, and the result
+ * is only saved if it actually changed something.
  */
 export async function repairFile(run: LiveRun, projectId: string, path: string, message: string): Promise<RepairResult> {
   const project = await loadProject(projectId)
@@ -617,183 +655,42 @@ export async function repairFile(run: LiveRun, projectId: string, path: string, 
   if (!code) return null
   const label = screen?.name ?? path.split("/").pop() ?? path
 
-  if (engineOf(project) === "verified") {
-    const manifest = ensureManifest(doc, await latestPlan(projectId))
-    if (!manifest) return null
-    const ws = workspaceFromDoc({ ...doc, manifest })
-    const exports = projectExports(ws.files)
-    const prompt = verifiedEditPrompt(`In the running app, ${path} crashed with: "${message.slice(0, 500)}". Find the cause and fix it.`, selectFiles(ws, [path]), {
-      manifest,
-      components: Object.entries(exports).map(([n, e]) => `${n} (${e.module})`).join(", "),
-      data: doc.data ?? emptyDataModel(),
-    })
-    const result = await runChange(ws, prompt, coderAdapter, {
-      debugFail: verifyDebugFail(),
-      projectKey: projectId,
-      onState: (state) => run.emit({ type: "run_state", state }),
-    })
-    emitAttempts(run, result.attempts)
-    if (result.state === "needs_user") return null
+  const manifest = ensureManifest(doc, await latestPlan(projectId))
+  if (!manifest) return null
+  const ws = workspaceFromDoc({ ...doc, manifest })
+  const exports = projectExports(ws.files)
+  const prompt = verifiedEditPrompt(`In the running app, ${path} crashed with: "${message.slice(0, 500)}". Find the cause and fix it.`, selectFiles(ws, [path]), {
+    manifest,
+    components: Object.entries(exports).map(([n, e]) => `${n} (${e.module})`).join(", "),
+    data: doc.data ?? emptyDataModel(),
+  })
+  const result = await runChange(ws, prompt, coderAdapter, {
+    debugFail: verifyDebugFail(),
+    projectKey: projectId,
+    onState: (state) => run.emit({ type: "run_state", state }),
+  })
+  emitAttempts(run, result.attempts)
+  if (result.state === "needs_user") return null
 
-    const updatedDoc = docFromWorkspace(doc, result.ws)
-    await commitSnapshot(projectId, updatedDoc, { author: project.userId, intent: `Repaired ${label}`, runId: run.runId })
-    const newCode = updatedDoc.screens.find((s) => s.path === path)?.code ?? updatedDoc.files?.[path]
-    if (newCode === undefined || newCode === code) return null
-    return screen ? { path, code: newCode, screenId: screen.id } : { path, code: newCode }
-  }
-
-  const files: ProjectFiles = {
-    ...(doc.files ?? {}),
-    ...Object.fromEntries(doc.screens.filter((s) => s.code && s.path).map((s) => [s.path!, s.code!])),
-  }
-  const fixed = await checkAndFix(run, path, code, files, label, [
-    `In the running app this file crashed with: "${message.slice(0, 500)}". Find the cause and fix it.`,
-  ])
-  if (blocking(fixed.problems).length || fixed.code === code) return null
-
-  // Re-read so a concurrent change to other screens isn't lost.
-  const latest = readAppDoc((await loadProject(projectId)).previewScreens)
-  const updatedDoc: AppDoc = screen
-    ? { ...latest, screens: latest.screens.map((s) => (s.id === screen.id ? { ...s, code: fixed.code } : s)) }
-    : { ...latest, files: { ...(latest.files ?? {}), [path]: fixed.code } }
+  const updatedDoc = docFromWorkspace(doc, result.ws)
   await commitSnapshot(projectId, updatedDoc, { author: project.userId, intent: `Repaired ${label}`, runId: run.runId })
-  return screen ? { path, code: fixed.code, screenId: screen.id } : { path, code: fixed.code }
+  const newCode = updatedDoc.screens.find((s) => s.path === path)?.code ?? updatedDoc.files?.[path]
+  if (newCode === undefined || newCode === code) return null
+  return screen ? { path, code: newCode, screenId: screen.id } : { path, code: newCode }
 }
 
 // ---------------------------------------------------------------- targeted edits
 
 /**
- * Applies a change request to built screens without touching the plan:
- * the editor returns only the changed lines, they are applied, checked
- * (imports, undefined names, compile) and saved. The old screen stays on
- * the canvas until the new one is ready.
+ * The edit path: builds a Workspace from the AppDoc, runs the change
+ * gateway (lib/verify/run.ts) with the coder model, and on success commits
+ * a snapshot. On `needs_user`, posts a plain-words message and leaves the
+ * app unchanged.
  *
- * With `escalate`, a change that turns out to need a new screen (the editor
+ * With `escalate`, a change that turns out to need a new screen (the coder
  * says so, writes a new route file, or the edit targets a screen that
  * doesn't exist) returns { needsPlan: true } without saving anything, so the
  * caller can send it through the plan instead of dropping it.
- */
-export async function runEdit(run: LiveRun, projectId: string, edit: EditRequest, opts: { escalate?: boolean } = {}): Promise<{ needsPlan: boolean }> {
-  const { editor } = agents()
-  const project = await loadProject(projectId)
-  const doc = readAppDoc(project.previewScreens)
-  const ready = doc.screens.filter((s) => s.state === "ready" && s.code && s.path)
-  const files: ProjectFiles = {
-    ...(doc.files ?? {}),
-    ...Object.fromEntries(ready.map((s) => [s.path!, s.code!])),
-  }
-
-  // Targets are screen ids (or names) and project file paths.
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "")
-  const targetPaths = new Set<string>()
-  let unknownScreen = false
-  for (const t of edit.targets) {
-    const screen = ready.find((s) => s.id === t || norm(s.name) === norm(t) || s.path === t)
-    if (screen) targetPaths.add(screen.path!)
-    else if (files[t.replace(/^@\//, "")]) targetPaths.add(t.replace(/^@\//, ""))
-    else if (!t.includes("/") || /^app\//.test(t)) unknownScreen = true
-  }
-  if (opts.escalate && unknownScreen) return { needsPlan: true }
-  if (!targetPaths.size && ready[0]) targetPaths.add(ready[0].path!)
-  const nameOf = (path: string) => ready.find((s) => s.path === path)?.name ?? path.split("/").pop()!.replace(/\.\w+$/, "")
-  const label = [...targetPaths].map(nameOf).join(", ")
-
-  run.emit({ type: "status", text: `Editing ${label}` })
-  const hb = heartbeat(run, () => `Editing ${label}`)
-  const exports = projectExports(files)
-  let raw = ""
-  try {
-    raw = await streamText(
-      editor,
-      editPrompt(
-        edit.instruction,
-        [...targetPaths].map((p) => ({ path: p, code: files[p] })),
-        {
-          screens: ready.map((s) => `/${s.id}: ${s.name}`).join(", "),
-          components: Object.entries(exports)
-            .map(([n, e]) => `${n} (${e.module})`)
-            .join(", "),
-          data: doc.data ?? emptyDataModel(),
-        }
-      ),
-      () => hb.touch()
-    )
-  } finally {
-    hb.stop()
-  }
-
-  // The editor can't add routes: it says so, or writes a screen file that doesn't exist yet.
-  const edits = parseEdits(raw)
-  const newRoute = edits.some((fe) => fe.kind === "file" && /^app\/.+\.tsx$/.test(fe.path) && !(fe.path in files) && !/_layout\.tsx$/.test(fe.path))
-  if (opts.escalate && (/<needs_plan\s*\/?>/i.test(raw) || newRoute)) return { needsPlan: true }
-
-  // Apply: patches to existing files, whole files for rewrites and new components.
-  const changed: ProjectFiles = {}
-  const retry: string[] = []
-  for (const fe of edits) {
-    const allowed = targetPaths.has(fe.path) || (fe.kind === "file" && /^components\/[\w-]+\.tsx?$/.test(fe.path)) || fe.path in files
-    if (!allowed) continue
-    if (fe.kind === "file") {
-      changed[fe.path] = fe.code
-      continue
-    }
-    const base = changed[fe.path] ?? files[fe.path]
-    if (base === undefined) continue
-    const { code, failed } = applyHunks(base, fe.hunks)
-    if (failed.length) retry.push(fe.path)
-    else changed[fe.path] = code
-  }
-  // Blocks that didn't match: ask for the whole updated file instead.
-  for (const path of retry) {
-    run.emit({ type: "status", text: `Editing ${nameOf(path)}` })
-    const again = await streamText(editor, editRetryPrompt(edit.instruction, path, files[path]), () => {}).catch(() => "")
-    const whole = parseEdits(again).find((f) => f.kind === "file" && f.path === path)
-    if (whole && whole.kind === "file") changed[path] = whole.code
-  }
-
-  // Check everything that changed; keep only files that run.
-  const next: ProjectFiles = { ...files, ...changed }
-  const saved: ProjectFiles = {}
-  const failed: string[] = []
-  for (const [path, code] of Object.entries(changed)) {
-    const checked = await checkAndFix(run, path, code, next, nameOf(path))
-    if (blocking(checked.problems).length) {
-      failed.push(nameOf(path))
-      continue
-    }
-    saved[path] = checked.code
-    next[path] = checked.code
-  }
-
-  // Save: screens by id, other files into the project files.
-  const latest = readAppDoc((await loadProject(projectId)).previewScreens)
-  const screenUpdates = latest.screens.map((s) => (s.path && saved[s.path] !== undefined ? { ...s, code: saved[s.path], state: "ready" as const } : s))
-  const fileUpdates = Object.fromEntries(Object.entries(saved).filter(([p]) => !latest.screens.some((s) => s.path === p)))
-  let version: number | undefined
-  if (Object.keys(saved).length) {
-    const updatedDoc: AppDoc = { ...latest, screens: screenUpdates, files: { ...(latest.files ?? {}), ...fileUpdates } }
-    ;({ version } = await commitSnapshot(projectId, updatedDoc, { author: project.userId, intent: `Edit: ${edit.instruction.slice(0, 140)}`, runId: run.runId }))
-    for (const s of screenUpdates) if (s.path && saved[s.path] !== undefined) run.emit({ type: "screen_done", screen: s })
-    if (Object.keys(fileUpdates).length) run.emit({ type: "files", files: updatedDoc.files! })
-  }
-
-  const done = Object.keys(saved).map(nameOf)
-  const text = done.length
-    ? `Updated ${done.join(", ")}.${failed.length ? ` I couldn't apply the change to ${failed.join(", ")} cleanly, so ${failed.length === 1 ? "it was" : "they were"} left as before.` : ""}`
-    : "I couldn't apply that change cleanly, so nothing was changed. Could you describe it a little differently?"
-  const msg = await saveMessage(projectId, { sender: "assistant", kind: "standard", text, version })
-  run.emit({ type: "message_done", message: msg })
-  await setPhase(projectId, "ready")
-  run.emit({ type: "phase", phase: "ready" })
-  return { needsPlan: false }
-}
-
-/**
- * The verified engine's edit path: builds a Workspace from the AppDoc, runs
- * the change gateway (lib/verify/run.ts) with the coder model, and on
- * success commits a snapshot. On `needs_user`, posts a plain-words message
- * and leaves the app unchanged. Target resolution and escalation mirror
- * runEdit so both engines behave the same from the chat's point of view.
  */
 export async function runVerifiedEdit(run: LiveRun, projectId: string, edit: EditRequest, opts: { escalate?: boolean } = {}): Promise<{ needsPlan: boolean }> {
   const project = await loadProject(projectId)
@@ -1216,15 +1113,14 @@ export async function runGeneration(run: LiveRun, projectId: string) {
   ])
 
   // Project files: platform modules and config, then the shell. On the
-  // verified engine, navigation and typed nav/data files come from the
-  // manifest compiler, not the AI shell (Phase 6): the manifest is built
-  // once (or reused from a previous edit) and recompiled on every build so
-  // it never drifts from the plan. The component kit (Phase 7) ships the
-  // same way: a platform file, not AI-written.
-  const verified = engineOf(project) === "verified"
-  const platform = { ...platformFiles(plan, themes, data), ...(verified ? { [KIT_PATH]: KIT_SOURCE } : {}) }
-  const manifest = verified ? syncManifest({ ...doc, data }, plan) : undefined
-  const generated = manifest ? compileManifest(manifest) : {}
+  // Navigation and typed nav/data files come from the manifest compiler,
+  // not the AI shell (Phase 6): the manifest is built once (or reused from
+  // a previous edit) and recompiled on every build so it never drifts from
+  // the plan. The component kit (Phase 7) ships the same way: a platform
+  // file, not AI-written.
+  const platform = { ...platformFiles(plan, themes, data), [KIT_PATH]: KIT_SOURCE }
+  const manifest = syncManifest({ ...doc, data }, plan)
+  const generated = compileManifest(manifest)
   let files: ProjectFiles = { ...platform, ...shellFiles, ...generated }
   await saveDoc(projectId, { ...doc, screens, themes, data, files, manifest, shellHash: sHash, componentsHash: cHash })
   run.emit({ type: "files", files })
@@ -1327,7 +1223,7 @@ IMPORTANT: your previous attempt was cut off at the output limit. Write a more c
         if (stop.length) {
           error = stop[0]
           console.warn(`[build ${projectId}] screen ${screenId}: still failing checks`, stop)
-        } else if (engineOf(project) === "verified") {
+        } else {
           // A freshly generated screen gets the same real checks an edit
           // gets (parse/policy/tsc/render), not only today's regex/noResolve
           // check: nothing unverified should reach the user, builds included.
@@ -1340,7 +1236,7 @@ IMPORTANT: your previous attempt was cut off at the output limit. Write a more c
             error = `Didn't pass the verified engine's checks: ${formatDiagnostics(verdict)}`
             console.warn(`[build ${projectId}] screen ${screenId}: failed verified gates (${verdict.failedAt})`)
           }
-        } else code = checked.code
+        }
       } catch (e) {
         error = e instanceof Error ? e.message : "Generation failed."
         console.error("screen generation failed", screenId, e)

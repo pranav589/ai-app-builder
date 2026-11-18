@@ -5,7 +5,7 @@ export type FileMap = Record<string, string>
 
 export type JsonPatchOp = { op: "add" | "replace"; path: string; value: unknown } | { op: "remove"; path: string }
 
-/** The project as the verified engine sees it. `manifest` arrives in Phase 6; legacy projects use AppPlan + AppDoc instead. */
+/** The project as the change gateway sees it. `manifest` is absent only until a project's first migration (lib/manifest/migrate.ts ensureManifest), built lazily from its AppPlan + AppDoc the first time something touches it. */
 export interface Workspace {
   manifest?: unknown
   files: FileMap

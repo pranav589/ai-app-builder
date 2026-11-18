@@ -94,4 +94,24 @@ describe("policyGate", () => {
     const r = policyGate(ws({ "app/old.tsx": tooLong }), ["app/old.tsx"])
     expect(r.ok).toBe(false)
   })
+
+  it("doesn't block a file that was already over the limit before this edit, as long as it didn't grow", () => {
+    const tooLong = "export default function Old() {\n" + "  const x = 1\n".repeat(300) + "}\n"
+    const sameLength = tooLong.replace("x = 1", "x = 2")
+    const r = policyGate(ws({ "app/old.tsx": sameLength }), ["app/old.tsx"], undefined, ws({ "app/old.tsx": tooLong }))
+    expect(r.diagnostics.some((d) => d.code === "file_too_long")).toBe(false)
+  })
+
+  it("still blocks a file already over the limit if the edit makes it longer", () => {
+    const tooLong = "export default function Old() {\n" + "  const x = 1\n".repeat(300) + "}\n"
+    const longer = tooLong + "  const y = 2\n"
+    const r = policyGate(ws({ "app/old.tsx": longer }), ["app/old.tsx"], undefined, ws({ "app/old.tsx": tooLong }))
+    expect(r.diagnostics.some((d) => d.code === "file_too_long")).toBe(true)
+  })
+
+  it("blocks a brand-new file over the limit even with no base to compare against", () => {
+    const tooLong = "export default function New() {\n" + "  const x = 1\n".repeat(300) + "}\n"
+    const r = policyGate(ws({ "app/new.tsx": tooLong }), ["app/new.tsx"], undefined, ws({}))
+    expect(r.diagnostics.some((d) => d.code === "file_too_long")).toBe(true)
+  })
 })

@@ -105,7 +105,7 @@ function RunOnDeviceCard({ projectId, onOpen }: { projectId: string; onOpen: () 
       className="group mx-3 mb-3 flex shrink-0 items-center gap-3 rounded-(--r-md) border border-border bg-background p-2.5 text-left transition-colors hover:border-foreground/20 hover:bg-muted/60"
     >
       <span className="relative shrink-0 overflow-hidden rounded-md border border-border bg-white p-0.5">
-        <QrPattern seed={projectId} className="size-10 opacity-60" />
+        <QrPattern text={`exp://device-preview-not-running/${projectId}`} className="size-10 opacity-60" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-medium">Test on your phone</span>

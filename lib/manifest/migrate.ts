@@ -1,9 +1,9 @@
-// Builds a manifest for a project that doesn't have one yet: either a
-// legacy-engine project opening on the verified engine for the first time,
-// or a verified project built before the manifest existed. Best-effort: the
-// result just needs to be valid and behave like the app already does: a
-// wrong guess (e.g. which screens take an id param) is fixed by the next
-// edit's manifest_patch, not by this migration being perfect.
+// Builds a manifest for a project that doesn't have one yet: a project
+// built before the manifest existed, opening for the first time since.
+// Best-effort: the result just needs to be valid and behave like the app
+// already does: a wrong guess (e.g. which screens take an id param) is
+// fixed by the next edit's manifest_patch, not by this migration being
+// perfect.
 
 import { ICONS } from "@/lib/app-project/icons"
 import { ALLOWED_PACKAGES } from "@/lib/app-project/project"
@@ -44,11 +44,13 @@ function guessCollection(s: PlanScreen, doc: AppDoc): string | undefined {
   return coll?.name
 }
 
-/** Builds a manifest from an existing project's plan and app document. */
+/** Builds a manifest from an existing project's plan and app document. Only screens the plan AND the doc agree exist: a screen the plan once had but that was never actually built (its build failed, or an earlier plan revision dropped it before building) must not become a manifest entry with no file behind it — nav/layout would then point at a route nothing ever wrote. */
 export function fromLegacy(plan: AppPlan, doc: AppDoc): AppManifest {
-  const targeted = new Set(plan.screens.flatMap((s) => s.navigatesTo))
+  const built = new Set(doc.screens.filter((s) => s.state === "ready" && s.code).map((s) => s.id))
+  const builtPlanScreens = plan.screens.filter((s) => built.has(s.id))
+  const targeted = new Set(builtPlanScreens.flatMap((s) => s.navigatesTo))
   const screens: AppManifest["screens"] = {}
-  for (const s of plan.screens) {
+  for (const s of builtPlanScreens) {
     const takesId = s.presentation !== "tab" && (s.presentation === "modal" || targeted.has(s.id))
     const collection = takesId ? guessCollection(s, doc) : undefined
     screens[s.id] = {
@@ -59,8 +61,8 @@ export function fromLegacy(plan: AppPlan, doc: AppDoc): AppManifest {
       ...(collection ? { collection } : {}),
     }
   }
-  const tabs = plan.screens.filter((s) => s.presentation === "tab").map((s) => s.id)
-  const initial = tabs[0] ?? plan.screens[0]?.id ?? "home"
+  const tabs = builtPlanScreens.filter((s) => s.presentation === "tab").map((s) => s.id)
+  const initial = tabs[0] ?? builtPlanScreens[0]?.id ?? "home"
 
   const collections: AppManifest["collections"] = {}
   for (const c of doc.data?.collections ?? []) {
@@ -79,7 +81,7 @@ export function fromLegacy(plan: AppPlan, doc: AppDoc): AppManifest {
   }
 }
 
-/** The project's manifest, migrating lazily (and only in memory; the caller commits it like any other change) the first time the verified engine touches a project that doesn't have one yet. */
+/** The project's manifest, migrating lazily (and only in memory; the caller commits it like any other change) the first time something touches a project that doesn't have one yet. */
 export function ensureManifest(doc: AppDoc, plan: AppPlan | null): AppManifest | undefined {
   return doc.manifest ?? (plan ? fromLegacy(plan, doc) : undefined)
 }
@@ -88,9 +90,9 @@ export function ensureManifest(doc: AppDoc, plan: AppPlan | null): AppManifest |
  * Turns a plan change that only adds screens (lib/agent/orchestrator.ts
  * onlyAddsScreens already decided this) into the manifest_patch ops for
  * those additions: one "add" per new screen, plus adding tab screens to
- * navigation.tabs. Lets the verified engine take the same fast "additive"
- * path the legacy engine does, through the gateway instead of a full
- * AI-written rebuild (fixes.txt #9, "screen added but not showing").
+ * navigation.tabs. Lets a plan that only adds screens go through the
+ * gateway as a fast "additive" patch instead of a full AI-written rebuild
+ * (fixes.txt #9, "screen added but not showing").
  */
 function patchForAddedScreens(manifest: AppManifest, referencePlan: AppPlan, added: PlanScreen[]): JsonPatchOp[] {
   const ops: JsonPatchOp[] = []

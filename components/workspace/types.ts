@@ -1,5 +1,4 @@
 import type { AgentPhase, BackendInfo, GeneratedScreen, StoredMessage } from "@/lib/agent/types"
-import type { Engine } from "@/lib/verify/engine"
 import type { BackendConfig } from "@/lib/app-runtime/app-doc"
 import type { DataModel } from "@/lib/app-runtime/data-model"
 import type { ThemePackage } from "@/lib/app-runtime/theme"
@@ -29,8 +28,6 @@ export type WorkspaceProject = {
   /** The app's CloudHike backend (status only, never credentials). */
   backendInfo: BackendInfo | null
   cloudhike: { configured: boolean; accountConnected: boolean }
-  /** Which pipeline this project runs on (Phase 9: drives the Code tab's ownership badges). */
-  engine: Engine
 }
 
 export type ChatMessage = StoredMessage & {

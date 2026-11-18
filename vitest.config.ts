@@ -8,6 +8,6 @@ export default defineConfig({
     },
   },
   test: {
-    exclude: ["node_modules/**", "poc/**", ".next/**", "vendor/**"],
+    exclude: ["node_modules/**", "poc/**", ".next/**", "vendor/**", ".device/**"],
   },
 })

@@ -1,7 +1,7 @@
-// The verified engine's coder prompt. Reuses the legacy engine's tech/craft
-// rules (same stack, same quality bar); the reply format, ownership rules,
-// manifest awareness and kit reference differ, since every reply here
-// becomes a gated ChangeSet instead of a trusted file write.
+// The coder prompt for the change gateway. Reuses the screen prompt's
+// tech/craft rules (same stack, same quality bar); the reply format,
+// ownership rules, manifest awareness and kit reference differ, since every
+// reply here becomes a gated ChangeSet instead of a trusted file write.
 
 import { MANIFEST_ICON_NAMES } from "@/lib/app-project/icons"
 import { KIT_PROPS_REFERENCE } from "@/lib/app-project/kit"
