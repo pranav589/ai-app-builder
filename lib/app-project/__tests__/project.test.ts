@@ -36,6 +36,35 @@ describe("autoImport", () => {
     expect(out).toContain(`import Card from "@/components/card"`)
   })
 
+  it("never changes the line count, so preview eids match the stored file", () => {
+    const cases = [
+      `export default function Home() {
+  const [n] = useState(0)
+  return <View />
+}`,
+      `import { Text } from "@/kit"
+
+export default function Home() {
+  const [n] = useState(0)
+  return <View />
+}`,
+      `import {
+  useState,
+} from "react"
+export default function Home() {
+  useEffect(() => {}, [])
+  return <View />
+}`,
+    ]
+    for (const code of cases) {
+      const out = autoImport(code)
+      expect(out).not.toBe(code)
+      expect(out.split("\n").length).toBe(code.split("\n").length)
+      expect(out.split("\n").at(-2)).toBe(code.split("\n").at(-2))
+    }
+    expect(autoImport(cases[2])).toContain("useState, useEffect")
+  })
+
   it("doesn't import a name already declared locally", () => {
     const code = `function useState() { return 1 }\nexport default function Home() {\n  return useState()\n}`
     expect(autoImport(code)).toBe(code)

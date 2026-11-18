@@ -7,6 +7,7 @@ import * as React from "react"
 import * as ReactDOM from "react-dom"
 import * as RNW from "react-native-web"
 
+import { isPlatformOwned } from "@/lib/verify/ownership"
 import { dataStore, moduleStore } from "./bridge"
 import * as backend from "./shims/backend"
 import * as native from "./shims/native"
@@ -121,6 +122,10 @@ type Mod = { exports: Record<string, unknown> }
 let cache = new Map<string, Mod>()
 let cacheVersion = -1
 
+// Components exported by platform modules (kit/**): an element of one of
+// these is marked data-kit, since its look comes from kit props, not styles.
+const platformComponents = new WeakSet<object>()
+
 // Every element remembers where it was written, as data-eid="file:line:Type",
 // so the inline editor can point from the screen back to the source.
 function makeJsx(file: string) {
@@ -129,7 +134,8 @@ function makeJsx(file: string) {
       const { __source, __self: _s, ...rest } = props as { __source?: { lineNumber?: number }; __self?: unknown }
       if (type !== React.Fragment && __source?.lineNumber && !("dataSet" in rest)) {
         const name = typeof type === "string" ? type : ((type as { displayName?: string; name?: string })?.displayName ?? (type as { name?: string })?.name ?? "El")
-        ;(rest as Record<string | symbol, unknown>).dataSet = { eid: `${file}:${__source.lineNumber}:${name}` }
+        const kit = typeof type === "function" && platformComponents.has(type)
+        ;(rest as Record<string | symbol, unknown>).dataSet = kit ? { eid: `${file}:${__source.lineNumber}:${name}`, kit: "1" } : { eid: `${file}:${__source.lineNumber}:${name}` }
       }
       props = rest
     }
@@ -168,6 +174,7 @@ export function requireModule(spec: string, from = ""): unknown {
     // sourceURL names the file in stack traces, so a crash can be traced back to it.
     const fn = new Function("require", "module", "exports", "__jsx", "__frag", "React", code + "\n//# sourceURL=project:///" + resolved)
     fn((s: string) => requireModule(s, resolved), mod, mod.exports, makeJsx(resolved), React.Fragment, React)
+    if (isPlatformOwned(resolved)) for (const v of Object.values(mod.exports)) if (typeof v === "function") platformComponents.add(v)
   } catch (e) {
     cache.delete(resolved)
     if (e instanceof PreviewModuleError) throw e

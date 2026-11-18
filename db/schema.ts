@@ -76,7 +76,7 @@ export const agentRuns = pgTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
-    /** "agent" runs stream to the workspace; "repair" only holds the project lock. */
+    /** "agent" runs stream to the workspace; "repair" and "canvas-edit" only hold the project lock. */
     kind: text("kind").notNull().default("agent"),
     /** What the worker should do: { task, action }. */
     input: jsonb("input"),

@@ -7,6 +7,7 @@ import { cn } from "cn"
 import { RuntimeFrame, useAppRuntime, type FrameHandlers } from "./app-runtime"
 import { DEVICE_HEIGHT, DEVICE_WIDTH } from "./dummy-data"
 import { HomeIndicator, StatusBarOverlay, useDeviceScale, type DevicePlatform } from "./screen-mock"
+import type { ElementEdit, SelectedElement } from "@/lib/preview/protocol"
 
 // The running app inside the preview device: one frame running the whole
 // React Native app (its own navigation), plus the system UI the app asks
@@ -361,6 +362,9 @@ export function AppPreview({
   restartKey,
   onTopChange,
   onError,
+  inspect,
+  edit,
+  onSelectElement,
 }: {
   rootId: string | null
   platform: DevicePlatform
@@ -369,6 +373,10 @@ export function AppPreview({
   restartKey?: unknown
   onTopChange?: (screenId: string) => void
   onError?: (message: string) => void
+  /** Hover/select elements for the canvas inspector. */
+  inspect?: boolean
+  edit?: ElementEdit | null
+  onSelectElement?: (el: SelectedElement) => void
 }) {
   const { theme } = useAppRuntime()
   const ref = React.useRef<HTMLDivElement>(null)
@@ -381,8 +389,9 @@ export function AppPreview({
       onNative: system.request,
       onRoute: (pathname) => onTopChange?.(pathname.replace(/^\//, "") || rootId || ""),
       onError: (message) => onError?.(message),
+      onSelectElement,
     }),
-    [system.request, onTopChange, onError, rootId]
+    [system.request, onTopChange, onError, rootId, onSelectElement]
   )
 
   const themeVars = {
@@ -410,6 +419,8 @@ export function AppPreview({
             appName={appName}
             handlers={handlers}
             resetKey={restartKey}
+            inspect={inspect}
+            edit={edit}
             className="absolute inset-0 size-full border-0 bg-transparent"
             style={{ width: DEVICE_WIDTH, height: DEVICE_HEIGHT }}
           />

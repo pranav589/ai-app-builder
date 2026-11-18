@@ -72,12 +72,12 @@ function toneColor(tone: Tone | undefined, c: Theme["colors"]) {
   }
 }
 
-export function Screen({ children, scroll = true, padded = true }: ScreenProps) {
+export function Screen({ children, scroll = true, padded = true, ...rest }: ScreenProps) {
   const t = useTheme()
   const style = { padding: padded ? t.spacing.lg : 0, gap: t.spacing.lg }
-  if (!scroll) return <View style={[{ flex: 1, backgroundColor: t.colors.background }, style]}>{children}</View>
+  if (!scroll) return <View {...rest} style={[{ flex: 1, backgroundColor: t.colors.background }, style]}>{children}</View>
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: t.colors.background }} contentContainerStyle={style}>
+    <ScrollView {...rest} style={{ flex: 1, backgroundColor: t.colors.background }} contentContainerStyle={style}>
       {children}
     </ScrollView>
   )
@@ -86,15 +86,15 @@ export function Screen({ children, scroll = true, padded = true }: ScreenProps) 
 const ALIGN = { start: "flex-start", center: "center", end: "flex-end", stretch: "stretch" } as const
 const JUSTIFY = { start: "flex-start", center: "center", end: "flex-end", between: "space-between" } as const
 
-export function Stack({ children, gap = "md", align = "stretch" }: StackProps) {
+export function Stack({ children, gap = "md", align = "stretch", ...rest }: StackProps) {
   const t = useTheme()
-  return <View style={{ gap: t.spacing[gap], alignItems: ALIGN[align] }}>{children}</View>
+  return <View {...rest} style={{ gap: t.spacing[gap], alignItems: ALIGN[align] }}>{children}</View>
 }
 
-export function Row({ children, gap = "md", align = "center", justify = "start", wrap = false }: RowProps) {
+export function Row({ children, gap = "md", align = "center", justify = "start", wrap = false, ...rest }: RowProps) {
   const t = useTheme()
   return (
-    <View style={{ flexDirection: "row", gap: t.spacing[gap], alignItems: ALIGN[align], justifyContent: JUSTIFY[justify], flexWrap: wrap ? "wrap" : "nowrap" }}>
+    <View {...rest} style={{ flexDirection: "row", gap: t.spacing[gap], alignItems: ALIGN[align], justifyContent: JUSTIFY[justify], flexWrap: wrap ? "wrap" : "nowrap" }}>
       {children}
     </View>
   )
@@ -108,25 +108,26 @@ const TEXT_VARIANT = {
   label: { fontSize: 13, fontWeight: "600" },
 } as const
 
-export function Text({ children, variant = "body", tone, align = "left", numberOfLines }: TextProps) {
+export function Text({ children, variant = "body", tone, align = "left", numberOfLines, ...rest }: TextProps) {
   const t = useTheme()
   const color = toneColor(tone ?? (variant === "caption" ? "muted" : "default"), t.colors)
-  return <RNText numberOfLines={numberOfLines} style={[TEXT_VARIANT[variant], { color, textAlign: align }]}>{children}</RNText>
+  return <RNText {...rest} numberOfLines={numberOfLines} style={[TEXT_VARIANT[variant], { color, textAlign: align }]}>{children}</RNText>
 }
 
-export function Card({ children, onPress, padding = "lg" }: CardProps) {
+export function Card({ children, onPress, padding = "lg", ...rest }: CardProps) {
   const t = useTheme()
   const style = { backgroundColor: t.colors.surface, borderRadius: t.radius.lg, borderWidth: 1, borderColor: t.colors.border, padding: t.spacing[padding], gap: t.spacing.sm }
-  if (onPress) return <Pressable accessibilityRole="button" onPress={onPress} style={style}>{children}</Pressable>
-  return <View style={style}>{children}</View>
+  if (onPress) return <Pressable {...rest} accessibilityRole="button" onPress={onPress} style={style}>{children}</Pressable>
+  return <View {...rest} style={style}>{children}</View>
 }
 
-export function Button({ label, onPress, variant = "primary", icon, disabled = false, fullWidth = false }: ButtonProps) {
+export function Button({ label, onPress, variant = "primary", icon, disabled = false, fullWidth = false, ...rest }: ButtonProps) {
   const t = useTheme()
   const bg = variant === "primary" ? t.colors.primary : variant === "danger" ? t.colors.danger : variant === "secondary" ? t.colors.surface : "transparent"
   const fg = variant === "primary" || variant === "danger" ? t.colors.onPrimary : t.colors.primary
   return (
     <Pressable
+      {...rest}
       accessibilityRole="button"
       accessibilityLabel={label}
       disabled={disabled}
@@ -152,16 +153,16 @@ export function Button({ label, onPress, variant = "primary", icon, disabled = f
   )
 }
 
-export function IconButton({ icon, onPress, label, tone = "primary" }: IconButtonProps) {
+export function IconButton({ icon, onPress, label, tone = "primary", ...rest }: IconButtonProps) {
   const t = useTheme()
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={{ padding: t.spacing.sm, borderRadius: t.radius.pill }}>
+    <Pressable {...rest} accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={{ padding: t.spacing.sm, borderRadius: t.radius.pill }}>
       <Ionicons name={icon} size={20} color={toneColor(tone, t.colors)} />
     </Pressable>
   )
 }
 
-export function ListItem({ title, subtitle, leading, trailing, onPress }: ListItemProps) {
+export function ListItem({ title, subtitle, leading, trailing, onPress, ...rest }: ListItemProps) {
   const t = useTheme()
   const body = (
     <>
@@ -174,14 +175,14 @@ export function ListItem({ title, subtitle, leading, trailing, onPress }: ListIt
     </>
   )
   const style = { flexDirection: "row" as const, alignItems: "center" as const, gap: t.spacing.md, paddingVertical: t.spacing.md, borderBottomWidth: 1, borderColor: t.colors.border }
-  if (onPress) return <Pressable accessibilityRole="button" onPress={onPress} style={style}>{body}</Pressable>
-  return <View style={style}>{body}</View>
+  if (onPress) return <Pressable {...rest} accessibilityRole="button" onPress={onPress} style={style}>{body}</Pressable>
+  return <View {...rest} style={style}>{body}</View>
 }
 
-export function Stat({ label, value, caption, size = "sm", tone }: StatProps) {
+export function Stat({ label, value, caption, size = "sm", tone, ...rest }: StatProps) {
   const t = useTheme()
   return (
-    <View style={{ gap: 2 }}>
+    <View {...rest} style={{ gap: 2 }}>
       <RNText style={{ color: t.colors.textMuted, fontSize: 13, fontWeight: "600" }}>{label}</RNText>
       <RNText style={{ color: toneColor(tone, t.colors), fontSize: size === "lg" ? 34 : 22, fontWeight: "700" }}>{String(value)}</RNText>
       {caption ? <RNText style={{ color: t.colors.textMuted, fontSize: 12 }}>{caption}</RNText> : null}
@@ -189,20 +190,20 @@ export function Stat({ label, value, caption, size = "sm", tone }: StatProps) {
   )
 }
 
-export function ProgressBar({ value, tone = "primary" }: ProgressBarProps) {
+export function ProgressBar({ value, tone = "primary", ...rest }: ProgressBarProps) {
   const t = useTheme()
   const pct = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0)) * 100
   return (
-    <View accessibilityRole="progressbar" style={{ height: 8, borderRadius: t.radius.pill, backgroundColor: t.colors.border, overflow: "hidden" }}>
+    <View {...rest} accessibilityRole="progressbar" style={{ height: 8, borderRadius: t.radius.pill, backgroundColor: t.colors.border, overflow: "hidden" }}>
       <View style={{ width: pct + "%", height: 8, backgroundColor: toneColor(tone, t.colors) }} />
     </View>
   )
 }
 
-export function TextField({ label, value, onChangeText, placeholder, keyboard = "default", multiline = false }: TextFieldProps) {
+export function TextField({ label, value, onChangeText, placeholder, keyboard = "default", multiline = false, ...rest }: TextFieldProps) {
   const t = useTheme()
   return (
-    <View style={{ gap: t.spacing.xs }}>
+    <View {...rest} style={{ gap: t.spacing.xs }}>
       <RNText style={{ color: t.colors.text, fontSize: 13, fontWeight: "600" }}>{label}</RNText>
       <TextInput
         accessibilityLabel={label}
@@ -217,10 +218,10 @@ export function TextField({ label, value, onChangeText, placeholder, keyboard = 
   )
 }
 
-export function Toggle({ label, value, onValueChange, description }: ToggleProps) {
+export function Toggle({ label, value, onValueChange, description, ...rest }: ToggleProps) {
   const t = useTheme()
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: t.spacing.md }}>
+    <View {...rest} style={{ flexDirection: "row", alignItems: "center", gap: t.spacing.md }}>
       <View style={{ flex: 1 }}>
         <RNText style={{ color: t.colors.text, fontSize: 16 }}>{label}</RNText>
         {description ? <RNText style={{ color: t.colors.textMuted, fontSize: 13 }}>{description}</RNText> : null}
@@ -230,10 +231,10 @@ export function Toggle({ label, value, onValueChange, description }: ToggleProps
   )
 }
 
-export function EmptyState({ title, message, icon = "star-outline", action }: EmptyStateProps) {
+export function EmptyState({ title, message, icon = "star-outline", action, ...rest }: EmptyStateProps) {
   const t = useTheme()
   return (
-    <View style={{ alignItems: "center", gap: t.spacing.sm, paddingVertical: t.spacing.xl }}>
+    <View {...rest} style={{ alignItems: "center", gap: t.spacing.sm, paddingVertical: t.spacing.xl }}>
       <Ionicons name={icon} size={32} color={t.colors.textMuted} />
       <RNText style={{ color: t.colors.text, fontSize: 18, fontWeight: "600" }}>{title}</RNText>
       {message ? <RNText style={{ color: t.colors.textMuted, fontSize: 14, textAlign: "center" }}>{message}</RNText> : null}
@@ -242,25 +243,25 @@ export function EmptyState({ title, message, icon = "star-outline", action }: Em
   )
 }
 
-export function Badge({ label, tone = "primary" }: BadgeProps) {
+export function Badge({ label, tone = "primary", ...rest }: BadgeProps) {
   const t = useTheme()
   const c = toneColor(tone, t.colors)
   return (
-    <View style={{ borderRadius: t.radius.pill, borderWidth: 1, borderColor: c, paddingHorizontal: t.spacing.sm, paddingVertical: 2, alignSelf: "flex-start" }}>
+    <View {...rest} style={{ borderRadius: t.radius.pill, borderWidth: 1, borderColor: c, paddingHorizontal: t.spacing.sm, paddingVertical: 2, alignSelf: "flex-start" }}>
       <RNText style={{ color: c, fontSize: 12, fontWeight: "600" }}>{label}</RNText>
     </View>
   )
 }
 
-export function Icon({ name, size = 20, tone }: IconProps) {
+export function Icon({ name, size = 20, tone, ...rest }: IconProps) {
   const t = useTheme()
-  return <Ionicons name={name} size={size} color={toneColor(tone, t.colors)} />
+  return <Ionicons {...rest} name={name} size={size} color={toneColor(tone, t.colors)} />
 }
 
-export function Section({ title, children, action }: SectionProps) {
+export function Section({ title, children, action, ...rest }: SectionProps) {
   const t = useTheme()
   return (
-    <View style={{ gap: t.spacing.sm }}>
+    <View {...rest} style={{ gap: t.spacing.sm }}>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
         <RNText style={{ color: t.colors.text, fontSize: 18, fontWeight: "600" }}>{title}</RNText>
         {action ? <Button label={action.label} onPress={action.onPress} variant="ghost" /> : null}
@@ -270,9 +271,9 @@ export function Section({ title, children, action }: SectionProps) {
   )
 }
 
-export function Divider(_props: DividerProps) {
+export function Divider({ ...rest }: DividerProps) {
   const t = useTheme()
-  return <View style={{ height: 1, backgroundColor: t.colors.border }} />
+  return <View {...rest} style={{ height: 1, backgroundColor: t.colors.border }} />
 }
 `
 

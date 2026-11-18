@@ -1,4 +1,4 @@
-import type { AppPlan, PlanScreen } from "./types"
+import type { AppPlan } from "./types"
 import { describeDataModel, type DataModel } from "@/lib/app-runtime/data-model"
 import { THEME_COLOR_KEYS, THEME_TOKEN_DOCS, type AppTheme } from "@/lib/app-runtime/theme"
 import { ALLOWED_PACKAGES, screenHref, screenPath } from "@/lib/app-project/project"
@@ -276,23 +276,6 @@ Only the navigation structure changed.${current ? ` The current layouts are belo
 Write ONLY ${hasTabs ? "app/_layout.tsx and app/(tabs)/_layout.tsx" : "app/_layout.tsx"} now.`
 }
 
-export const SCREEN_INSTRUCTIONS = `You are a principal React Native engineer and product designer. You write one screen of an Expo Router app at a time: a single production-quality TypeScript file that runs as-is on iOS and Android with Expo SDK 58, fully functional, wired to real data, navigation and native features.
-
-${TECH_RULES}
-
-${CRAFT_RULES}
-
-SCREEN RULES
-- One file, one default-exported screen component. Small helper components inside the file are fine; use the app's shared components (provided below) for anything they cover, importing each one you use from its file.
-- Keep this file under 280 lines (a verifier blocks anything over 300, and this is a single file: there is no separate file to move parts into). Lean on the shared components for anything they already cover instead of re-implementing their styles inline, keep style objects compact, and skip comments. If the screen's key elements genuinely need more room, prioritize the ones listed above over extra polish rather than let the file grow past the limit.
-- Import every name you use. Never use a component, hook or helper that isn't imported or defined in this file.
-- Tab screens and pushed screens draw their own header (layouts hide the default header). The native tab bar sits at the bottom of tab screens: don't draw your own. Pushed screens need a back button (router.back()). Modal screens are page sheets: a grabber or a Cancel/Close button, a clear title, and the primary action.
-- Every button, row, tab and link must do something real: navigate, save, toggle, delete (with an Alert confirmation), or trigger a native feature. Create/edit forms save through the backend, give success haptics, then go back or close.
-- Detail screens read the record id with useLocalSearchParams<{ id?: string }>() and useRecord(collection, id); handle a missing record gracefully.
-- Screens share state ONLY through "@/lib/backend" (collections, useSetting) and route params. Anything that must outlive the screen (filters, drafts, selections, onboarding done) goes through useSetting or a collection, never module-level variables or React context of your own.
-
-OUTPUT: reply with ONLY the file's code, no prose, no Markdown fences.`
-
 /**
  * What every screen is opened with, decided before any screen is written:
  * screens are built in parallel, so the list that opens a detail screen and
@@ -319,48 +302,6 @@ export function routeContracts(plan: AppPlan, data: DataModel): string {
       return `- ${href}: no params. Open it with router.push("${href}").`
     })
     .join("\n")
-}
-
-export function screenPrompt(
-  plan: AppPlan,
-  screen: PlanScreen,
-  index: number,
-  ctx: { theme: AppTheme; data: DataModel; components: Record<string, string>; styleReference?: string; contracts?: string }
-) {
-  const screenList = plan.screens
-    .map((s) => `- ${screenHref(s)} (${s.presentation})${s.id === screen.id ? " <- this screen" : ""}: ${s.name}. ${s.purpose}`)
-    .join("\n")
-  const components = Object.entries(ctx.components)
-    .map(([path, code]) => `<file path="${path}">\n${code.trim()}\n</file>`)
-    .join("\n")
-    .slice(0, 18_000)
-  return `App: ${plan.appName}
-${plan.summary}
-Target users: ${plan.targetUsers}
-Navigation: ${plan.navigation}
-Design direction: ${plan.design.style}. Typography: ${plan.design.typography}.
-Current theme (use tokens, never these values): ${ctx.theme.mode} mode, primary ${ctx.theme.colors.primary}, background ${ctx.theme.colors.background}.
-
-All screens (URL, presentation):
-${screenList}
-
-Data collections (use these exact names and fields):
-${describeDataModel(ctx.data)}
-Settings keys: ${Object.keys(ctx.data.settings).join(", ") || "none"}. Signed-in user: ${ctx.data.user.name}.
-${ctx.contracts ? `
-Route params (every screen is built at the same time as others, so callers and this screen must follow these exactly):
-${ctx.contracts}
-` : ""}
-The app's shared components (import them from "@/components/..."):
-${components || "(none)"}
-${ctx.styleReference ? `\nAn already-built screen, for consistency of structure and style (do not copy its content):\n<reference>\n${ctx.styleReference}\n</reference>\n` : ""}
-Write screen ${index + 1} of ${plan.screens.length}: "${screen.name}" (id ${screen.id}, ${screen.presentation}), file ${screenPath(screen)}
-Purpose: ${screen.purpose}
-It must include:
-${screen.keyElements.map((e) => `- ${e}`).join("\n") || "- the elements its purpose needs"}
-Navigates to: ${screen.navigatesTo.map((id) => `/${id}`).join(", ") || "nothing specific"}
-
-Return the file's code now.`
 }
 
 // ---------------------------------------------------------------- targeted edits

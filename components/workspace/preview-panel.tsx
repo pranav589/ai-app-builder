@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ChevronLeft, ChevronRight, Code2, DatabaseZap, Eye, GitCompare, QrCode, RotateCw } from "lucide-react"
+import { ChevronLeft, ChevronRight, Code2, DatabaseZap, Eye, GitCompare, MousePointerClick, QrCode, RotateCw } from "lucide-react"
 import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
@@ -9,10 +9,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ChangesView } from "./changes-view"
 import { CodeView } from "./code-view"
 import { SCREEN_HEIGHT, SCREEN_WIDTH } from "./dummy-data"
+import { ElementInspector } from "./element-inspector"
 import { ExpoQrDialog, QrPattern } from "./expo-qr"
 import { AppPreview, useResetAppData } from "./app-preview"
+import type { ElementEdit, SelectedElement } from "@/lib/preview/protocol"
 import { PhoneFrame, type DevicePlatform } from "./screen-mock"
 import type { FileNode, ScreenNode } from "./types"
+
+/** "app/(tabs)/home.tsx:42:Text" -> { path: "app/(tabs)/home.tsx", line: 42 } (preview-runtime/modules.ts makeJsx). */
+function parseEid(eid: string): { path: string; line: number } | null {
+  const m = /^(.*):(\d+):[^:]+$/.exec(eid)
+  return m ? { path: m[1], line: Number(m[2]) } : null
+}
 
 // Scales the fixed-size device to whatever room the panel has.
 function useFitScale(ref: React.RefObject<HTMLDivElement | null>, w: number, h: number, pad = 24) {
@@ -37,6 +45,9 @@ function DevicePreview({
   platform,
   reloadKey,
   appName,
+  inspecting,
+  edit,
+  onSelectElement,
 }: {
   screens: ScreenNode[]
   activeId: string | null
@@ -44,6 +55,9 @@ function DevicePreview({
   platform: DevicePlatform
   reloadKey: number
   appName: string
+  inspecting: boolean
+  edit: ElementEdit | null
+  onSelectElement: (el: SelectedElement) => void
 }) {
   const stageRef = React.useRef<HTMLDivElement>(null)
   const scale = useFitScale(stageRef, SCREEN_WIDTH, SCREEN_HEIGHT)
@@ -67,7 +81,15 @@ function DevicePreview({
               {screen ? (
                 // A restart or platform switch starts the app fresh.
                 <div key={`${reloadKey}-${platform}`} className="size-full animate-in fade-in-0 duration-300">
-                  <AppPreview rootId={screen.id} platform={platform} appName={appName} onTopChange={setTopId} />
+                  <AppPreview
+                    rootId={screen.id}
+                    platform={platform}
+                    appName={appName}
+                    onTopChange={setTopId}
+                    inspect={inspecting}
+                    edit={edit}
+                    onSelectElement={onSelectElement}
+                  />
                 </div>
               ) : (
                 <div className="flex size-full flex-col items-center justify-center gap-2 p-8 text-center">
@@ -125,6 +147,7 @@ export function PreviewPanel({
   activeId,
   onActiveChange,
   files,
+  onApplyElementEdit,
 }: {
   projectId: string
   appName: string
@@ -132,12 +155,52 @@ export function PreviewPanel({
   activeId: string | null
   onActiveChange: (id: string) => void
   files: FileNode[]
+  onApplyElementEdit: (edit: ElementEdit) => Promise<{ ok: boolean; error?: string; resynced?: boolean }>
 }) {
   const resetData = useResetAppData()
   const [tab, setTab] = React.useState<"preview" | "code" | "changes">("preview")
   const [platform, setPlatform] = React.useState<DevicePlatform>("ios")
   const [reloadKey, setReloadKey] = React.useState(0)
   const [qrOpen, setQrOpen] = React.useState(false)
+  const [inspecting, setInspecting] = React.useState(false)
+  const [selected, setSelected] = React.useState<SelectedElement | null>(null)
+  const [previewEdit, setPreviewEdit] = React.useState<ElementEdit | null>(null)
+  const [inspectNotice, setInspectNotice] = React.useState<string | null>(null)
+  const [jumpTo, setJumpTo] = React.useState<{ path: string; line: number } | null>(null)
+
+  const toggleInspect = () => {
+    setInspecting((on) => !on)
+    setSelected(null)
+    setPreviewEdit(null)
+    setInspectNotice(null)
+  }
+
+  // A resync (e.g. an already-built project picking up a kit fix) means
+  // whatever eid the editor had was pointing at stale code, not what's
+  // actually selected; close it and ask for a fresh tap rather than letting
+  // the user keep editing a location that no longer means what they think.
+  const handleSave = async (edit: ElementEdit) => {
+    const r = await onApplyElementEdit(edit)
+    if (!r.ok && r.resynced) {
+      setSelected(null)
+      setPreviewEdit(null)
+      setInspectNotice("The preview just updated behind the scenes — tap the element again.")
+    }
+    return r
+  }
+  React.useEffect(() => {
+    if (!inspectNotice) return
+    const t = setTimeout(() => setInspectNotice(null), 5000)
+    return () => clearTimeout(t)
+  }, [inspectNotice])
+
+  const viewSelectedInCode = () => {
+    if (!selected) return
+    const at = parseEid(selected.eid)
+    if (!at) return
+    setJumpTo(at)
+    setTab("code")
+  }
 
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as "preview" | "code" | "changes")} className="h-full min-h-0 gap-0 bg-background">
@@ -190,6 +253,17 @@ export function PreviewPanel({
             <Button variant="ghost" size="icon-sm" aria-label="Open on device" title="Open on device" onClick={() => setQrOpen(true)}>
               <QrCode />
             </Button>
+            <span className="mx-0.5 h-5 w-px bg-border" />
+            <Button
+              variant={inspecting ? "secondary" : "ghost"}
+              size="icon-sm"
+              aria-pressed={inspecting}
+              aria-label="Select an element to edit its text or style"
+              title="Select an element to edit (no AI call)"
+              onClick={toggleInspect}
+            >
+              <MousePointerClick />
+            </Button>
           </div>
         )}
       </div>
@@ -202,12 +276,29 @@ export function PreviewPanel({
           platform={platform}
           reloadKey={reloadKey}
           appName={appName}
+          inspecting={inspecting}
+          edit={previewEdit}
+          onSelectElement={setSelected}
         />
-        <RunOnDeviceCard projectId={projectId} onOpen={() => setQrOpen(true)} />
+        {selected ? (
+          <ElementInspector
+            element={selected}
+            onClose={() => setSelected(null)}
+            onPreview={setPreviewEdit}
+            onSave={handleSave}
+            onViewCode={viewSelectedInCode}
+          />
+        ) : inspectNotice ? (
+          <p role="status" className="mx-3 mb-3 shrink-0 rounded-(--r-md) border border-border bg-background px-3 py-2 text-xs text-muted-foreground shadow-sm">
+            {inspectNotice}
+          </p>
+        ) : (
+          <RunOnDeviceCard projectId={projectId} onOpen={() => setQrOpen(true)} />
+        )}
       </TabsContent>
 
       <TabsContent value="code" className="min-h-0">
-        <CodeView tree={files} />
+        <CodeView tree={files} jumpTo={jumpTo} />
       </TabsContent>
 
       <TabsContent value="changes" className="min-h-0">

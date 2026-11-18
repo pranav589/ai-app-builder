@@ -18,7 +18,8 @@ export type ModelReply = {
   tokens?: { prompt?: number; completion?: number }
 }
 
-export type ModelAdapter = (turns: Turn[]) => Promise<ModelReply>
+/** `onDelta`, when given, is called with each streamed chunk of the model's reply as it arrives. */
+export type ModelAdapter = (turns: Turn[], onDelta?: (delta: string) => void) => Promise<ModelReply>
 
 export type Attempt = {
   n: number
@@ -42,6 +43,8 @@ export type RunOpts = {
   debugFail?: { gate: GateName; n: number }
   /** Identifies this project to the tsc gate's warm-LanguageService cache (lib/verify/gates/typecheck.ts). */
   projectKey?: string
+  /** Streamed chunks of the model's reply for the attempt in progress, if the adapter supports it. */
+  onDelta?: (delta: string) => void
 }
 
 export async function runChange(base: Workspace, userPrompt: string, model: ModelAdapter, opts: RunOpts = {}): Promise<RunResult> {
@@ -53,7 +56,7 @@ export async function runChange(base: Workspace, userPrompt: string, model: Mode
 
   for (let n = 1; n <= maxRepairs + 1; n++) {
     emit(n === 1 ? "writing" : "repairing", n === 1 ? undefined : `round ${n - 1} of ${maxRepairs}`)
-    const out = await model(turns)
+    const out = await model(turns, opts.onDelta)
     turns.push({ role: "assistant", content: out.text })
     const parsed = parseReply(out.text)
 

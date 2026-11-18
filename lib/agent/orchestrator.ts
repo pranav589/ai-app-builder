@@ -7,8 +7,11 @@ import { db, messages, projects, type Project } from "@/db"
 import { readAppDoc, type AppDoc } from "@/lib/app-runtime/app-doc"
 import { commitSnapshot } from "@/lib/versions/store"
 import { coderAdapter } from "@/lib/verify/coder"
-import { runChange } from "@/lib/verify/run"
-import { verifiedEditPrompt } from "@/lib/verify/prompts"
+import { MAX_REPAIRS, runChange } from "@/lib/verify/run"
+import { verifiedEditPrompt, verifiedNewScreenPrompt } from "@/lib/verify/prompts"
+import { applyElementEdit, parseEid } from "@/lib/verify/codemod"
+import { isAppOwned } from "@/lib/verify/ownership"
+import type { ElementEdit } from "@/lib/preview/protocol"
 import { docFromWorkspace, workspaceFromDoc } from "@/lib/verify/workspace"
 import { ensureManifest, syncManifest } from "@/lib/manifest/migrate"
 import { selectFiles } from "@/lib/verify/context"
@@ -16,7 +19,7 @@ import { formatDiagnostics, verifyChange } from "@/lib/verify/pipeline"
 import { compileManifest } from "@/lib/manifest/compile"
 import { KIT_PATH, KIT_SOURCE } from "@/lib/app-project/kit"
 import { ROUTER_INSTRUCTIONS, parseRouterReply, routerPrompt } from "@/lib/verify/router"
-import type { GateName } from "@/lib/verify/types"
+import type { GateName, Workspace } from "@/lib/verify/types"
 import { regenOutcome } from "./generation-guard"
 import { emptyDataModel, normalizeDataModel, type DataModel } from "@/lib/app-runtime/data-model"
 import { baseThemeFromPlan, fallbackThemes, normalizeThemes, type AppTheme, type ThemePackage } from "@/lib/app-runtime/theme"
@@ -29,14 +32,12 @@ import { getFastModel, getModel, reasoningEffort, reasoningProviderData } from "
 import {
   FOUNDATION_INSTRUCTIONS,
   PLANNER_INSTRUCTIONS,
-  SCREEN_INSTRUCTIONS,
   SHELL_INSTRUCTIONS,
   EDIT_INSTRUCTIONS,
   fixPrompt,
   foundationPrompt,
   layoutsPrompt,
   routeContracts,
-  screenPrompt,
   shellPrompt,
 } from "./prompts"
 import {
@@ -68,7 +69,6 @@ import type {
 const id = (p: string) => `${p}-${Date.now()}-${randomBytes(3).toString("hex")}`
 
 let planner: Agent | null = null
-let designer: Agent | null = null
 let planFixer: Agent | null = null
 let foundation: Agent | null = null
 let shell: Agent | null = null
@@ -86,7 +86,6 @@ function agents() {
   // The gateway's default output cap is small enough to cut a file off
   // mid-way, so set explicit limits.
   planner ??= new Agent({ name: "Planner", instructions: PLANNER_INSTRUCTIONS, model, modelSettings: { maxTokens: 6000, reasoning, providerData } })
-  designer ??= new Agent({ name: "Screen engineer", instructions: SCREEN_INSTRUCTIONS, model, modelSettings: { maxTokens: 24000, reasoning, providerData } })
   shell ??= new Agent({ name: "App shell", instructions: SHELL_INSTRUCTIONS, model, modelSettings: { maxTokens: 24000, reasoning, providerData } })
   // Fixes return only the changed lines (search/replace blocks).
   fixer ??= new Agent({ name: "Code fixer", instructions: EDIT_INSTRUCTIONS, model: fast, modelSettings: { maxTokens: 16000, reasoning, providerData } })
@@ -99,7 +98,7 @@ function agents() {
   })
   foundation ??= new Agent({ name: "Design system", instructions: FOUNDATION_INSTRUCTIONS, model: fast, modelSettings: { maxTokens: 12000, reasoning, providerData } })
   router ??= new Agent({ name: "Router", instructions: ROUTER_INSTRUCTIONS, model: fast, modelSettings: { maxTokens: 400, reasoning, providerData } })
-  return { planner, designer, planFixer, foundation, shell, fixer, router }
+  return { planner, planFixer, foundation, shell, fixer, router }
 }
 
 // ---------------------------------------------------------------- persistence
@@ -194,6 +193,18 @@ async function loadProject(projectId: string) {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
   if (!project) throw new Error("project not found")
   return project
+}
+
+/**
+ * Unlike theme/backend (parameterized by appSlug/data, rebuilt by
+ * runGeneration), kit/index.tsx is a pure constant with nothing per-project
+ * about it. A project built before a kit fix lands keeps the stale copy in
+ * its stored files otherwise, since edit paths read doc.files as persisted
+ * and don't go through a full build; resync it to the current KIT_SOURCE on
+ * every edit so a kit fix reaches every project immediately.
+ */
+function withCurrentKit(ws: Workspace): Workspace {
+  return ws.files[KIT_PATH] === KIT_SOURCE ? ws : { ...ws, files: { ...ws.files, [KIT_PATH]: KIT_SOURCE } }
 }
 
 // ---------------------------------------------------------------- streaming helpers
@@ -657,7 +668,7 @@ export async function repairFile(run: LiveRun, projectId: string, path: string, 
 
   const manifest = ensureManifest(doc, await latestPlan(projectId))
   if (!manifest) return null
-  const ws = workspaceFromDoc({ ...doc, manifest })
+  const ws = withCurrentKit(workspaceFromDoc({ ...doc, manifest }))
   const exports = projectExports(ws.files)
   const prompt = verifiedEditPrompt(`In the running app, ${path} crashed with: "${message.slice(0, 500)}". Find the cause and fix it.`, selectFiles(ws, [path]), {
     manifest,
@@ -679,6 +690,56 @@ export async function repairFile(run: LiveRun, projectId: string, path: string, 
   return screen ? { path, code: newCode, screenId: screen.id } : { path, code: newCode }
 }
 
+// ---------------------------------------------------------------- canvas inline edits
+
+export type CanvasEditResult = { path: string; code: string; version: number; extraFiles?: Record<string, string> } | { error: string; extraFiles?: Record<string, string> }
+
+/**
+ * A tap-to-select text/style edit from the canvas inspector (Phase 8, item
+ * 3), applied with no model call: an AST codemod (lib/verify/codemod.ts)
+ * rewrites the JSX element at the edit's eid ("file:line:Tag"), then the
+ * result goes through the same gates an AI edit does (parse/policy/tsc/
+ * render) before it's kept.
+ */
+export async function applyCanvasEdit(projectId: string, edit: ElementEdit): Promise<CanvasEditResult> {
+  const target = parseEid(edit.eid)
+  if (!target) return { error: "Couldn't place that element in the source." }
+
+  const project = await loadProject(projectId)
+  const doc = readAppDoc(project.previewScreens)
+  const manifest = ensureManifest(doc, await latestPlan(projectId))
+  if (!manifest) return { error: "This project isn't built yet." }
+  // kit/index.tsx is a pure constant (unlike theme/backend, nothing about it
+  // is per-project), so a project built before a kit fix landed can safely
+  // pick it up here instead of waiting for a full rebuild. Reported back as
+  // `extraFiles` (even when the edit itself fails) so the running preview
+  // picks it up right away: an eid pointing inside kit/index.tsx, from a
+  // stale copy that didn't forward data-eid to its own elements, is exactly
+  // the bug this resync fixes for the *next* tap.
+  const stale = doc.files?.[KIT_PATH] !== KIT_SOURCE
+  const extraFiles = stale ? { [KIT_PATH]: KIT_SOURCE } : undefined
+  const ws = withCurrentKit(workspaceFromDoc({ ...doc, manifest }))
+  // Shared code (the kit, the theme, compiler-written layouts): an edit there
+  // would change every screen using it, not the element that was tapped.
+  if (!isAppOwned(target.file)) return { error: "That part is shared by the whole app, so it can't be edited here. Ask in chat instead.", extraFiles }
+  const code = ws.files[target.file]
+  if (code === undefined) return { error: "That file isn't part of the project anymore.", extraFiles }
+
+  const result = applyElementEdit(code, target, { text: edit.text, from: edit.from, style: edit.style })
+  if ("error" in result) return { error: result.error, extraFiles }
+  const next = result.code
+  if (next === code) return { error: "Nothing to change.", extraFiles }
+
+  const verdict = await verifyChange(ws, { intent: "Inline edit", manifestPatch: [], files: [{ path: target.file, op: "write", content: next }] }, projectId)
+  if (!verdict.ok) return { error: formatDiagnostics(verdict), extraFiles }
+
+  const updatedDoc = docFromWorkspace(doc, verdict.ws!)
+  const { version } = await commitSnapshot(projectId, updatedDoc, { author: project.userId, intent: "Inline edit" })
+  const newCode = updatedDoc.screens.find((s) => s.path === target.file)?.code ?? updatedDoc.files?.[target.file]
+  if (newCode === undefined) return { error: "Couldn't apply that edit there.", extraFiles }
+  return { path: target.file, code: newCode, version, extraFiles }
+}
+
 // ---------------------------------------------------------------- targeted edits
 
 /**
@@ -698,7 +759,7 @@ export async function runVerifiedEdit(run: LiveRun, projectId: string, edit: Edi
   const ready = doc.screens.filter((s) => s.state === "ready" && s.code && s.path)
   const manifest = ensureManifest(doc, await latestPlan(projectId))
   if (!manifest) return { needsPlan: true }
-  const ws = workspaceFromDoc({ ...doc, manifest })
+  const ws = withCurrentKit(workspaceFromDoc({ ...doc, manifest }))
 
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "")
   const targetPaths = new Set<string>()
@@ -1031,7 +1092,6 @@ const STYLE_REF_LIMIT = 12_000
 const SCREEN_CONCURRENCY = Math.max(1, Math.min(6, Number(process.env.AI_SCREEN_CONCURRENCY) || 3))
 
 export async function runGeneration(run: LiveRun, projectId: string) {
-  const { designer } = agents()
   const plan = await latestPlan(projectId)
   if (!plan) throw new Error("There is no plan to build yet.")
   const project = await loadProject(projectId)
@@ -1154,7 +1214,6 @@ export async function runGeneration(run: LiveRun, projectId: string) {
   const kept: string[] = []
   const buildScreen = async (screenId: string, n: number) => {
     const spec = plan.screens.find((s) => s.id === screenId)!
-    const index = plan.screens.indexOf(spec)
     const path = screenPath(spec)
     // The first finished screen keeps the rest consistent.
     const reference = screens.find((s) => s.state === "ready" && s.code && s.id !== screenId)?.code
@@ -1164,85 +1223,53 @@ export async function runGeneration(run: LiveRun, projectId: string) {
     run.emit({ type: "screen_start", id: screenId, index: n, total: todo.length })
     run.emit({ type: "status", text: statusText() })
 
+    const started = Date.now()
+    const hb = heartbeat(run, statusText)
     let code = ""
     let error: string | undefined
-    let truncatedBefore = false
-    for (let attempt = 0; attempt < 2 && !code; attempt++) {
-      if (attempt > 0) {
-        run.emit({ type: "screen_start", id: screenId, index: n, total: todo.length })
-        run.emit({ type: "status", text: `Retrying ${spec.name}` })
+    try {
+      // A brand-new screen goes through the same change gateway an edit
+      // does: the coder model (@/kit, typed @/nav and @/data/types), bounded
+      // repair fed with real diagnostics, then parse/policy/tsc/render gates
+      // before anything is kept. Snapshot the other screens built so far
+      // once; concurrent siblings finishing mid-repair aren't picked up, same
+      // as an edit's own single Workspace snapshot.
+      const allFiles = { ...files, ...Object.fromEntries(screens.filter((s) => s.code && s.path).map((s) => [s.path!, s.code!])) }
+      const prompt = verifiedNewScreenPrompt(spec, screenId, path, {
+        manifest,
+        data,
+        components: components(),
+        styleReference: reference?.slice(0, STYLE_REF_LIMIT),
+        contracts,
+      })
+      const result = await runChange({ files: allFiles }, prompt, coderAdapter, {
+        debugFail: verifyDebugFail(),
+        projectKey: projectId,
+        onDelta: (delta) => {
+          hb.touch()
+          run.emit({ type: "screen_delta", id: screenId, delta })
+        },
+        onState: (state) => {
+          if (state !== "writing" && state !== "repairing") return
+          // Reset the live preview for the retry; the client clears its
+          // buffer for this screen id on screen_start.
+          run.emit({ type: "screen_start", id: screenId, index: n, total: todo.length })
+          run.emit({ type: "status", text: state === "repairing" ? `Retrying ${spec.name}` : statusText() })
+        },
+      })
+      emitAttempts(run, result.attempts)
+      if (result.state === "needs_user") {
+        error = result.reason === "question" ? result.message : `Didn't pass the verified engine's checks after ${MAX_REPAIRS} repair rounds: ${result.message}`
+        console.warn(`[build ${projectId}] screen ${screenId}: ${error}`)
+      } else {
+        code = result.ws.files[path]
+        console.info(`[build ${projectId}] screen ${screenId}: verified in ${Date.now() - started}ms (${result.attempts.length} attempt${result.attempts.length === 1 ? "" : "s"})`)
       }
-      const started = Date.now()
-      const hb = heartbeat(run, statusText)
-      const info: { finishReason?: string } = {}
-      try {
-        const prompt = screenPrompt(plan, spec, index, {
-          theme: designTheme,
-          data,
-          components: components(),
-          styleReference: reference?.slice(0, STYLE_REF_LIMIT),
-          contracts,
-        })
-        const raw = await streamText(
-          designer,
-          truncatedBefore
-            ? `${prompt}
-
-IMPORTANT: your previous attempt was cut off at the output limit. Write a more compact file: at most about 300 lines, reuse the shared components, keep styles short, and no comments.`
-            : prompt,
-          (delta) => {
-            hb.touch()
-            run.emit({ type: "screen_delta", id: screenId, delta })
-          },
-          () => run.emit({ type: "status", text: `The AI model didn't answer, trying ${spec.name} again` }),
-          info
-        )
-        hb.stop()
-        const written = Date.now()
-        // Cut off at the output limit: the file is incomplete and no fix can
-        // complete it (a fix would have to write it all again). Retry smaller.
-        if (info.finishReason === "length") {
-          truncatedBefore = true
-          error = "The screen came out longer than the AI model's output limit."
-          console.warn(`[build ${projectId}] screen ${screenId}: output cut off at the limit after ${written - started}ms (${raw.length} chars), retrying more compact`)
-          continue
-        }
-        // Some models answer with a file name or a sentence instead of the
-        // file (the code stays in their hidden reasoning). Nothing to fix:
-        // ask again.
-        const draft = extractCode(raw)
-        if (draft.length < 300 || !/\bexport\b/.test(draft)) {
-          error = "The AI model didn't return the screen's code."
-          console.warn(`[build ${projectId}] screen ${screenId}: reply had no code (${raw.length} chars: ${JSON.stringify(raw.slice(0, 80))}), retrying`)
-          continue
-        }
-        const allFiles = { ...files, ...Object.fromEntries(screens.filter((s) => s.code && s.path).map((s) => [s.path!, s.code!])) }
-        const checked = await checkAndFix(run, path, draft, allFiles, spec.name)
-        console.info(`[build ${projectId}] screen ${screenId}: written ${written - started}ms, checks/fixes ${Date.now() - written}ms`)
-        const stop = blocking(checked.problems)
-        if (stop.length) {
-          error = stop[0]
-          console.warn(`[build ${projectId}] screen ${screenId}: still failing checks`, stop)
-        } else {
-          // A freshly generated screen gets the same real checks an edit
-          // gets (parse/policy/tsc/render), not only today's regex/noResolve
-          // check: nothing unverified should reach the user, builds included.
-          // Through verifyChange (not verifyWorkspace directly) so concurrent
-          // screen builds share its lock around the render gate's global state.
-          const verdict = await verifyChange({ files: allFiles }, { intent: "", manifestPatch: [], files: [{ path, op: "write", content: checked.code }] }, projectId)
-          // Use the gateway's own output (autoImport may have adjusted it), not the pre-verification draft, so what's saved is exactly what passed.
-          if (verdict.ok) code = verdict.ws!.files[path]
-          else {
-            error = `Didn't pass the verified engine's checks: ${formatDiagnostics(verdict)}`
-            console.warn(`[build ${projectId}] screen ${screenId}: failed verified gates (${verdict.failedAt})`)
-          }
-        }
-      } catch (e) {
-        error = e instanceof Error ? e.message : "Generation failed."
-        console.error("screen generation failed", screenId, e)
-      } finally {
-        hb.stop()
-      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : "Generation failed."
+      console.error("screen generation failed", screenId, e)
+    } finally {
+      hb.stop()
     }
 
     active.delete(spec.name)

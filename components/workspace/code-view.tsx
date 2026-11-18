@@ -119,13 +119,24 @@ function TreeItem({
   )
 }
 
-function CodeViewer({ file }: { file: FileLeaf }) {
+function CodeViewer({ file, highlightLine }: { file: FileLeaf; highlightLine?: number }) {
   const lines = useHighlightedCode(file.content, file.language)
+  const lineRef = React.useRef<HTMLSpanElement>(null)
+
+  React.useEffect(() => {
+    if (highlightLine) lineRef.current?.scrollIntoView({ block: "center" })
+  }, [file.path, highlightLine])
+
   return (
     <CodeBlock className="h-full rounded-none border-0 bg-background">
       <CodeBlockContent lineNumbers className="h-full px-4 py-3 text-[12.5px]">
         {lines.map((line, i) => (
-          <CodeBlockLine key={i} className="-mx-4 px-4">
+          <CodeBlockLine
+            key={i}
+            ref={i + 1 === highlightLine ? lineRef : undefined}
+            variant={i + 1 === highlightLine ? "highlighted" : "default"}
+            className="-mx-4 px-4"
+          >
             {line}
           </CodeBlockLine>
         ))}
@@ -134,16 +145,43 @@ function CodeViewer({ file }: { file: FileLeaf }) {
   )
 }
 
-export function CodeView({ tree }: { tree: FileNode[] }) {
+export function CodeView({ tree, jumpTo }: { tree: FileNode[]; jumpTo?: { path: string; line: number } | null }) {
   const files = React.useMemo(() => flatten(tree), [tree])
   const [active, setActive] = React.useState<FileLeaf | undefined>(
     () => files.find((f) => f.path.endsWith("(tabs)/index.tsx")) ?? files[0]
   )
+  const [highlightLine, setHighlightLine] = React.useState<number | undefined>(undefined)
   const [open, setOpen] = React.useState<Set<string>>(() => new Set(["app", "app/(tabs)", "components"]))
   const [query, setQuery] = React.useState("")
   const [treeOpen, setTreeOpen] = React.useState(true)
   const visible = React.useMemo(() => filterTree(tree, query.trim().toLowerCase()), [tree, query])
   const searching = query.trim().length > 0
+
+  // Jumped here from the preview's canvas inspector (Phase 9, item 3):
+  // open the element's file, expand its folders, and highlight its line.
+  React.useEffect(() => {
+    if (!jumpTo) return
+    const file = files.find((f) => f.path === jumpTo.path)
+    if (!file) return
+    setActive(file)
+    setHighlightLine(jumpTo.line)
+    setOpen((prev) => {
+      const next = new Set(prev)
+      const parts = file.path.split("/").slice(0, -1)
+      let p = ""
+      for (const part of parts) {
+        p = p ? `${p}/${part}` : part
+        next.add(p)
+      }
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpTo, files])
+
+  const openFile = (file: FileLeaf) => {
+    setActive(file)
+    setHighlightLine(undefined)
+  }
 
   const toggle = (path: string) =>
     setOpen((prev) => {
@@ -192,7 +230,7 @@ export function CodeView({ tree }: { tree: FileNode[] }) {
               activePath={active?.path ?? ""}
               open={searching ? allFolders : open}
               onToggle={toggle}
-              onOpenFile={setActive}
+              onOpenFile={openFile}
             />
           ))}
           {visible.length === 0 && <li className="px-2 py-4 text-center text-xs text-muted-foreground">No matching files</li>}
@@ -234,7 +272,7 @@ export function CodeView({ tree }: { tree: FileNode[] }) {
               </p>
             )}
             <div className="min-h-0 flex-1">
-              <CodeViewer key={active.path} file={active} />
+              <CodeViewer key={active.path} file={active} highlightLine={highlightLine} />
             </div>
           </>
         ) : (

@@ -173,6 +173,7 @@ export function WorkspaceShell({
         setSelectedId(id)
       }}
       files={files}
+      onApplyElementEdit={agent.applyElementEdit}
     />
   )
 

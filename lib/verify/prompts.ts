@@ -6,6 +6,7 @@
 import { MANIFEST_ICON_NAMES } from "@/lib/app-project/icons"
 import { KIT_PROPS_REFERENCE } from "@/lib/app-project/kit"
 import { CRAFT_RULES, TECH_RULES } from "@/lib/agent/prompts"
+import type { PlanScreen } from "@/lib/agent/types"
 import { describeDataModel, type DataModel } from "@/lib/app-runtime/data-model"
 import type { AppManifest } from "@/lib/manifest/schema"
 
@@ -81,6 +82,55 @@ ${describeDataModel(ctx.data)}
 
 Current files to change:
 ${files.map((f) => `<current path="${f.path}">\n${f.code.trimEnd()}\n</current>`).join("\n\n")}
+
+Return the change now.`
+}
+
+/**
+ * Builds the first attempt for a brand-new screen already declared in the
+ * manifest (the planner adds the manifest entry; this asks the coder for
+ * just its file). Reply format is narrowed to <intent> + a single <file>:
+ * no manifest_patch (already applied), no edit/delete.
+ */
+export function verifiedNewScreenPrompt(
+  spec: PlanScreen,
+  screenId: string,
+  path: string,
+  ctx: { manifest: AppManifest; data: DataModel; components: Record<string, string>; styleReference?: string; contracts?: string }
+) {
+  const { manifest } = ctx
+  const screens = Object.entries(manifest.screens)
+    .map(([id, s]) => `- ${id} (${s.presentation}${s.params ? `, params: ${JSON.stringify(s.params)}` : ""}${s.collection ? `, about "${s.collection}"` : ""}): ${s.title}${id === screenId ? " <- this screen" : ""}`)
+    .join("\n")
+  const componentsText = Object.entries(ctx.components)
+    .map(([p, code]) => `<file path="${p}">\n${code.trim()}\n</file>`)
+    .join("\n")
+    .slice(0, 18_000)
+  return `Write the file for a new screen already declared in the manifest.
+
+# Manifest screens
+${screens}
+
+Data collections (use these exact names and fields):
+${describeDataModel(ctx.data)}
+${
+  ctx.contracts
+    ? `
+Route params (every screen in this build is written at the same time as the others, so callers and this screen must follow these exactly):
+${ctx.contracts}
+`
+    : ""
+}
+The app's shared components (import them from "@/components/..."):
+${componentsText || "(none)"}
+${ctx.styleReference ? `\nAn already-built screen, for consistency of structure and style (do not copy its content):\n<reference>\n${ctx.styleReference}\n</reference>\n` : ""}
+Screen to write: "${spec.name}" (id ${screenId}, ${spec.presentation}), file ${path}
+Purpose: ${spec.purpose}
+It must include:
+${spec.keyElements.map((e) => `- ${e}`).join("\n") || "- the elements its purpose needs"}
+Navigates to: ${spec.navigatesTo.map((id) => `/${id}`).join(", ") || "nothing specific"}
+
+Reply with <intent> and a single <file path="${path}">...</file> block only — no <manifest_patch> (the manifest already declares this screen), no <edit> or <delete>.
 
 Return the change now.`
 }

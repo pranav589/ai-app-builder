@@ -201,6 +201,7 @@ function CodeBlockLine({
   className,
   variant = "default",
   children,
+  ref,
   ...props
 }: React.ComponentProps<"span"> & VariantProps<typeof codeBlockLineVariants>) {
   // An empty line holds a newline so copying a selection keeps blank lines.
@@ -212,6 +213,7 @@ function CodeBlockLine({
 
   return (
     <span
+      ref={ref}
       data-slot="code-block-line"
       data-variant={variant}
       className={cn(codeBlockLineVariants({ variant }), className)}

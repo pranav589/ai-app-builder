@@ -18,69 +18,27 @@ project (new and existing) runs the one pipeline. The `projects.engine` column i
 
 | From | Item | Blocked on |
 |---|---|---|
-| Phase 7, item 4 | New screens still go through today's screen-builder prompt (gate-checked, but not through `@/kit`), not the coder + `@/kit` + gateway + bounded repair that edits use. | Streaming support in the coder model adapter, so the live-typing UX survives. |
-| Phase 8, item 3 | Canvas inline text/style edits: an AST codemod at an `eid` location, run through the gates, no model call. | The canvas inspector (select an element in the preview), which doesn't exist yet. Only the message types (`SelectedElement`, `ElementEdit`, `apply-edit`) are defined. |
-| Phase 9, item 3 | Clicking an element in the preview jumps the Code tab to its source lines. | The same canvas inspector. |
 | Phase 10, item 4 | `bundleGate()` exists but nothing calls it. | A "publish" action (none exists yet), or Phase 10b. |
 | Phase 10 | Uncommitted: device lane, Start/Stop dialog, bundle gate, scripts. | Testing on a real phone (section 3) — now partly done, see below. |
 | Found 2026-11-17, Phase 3 eval | Every real project's main screen is already over the 300-line policy gate limit (`clearlist` 510, `rhythm` 980–1232, even the newest "Tickly" 356) — any edit to one almost always trips `file_too_long` on attempt 1 regardless of edit quality. **Fully addressed 2026-11-18**: `lib/agent/prompts.ts` `SCREEN_INSTRUCTIONS` keeps a *newly generated* screen under 280 lines, and `lib/verify/gates/policy.ts`'s line check now only blocks a file for getting *longer* than it already was, so pre-existing oversized screens can be edited again. See section 4. |  — |
 
-## 3. Manual tests not yet run
+## 3. Manual tests
 
-### Needs a live `AI_API_KEY` top-up
+All manual tests across every phase were run and confirmed by the user (2026-11-18), as of that
+point in the plan.
 
-- **Phase 2:** tests 1, 2 and 4: make a small edit, and check that the `VERIFY_DEBUG_FAIL=policy:2` and `policy:9` cases behave as described.
-- **Phase 3:** ~~run `npm run eval -- --engine verified --fixture <name>` and keep the baseline numbers.~~ Done, 2026-11-17, against `eval/fixtures/notes.json` (a hand-written fixture, see below): 42% first-pass, 77% committed, 1 real failure out of 26. Baseline recorded in [verified-code-plan.md](verified-code-plan.md) Phase 3. Every later phase is compared against it.
-- **Phase 4:**
-  - Re-run the eval and compare with Phase 3: more errors should be caught at `tsc`, and gate time should stay under ~2 s per change.
-  - Try the "show the habit's category" edit.
-  - Check that normal edits still feel fast.
-- **Phase 5:**
-  - With `VERIFY_DEBUG_INJECT=crash`, the crash never reaches the canvas.
-  - The "add a delete button" edit works.
-  - Re-run the eval.
-
-### Can be done any time
-
-- **Phase 2:**
-  - Test 3: the event stream sends a handful of events, not one per second.
-  - Test 5: repair runs at most once per version.
-
-### "To be tested later"
-
-- **Phase 6:**
-  - "Add a Settings tab" shows up with an icon (3 tries on a fresh project).
-  - Renaming the Profile tab changes only the manifest and layout.
-  - The rename survives a later additive rebuild.
-  - The tab bar still looks right in the browser preview.
-  - Re-run the eval.
-- **Phase 7:**
-  - A kit-style edit imports from `@/kit`.
-  - "Add a map" gets a clear "not supported" answer.
-  - "Make it better" gets a question with concrete options.
-- **Phase 8:**
-  - "Add a scroll to the home screen" finishes in about 10–15 s and changes only that screen.
-  - "What screens does my app have?" gets an answer and creates no new version.
-- **Phase 9:**
-  - Code tab badges are correct: App / Generated / Platform.
-  - The Changes tab lists only the touched files, with a readable diff.
-
-### Needs a real phone on the same Wi-Fi
-
-Run `npm run device:deps` once first.
-
-- **Phase 10:**
-  - ~~Press Start in "Test on your phone", scan the QR with Expo Go.~~ Done, 2026-11-17, on
-    `proj-1794910414759-b2d193` (Android). Found and fixed a real, platform-wide bug in the
-    process: the device backend's `useCollection`/`useRecord`/`useSetting` could get stuck
-    showing stale data forever under the React Compiler — see
-    [verified-code-plan.md](verified-code-plan.md) Phase 10's "Real-device finding" note.
-    Fixed in `lib/app-project/templates.ts`; regression-tested in
-    `lib/app-project/__tests__/backend-device.test.ts`.
-  - Still to check: Stop resets the dialog to "Not running"; tabs sit above the phone's
-    navigation bar and have icons; multiple screens; delete an item (only add + live update
-    were exercised); `bundleGate()` passes while running and fails readably when stopped.
-  - This also covers the device half of Phase 6, test 4: tabs not under the navigation bar.
+**New since then:**
+- Phase 7 item 4 (needs a live `AI_API_KEY`): new-screen generation rewritten to go through the
+  verified coder + `@/kit` + gateway, with streaming restored — see verified-code-plan.md
+  Phase 7's status note. Its own manual test 1 (and the "new screen" half of test 2) needs
+  re-running against this new code path: create a fresh project and confirm screens still
+  stream into view live and come out built from `@/kit`.
+- Phase 8 item 3 (no AI involved, can be done any time): the canvas inspector UI (an "Inspect"
+  toggle in the Preview toolbar, tap an element, edit its text/style in the panel that appears)
+  is built but not yet clicked through by hand — see verified-code-plan.md Phase 8's user test 3.
+- Phase 9 item 3 (no AI involved, can be done any time), done 2026-11-18: the inspector's "View
+  in Code tab" button — tap an element, press the code icon, confirm the Code tab opens to the
+  right file and line. See verified-code-plan.md Phase 9's user test 3.
 
 ## 4. Decisions still to make
 

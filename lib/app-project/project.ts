@@ -164,24 +164,32 @@ export function autoImport(code: string, local: ProjectExports = {}): string {
   }
   if (!additions.size && !namespaces.length && !defaults.length) return code
 
+  // Never changes the line count: the preview's JSX keeps __source line
+  // numbers, and the canvas inspector's eids ("file:line:Type") must point at
+  // the same lines in the stored file the codemod edits.
   let out = code
   const newLines: string[] = defaults.map(([n, mod]) => `import ${n} from "${mod}"`)
   for (const [mod, names] of additions) {
-    // Merge into an existing `import { ... } from "mod"` when there is one.
+    // Merge into an existing `import { ... } from "mod"` when there is one,
+    // in place (a multi-line import keeps its line breaks).
     const re = new RegExp(`import\\s*(type\\s+)?\\{([^}]*)\\}\\s*from\\s*["']${escapeRe(mod)}["']`)
     const m = re.exec(out)
     if (m && !m[1]) {
-      const list = m[2].trim().replace(/,\s*$/, "")
-      out = out.replace(m[0], `import { ${list ? `${list}, ` : ""}${names.join(", ")} } from "${mod}"`)
+      const inner = m[2]
+      const head = inner.replace(/\s*$/, "")
+      const tail = inner.slice(head.length)
+      const sep = !head.trim() ? " " : head.endsWith(",") ? " " : ", "
+      const merged = m[0].replace(`{${inner}}`, `{${head}${sep}${names.join(", ")}${tail || " "}}`)
+      out = out.slice(0, m.index) + merged + out.slice(m.index + m[0].length)
     } else newLines.push(`import { ${names.join(", ")} } from "${mod}"`)
   }
   for (const [n, mod] of namespaces) newLines.push(`import * as ${n} from "${mod}"`)
   if (!newLines.length) return out
-  // After the last import, or at the top.
-  const lastImport = [...out.matchAll(/^\s*import[\s\S]*?from\s*["'][^"']+["'];?\s*$/gm)].pop()
-  if (lastImport?.index === undefined) return `${newLines.join("\n")}\n${out}`
+  // On the same line as the last import, or at the start of line 1.
+  const lastImport = [...out.matchAll(/^\s*import[\s\S]*?from\s*["'][^"']+["'];?[ \t]*$/gm)].pop()
+  if (lastImport?.index === undefined) return `${newLines.join("; ")}; ${out}`
   const at = lastImport.index + lastImport[0].length
-  return `${out.slice(0, at)}\n${newLines.join("\n")}${out.slice(at)}`
+  return `${out.slice(0, at)}; ${newLines.join("; ")}${out.slice(at)}`
 }
 
 /** Every import specifier in a file. */

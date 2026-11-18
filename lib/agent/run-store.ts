@@ -64,7 +64,7 @@ export async function activeRun(projectId: string): Promise<AgentRunRow | null> 
  * Takes the project's single run slot. Returns null when another run is
  * active. Dead runs are cleared first, and old finished runs pruned.
  */
-export async function openRun(projectId: string, kind: "agent" | "repair", input?: RunInput): Promise<AgentRunRow | null> {
+export async function openRun(projectId: string, kind: "agent" | "repair" | "canvas-edit", input?: RunInput): Promise<AgentRunRow | null> {
   await expireStaleRuns(projectId)
   db.delete(agentRuns)
     .where(
@@ -83,10 +83,10 @@ export async function openRun(projectId: string, kind: "agent" | "repair", input
         projectId,
         kind,
         input: input ?? null,
-        // A repair runs right here, so it starts out running.
-        status: kind === "repair" ? "running" : "queued",
-        heartbeatAt: kind === "repair" ? new Date() : null,
-        startedAt: kind === "repair" ? new Date() : null,
+        // A repair or canvas edit runs right here, so it starts out running.
+        status: kind === "repair" || kind === "canvas-edit" ? "running" : "queued",
+        heartbeatAt: kind === "repair" || kind === "canvas-edit" ? new Date() : null,
+        startedAt: kind === "repair" || kind === "canvas-edit" ? new Date() : null,
       })
       .returning()
     return row

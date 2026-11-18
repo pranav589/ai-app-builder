@@ -56,6 +56,8 @@ export function useAgent({
   const [themes, setThemes] = React.useState<ThemePackage | null>(initialThemes)
   const [dataModel, setDataModel] = React.useState<DataModel | null>(initialData)
   const [files, setFiles] = React.useState<Record<string, string>>(initialFiles)
+  const filesRef = React.useRef(files)
+  filesRef.current = files
   const [backend, setBackend] = React.useState<BackendInfo | null>(initialBackend)
 
   // Streaming code is buffered and flushed on a timer, not per token.
@@ -351,6 +353,40 @@ export function useAgent({
     if (error?.retry) void send(error.retry)
   }, [error, send])
 
+  /**
+   * A canvas inspector edit (Phase 8, item 3): no AI call, just the AST
+   * codemod and the usual gates. Applies the saved code to whichever of
+   * `screens`/`files` holds that path, same as a repair result.
+   */
+  const applyElementEdit = React.useCallback(
+    async (edit: { eid: string; text?: string; from?: string; style?: Record<string, string> }) => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/canvas-edit`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(edit),
+        })
+        const data = (await res.json().catch(() => null)) as { path?: string; code?: string; error?: string; extraFiles?: Record<string, string> } | null
+        // A platform file (e.g. a kit fix) that this project's stored copy
+        // predates: picked up right away, whether or not the edit itself
+        // succeeded. The server keeps sending it until an edit is saved, so
+        // only a copy that differs from what the preview already runs counts
+        // as a resync.
+        const extra = data?.extraFiles
+        const resynced = !!extra && Object.entries(extra).some(([p, c]) => filesRef.current[p] !== c)
+        if (extra && resynced) setFiles((prev) => ({ ...prev, ...extra }))
+        if (!res.ok || !data || data.error || !data.path || data.code === undefined) return { ok: false as const, error: data?.error ?? "Couldn't apply that edit.", resynced }
+        const { path, code } = data as { path: string; code: string }
+        setScreens((prev) => (prev.some((s) => s.path === path) ? prev.map((s) => (s.path === path ? { ...s, code } : s)) : prev))
+        setFiles((prev) => (prev[path] !== undefined ? { ...prev, [path]: code } : prev))
+        return { ok: true as const, resynced }
+      } catch {
+        return { ok: false as const, error: "Couldn't reach the server." }
+      }
+    },
+    [projectId]
+  )
+
   return {
     phase,
     messages,
@@ -378,5 +414,6 @@ export function useAgent({
     setBackend,
     /** Sets up (or repairs) the app's CloudHike backend; progress streams into the chat. */
     setupBackend: (services: string[]) => send({ action: "backend", services }),
+    applyElementEdit,
   }
 }

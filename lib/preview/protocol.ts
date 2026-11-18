@@ -35,7 +35,10 @@ export type SelectedElement = {
   /** "file:line:Type", e.g. "app/(tabs)/home.tsx:42:Text". Points at the JSX in the source. */
   eid: string
   tag: string
+  /** The element's one piece of text (its own, or a kit component's label/title), or null when it has none or several. */
   text: string | null
+  /** A @/kit component used at this line: its look comes from kit props (tone, variant...), so style overrides don't apply. */
+  kit: boolean
   rect: { x: number; y: number; width: number; height: number }
   styles: Record<string, string>
 }
@@ -43,6 +46,8 @@ export type SelectedElement = {
 export type ElementEdit = {
   eid: string
   text?: string
+  /** The text being replaced, as it currently is in the source: picks the right element/prop when a line has several. */
+  from?: string
   style?: Record<string, string>
 }
 
