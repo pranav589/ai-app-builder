@@ -42,7 +42,9 @@ flowchart TD
 |---|---|
 | `app/page.tsx` | Homepage; renders `PromptBox` |
 | `components/home/*` (prompt box, examples) | The input UI, asset attach, submit |
-| `app/api/projects/route.ts` | `POST` handler: uploads attached assets to storage, inserts a `projects` row and the first `messages` row in **one DB transaction** |
+| `app/api/projects/route.ts` | HTTP route handler for listing and creating user projects |
+| `lib/projects/create-project.ts` | Business logic: validates input, uploads assets to storage, handles rollback on error |
+| `db/projects.ts` | Database queries and transactions for projects and initial message records |
 | `lib/storage.ts` | S3-compatible upload helper for attached assets |
 | `db/schema.ts` | `projects`, `messages` table shapes |
 | `app/workspace/[projectId]/page.tsx` | Server component the browser lands on next: loads the project + message history + backend status, renders `WorkspaceShell` |
@@ -101,7 +103,7 @@ flowchart TD
 | `lib/jobs/cloudhike-jobs.ts` | Decides whether to enqueue the run to the Cloudhike Jobs HTTP queue (production) or just call `executeRun` in-process (local dev) |
 | `app/api/jobs/agent/route.ts` | The webhook a Cloudhike Jobs worker calls back into to actually execute a run in production |
 | `lib/agent/execute.ts` | `executeRun` — the single entry point both paths above call into |
-| `lib/agent/orchestrator.ts` | The brain. Contains `runPlanning` (streams a planner AI that replies in tagged blocks like `<plan>...</plan>`) and `runGeneration` (builds theme/data/shell, then every screen) |
+| `lib/agent/orchestrator.ts` | The brain. Facade re-exporting modular agent lifecycle subsystems: planning (`planning.ts`), generation (`generation.ts`), message routing (`router.ts`), history & state persistence (`history.ts`), repair (`repair.ts`), canvas AST edits (`canvas-edit.ts`), and verified single-screen edits (`verified-edit.ts`) |
 | `lib/agent/protocol.ts` | Parses the planner's tagged-block replies into structured data |
 | `lib/agent/config.ts` | Picks which model to use (`getModel` / `getFastModel` / `getCoderModel`) and reasoning effort per task |
 | `lib/verify/router.ts` | Fast classifier run *before* full planning — if a message is a small edit ("make the button blue"), skips straight to a targeted change instead of a full plan |

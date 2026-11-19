@@ -1,6 +1,4 @@
-import { and, eq, sql } from "drizzle-orm"
-
-import { db, projects } from "@/db"
+import { getProjectForUser, updateProjectTheme } from "@/db/projects"
 import { readAppDoc } from "@/lib/app-runtime/app-doc"
 import { getCurrentUser, ServiceUnavailableError } from "@/lib/current-user"
 import { isSameOriginJson, json, readJson, str } from "@/lib/http"
@@ -28,24 +26,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ projec
   const themeId = str(body?.themeId)
   if (!themeId) return json({ error: "Bad request" }, 400)
 
-  const [project] = await db
-    .select({ previewScreens: projects.previewScreens })
-    .from(projects)
-    .where(and(eq(projects.id, projectId), eq(projects.userId, user.id)))
-    .limit(1)
+  const project = await getProjectForUser(projectId, user.id)
   if (!project) return json({ error: "Project not found." }, 404)
 
   const doc = readAppDoc(project.previewScreens)
-  if (!doc.themes?.themes.some((t) => t.id === themeId)) return json({ error: "That theme doesn't exist." }, 404)
+  const targetTheme = doc.themes?.themes.find((t) => t.id === themeId)
+  if (!targetTheme) return json({ error: "That theme doesn't exist." }, 404)
 
   // Touch only themes.activeId, so a build writing screens at the same time isn't overwritten.
-  await db
-    .update(projects)
-    .set({
-      previewScreens: sql`jsonb_set(${projects.previewScreens}, '{themes,activeId}', ${JSON.stringify(themeId)}::jsonb)`,
-      themeColor: doc.themes.themes.find((t) => t.id === themeId)!.colors.primary,
-    })
-    .where(and(eq(projects.id, projectId), eq(projects.userId, user.id)))
+  await updateProjectTheme(projectId, user.id, themeId, targetTheme.colors.primary)
 
   return json({ ok: true, themeId })
 }

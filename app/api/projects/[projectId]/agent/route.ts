@@ -1,6 +1,4 @@
-import { and, desc, eq } from "drizzle-orm"
-
-import { db, messages, projects } from "@/db"
+import { getLastMessageSender, getProjectForUser } from "@/db/projects"
 import { executeRun } from "@/lib/agent/execute"
 import { parseElementRef } from "@/lib/agent/element-context"
 import { latestPlan, saveUserMessage } from "@/lib/agent/orchestrator"
@@ -53,11 +51,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
   if (action === "message" && !text) return json({ error: "Write a message first." }, 400)
   if (text.length > MAX_PROMPT_LENGTH) return json({ error: `Keep messages under ${MAX_PROMPT_LENGTH} characters.` }, 400)
 
-  const [project] = await db
-    .select({ id: projects.id, status: projects.status })
-    .from(projects)
-    .where(and(eq(projects.id, projectId), eq(projects.userId, user.id)))
-    .limit(1)
+  const project = await getProjectForUser(projectId, user.id)
   if (!project) return json({ error: "Project not found." }, 404)
 
   // A run is already going (another tab, or this page before a reload).
@@ -85,13 +79,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
     else if (status === "generating") task = "generate"
     else {
       // The last message is the user's and was never answered (e.g. the provider failed): answer it now.
-      const [last] = await db
-        .select({ sender: messages.sender })
-        .from(messages)
-        .where(eq(messages.projectId, projectId))
-        .orderBy(desc(messages.createdAt))
-        .limit(1)
-      if (last?.sender === "user") task = "plan"
+      const lastSender = await getLastMessageSender(projectId)
+      if (lastSender === "user") task = "plan"
     }
   } else if (action === "message") {
     task = "plan"
