@@ -41,10 +41,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
   if (!eid) return json({ error: "Bad request" }, 400)
   const text = typeof body?.text === "string" ? (body.text as string) : undefined
   const style = styleOf(body?.style)
-  if (text === undefined && !style) return json({ error: "Bad request" }, 400)
+  const imageSrc = typeof body?.imageSrc === "string" && body.imageSrc.length <= 4096 ? (body.imageSrc as string) : undefined
+  if (text === undefined && !style && !imageSrc) return json({ error: "Bad request" }, 400)
   const from = typeof body?.from === "string" ? (body.from as string) : undefined
   const fromAlt = typeof body?.fromAlt === "string" ? (body.fromAlt as string) : undefined
-  const edit: ElementEdit = { eid, text, from, fromAlt, style }
+  const edit: ElementEdit = { eid, text, from, fromAlt, style, imageSrc }
 
   const [project] = await db
     .select({ id: projects.id })

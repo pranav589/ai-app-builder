@@ -20,6 +20,7 @@ import { commitSnapshot } from "@/lib/versions/store"
 import { getAgents, heartbeat, streamText } from "./agents"
 import { regenOutcome } from "./generation-guard"
 import { latestPlan, loadProject, saveDoc, saveMessage, saveScreens, setPhase } from "./history"
+import { fillSeedImages } from "./seed-images"
 import {
   fixPrompt,
   foundationPrompt,
@@ -363,10 +364,12 @@ export async function runGeneration(run: LiveRun, projectId: string) {
     text: keepShell ? "Creating the theme package and app data" : keepComponents ? "Updating navigation, themes and data" : "Setting up themes, data and navigation",
   })
   const [{ themes, data }, shellFiles] = await Promise.all([
-    buildFoundation(run, plan, doc).then((r) => {
+    buildFoundation(run, plan, doc).then(async (r) => {
       console.info(`[build ${projectId}] foundation ${Date.now() - t0}ms`)
-      run.emit({ type: "foundation", themes: r.themes, data: r.data })
-      return r
+      const data = await fillSeedImages(r.data, run)
+      const result = { themes: r.themes, data }
+      run.emit({ type: "foundation", themes: result.themes, data: result.data })
+      return result
     }),
     keepShell
       ? Object.fromEntries(Object.entries(doc.files!).filter(([p]) => SHELL_PATH.test(p)))

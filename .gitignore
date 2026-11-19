@@ -53,3 +53,6 @@ next-env.d.ts
 
 # local device-preview exports and the shared Expo SDK deps they link to (npm run device:deps / device)
 /.device
+
+image-library.csv
+scripts/data

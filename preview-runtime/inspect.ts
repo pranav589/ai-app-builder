@@ -85,6 +85,30 @@ function atPath(el: Element, path: number[]): Element | null {
   return n
 }
 
+function extractImageSrc(el: HTMLElement, tapped: Element | null): string | null {
+  if (tapped instanceof HTMLImageElement && (tapped.currentSrc || tapped.src)) {
+    return tapped.currentSrc || tapped.src
+  }
+  const tappedImg = tapped?.querySelector("img")
+  if (tappedImg && (tappedImg.currentSrc || tappedImg.src)) {
+    return tappedImg.currentSrc || tappedImg.src
+  }
+  if (el instanceof HTMLImageElement && (el.currentSrc || el.src)) {
+    return el.currentSrc || el.src
+  }
+  const elImg = el.querySelector("img")
+  if (elImg && (elImg.currentSrc || elImg.src)) {
+    return elImg.currentSrc || elImg.src
+  }
+  const cs = getComputedStyle(el)
+  const bg = cs.backgroundImage || el.style.backgroundImage
+  if (bg && bg !== "none") {
+    const m = /url\(["']?([^"']+)["']?\)/.exec(bg)
+    if (m) return m[1]
+  }
+  return null
+}
+
 function describe(el: HTMLElement, tapped: Element | null): SelectedElement {
   const r = el.getBoundingClientRect()
   const cs = getComputedStyle(el)
@@ -101,6 +125,7 @@ function describe(el: HTMLElement, tapped: Element | null): SelectedElement {
       const p = parentOf(el)
       return p ? eidTag(p) : null
     })(),
+    imageSrc: extractImageSrc(el, tapped),
   }
 }
 
@@ -216,6 +241,14 @@ handlers.applyEdit = (edit: ElementEdit) => {
     if (typeof edit.text === "string" && textPath) {
       const t = atPath(el, textPath)
       if (t) t.textContent = edit.text
+    }
+    if (typeof edit.imageSrc === "string") {
+      const img = el.tagName === "IMG" ? (el as HTMLImageElement) : el.querySelector("img")
+      if (img) {
+        img.src = edit.imageSrc
+      } else {
+        el.style.backgroundImage = `url("${edit.imageSrc}")`
+      }
     }
     if (css) for (const [k, v] of Object.entries(css)) el.style.setProperty(k, v)
   }

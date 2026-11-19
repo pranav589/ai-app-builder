@@ -231,4 +231,33 @@ describe("applyElementEdit", () => {
     expect(out).toContain("borderTopLeftRadius: 8")
     expect(out).toContain("flexGrow: 1")
   })
+
+  describe("image source replacement", () => {
+    it("updates existing source={{ uri: '...' }}", () => {
+      const code = `export default function Home() {\n  return <Image source={{ uri: "https://old.com/img.jpg" }} style={{ width: 100 }} />\n}\n`
+      const out = applyElementEdit(code, { line: 2, tag: "Image" }, { imageSrc: "https://ik.imagekit.io/demo/new.jpg" })
+      expect(out).toContain(`source={{ uri: "https://ik.imagekit.io/demo/new.jpg" }}`)
+      expect(out).not.toContain("old.com")
+      expect(out).toContain("style={{ width: 100 }}")
+    })
+
+    it("updates string literal source='...'", () => {
+      const code = `export default function Home() {\n  return <Image source="https://old.com/img.jpg" />\n}\n`
+      const out = applyElementEdit(code, { line: 2, tag: "Image" }, { imageSrc: "https://ik.imagekit.io/demo/new.jpg" })
+      expect(out).toContain(`source={{ uri: "https://ik.imagekit.io/demo/new.jpg" }}`)
+    })
+
+    it("updates ExpoImage component source", () => {
+      const code = `export default function Home() {\n  return <ExpoImage source={{ uri: "https://old.com/img.jpg" }} contentFit="cover" />\n}\n`
+      const out = applyElementEdit(code, { line: 2, tag: "ExpoImage" }, { imageSrc: "https://ik.imagekit.io/demo/transformed.jpg?tr=e-removedotbg" })
+      expect(out).toContain(`source={{ uri: "https://ik.imagekit.io/demo/transformed.jpg?tr=e-removedotbg" }}`)
+      expect(out).toContain(`contentFit="cover"`)
+    })
+
+    it("adds source attribute if none exists", () => {
+      const code = `export default function Home() {\n  return <Image style={{ width: 100 }} />\n}\n`
+      const out = applyElementEdit(code, { line: 2, tag: "Image" }, { imageSrc: "https://ik.imagekit.io/demo/new.jpg" })
+      expect(out).toContain(`<Image source={{ uri: "https://ik.imagekit.io/demo/new.jpg" }} style={{ width: 100 }} />`)
+    })
+  })
 })

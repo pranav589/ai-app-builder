@@ -3,6 +3,8 @@
 // to these names declaratively; the backend (local storage today, CloudHike
 // later) stores them. Shared by the server and the browser.
 
+import { isImageLibraryCategory } from "@/lib/image-library/categories"
+
 export type FieldType = "string" | "text" | "number" | "boolean" | "date" | "image" | "enum"
 
 export type DataField = {
@@ -18,6 +20,8 @@ export type DataCollection = {
   label: string
   fields: DataField[]
   seed: Record<string, unknown>[]
+  /** Closest match from IMAGE_LIBRARY_CATEGORIES, when this collection has an "image" field; hard-filters its seed image lookup. Omitted when nothing fits. */
+  category?: string
 }
 
 export type DataModel = {
@@ -77,7 +81,8 @@ export function normalizeDataModel(raw: unknown, hash: string): DataModel {
       .filter((r): r is Record<string, unknown> => !!r && typeof r === "object" && !Array.isArray(r))
       .slice(0, 20)
       .map((r, i) => ({ ...r, id: typeof r.id === "string" && r.id ? r.id.slice(0, 40) : `${name}-${i + 1}` }))
-    collections.push({ name, label: typeof col.label === "string" ? col.label.slice(0, 40) : name, fields, seed })
+    const category = isImageLibraryCategory(col.category) ? col.category : undefined
+    collections.push({ name, label: typeof col.label === "string" ? col.label.slice(0, 40) : name, fields, seed, ...(category ? { category } : {}) })
   }
   const settings = m.settings && typeof m.settings === "object" && !Array.isArray(m.settings) ? (m.settings as Record<string, unknown>) : {}
   const u = (m.user && typeof m.user === "object" ? m.user : {}) as Record<string, unknown>

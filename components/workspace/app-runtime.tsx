@@ -327,7 +327,10 @@ function frameDocument(config: FrameConfig) {
     "style-src 'unsafe-inline'",
     `font-src ${origin} data:`,
     // Our origin serves files apps store in their CloudHike bucket (/api/app-files).
-    `img-src data: blob: ${origin}`,
+    // https: covers remote photos the app references (ImageKit-hosted or
+    // user-picked URLs); the frame is sandboxed with no same-origin access,
+    // so it carries no cookies/credentials for those requests to leak.
+    `img-src data: blob: https: ${origin}`,
     "media-src data: blob:",
   ].join("; ")
   const cfg = JSON.stringify(config).replace(/</g, "\\u003c")

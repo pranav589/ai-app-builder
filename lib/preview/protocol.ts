@@ -43,6 +43,8 @@ export type SelectedElement = {
   styles: Record<string, string>
   /** The tag of the nearest editable element around this one, or null at the top: what "select parent" would pick. */
   parent: string | null
+  /** For image elements: the current image source URL if available */
+  imageSrc?: string | null
 }
 
 /** A selected element as the chat and the AI agent see it: enough to find it again in the source. */
@@ -64,6 +66,8 @@ export type ElementEdit = {
   /** Set when an earlier save of this element was abandoned mid-flight: it may or may not have landed, so the text may already be this. */
   fromAlt?: string
   style?: Record<string, string>
+  /** The new image source URL to write into JSX (for Image / ExpoImage components) */
+  imageSrc?: string
 }
 
 /** Frame -> host. */

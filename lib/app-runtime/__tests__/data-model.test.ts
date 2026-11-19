@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { collectionTypeName, emptyDataModel, generateDataTypes } from "@/lib/app-runtime/data-model"
+import { collectionTypeName, emptyDataModel, generateDataTypes, normalizeDataModel } from "@/lib/app-runtime/data-model"
 
 describe("collectionTypeName", () => {
   it("singularizes and pascal-cases a plural collection name", () => {
@@ -59,5 +59,28 @@ describe("generateDataTypes", () => {
     const out = generateDataTypes(model)
     expect(out).toContain(`"habits": Habit`)
     expect(out).toContain(`"milestones": Milestone`)
+  })
+})
+
+describe("normalizeDataModel category field", () => {
+  it("keeps a valid IMAGE_LIBRARY_CATEGORIES value", () => {
+    const out = normalizeDataModel(
+      { collections: [{ name: "products", label: "Products", category: "shoes", fields: [], seed: [] }] },
+      "h"
+    )
+    expect(out.collections[0].category).toBe("shoes")
+  })
+
+  it("drops an invalid category value", () => {
+    const out = normalizeDataModel(
+      { collections: [{ name: "products", label: "Products", category: "sneakers", fields: [], seed: [] }] },
+      "h"
+    )
+    expect(out.collections[0].category).toBeUndefined()
+  })
+
+  it("omits category entirely when absent", () => {
+    const out = normalizeDataModel({ collections: [{ name: "tags", label: "Tags", fields: [], seed: [] }] }, "h")
+    expect(out.collections[0].category).toBeUndefined()
   })
 })

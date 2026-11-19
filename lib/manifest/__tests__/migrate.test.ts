@@ -175,4 +175,17 @@ describe("syncManifest", () => {
     const existing = fromLegacy(plan, doc)
     expect(syncManifest({ ...doc, manifest: existing }, plan)).toBe(existing)
   })
+
+  it("covers every plan screen on a brand-new project's first build, before any screen is actually built yet", () => {
+    // Real bug: a new project's doc has no manifest and no built screens
+    // yet (this call runs before the build loop). fromLegacy alone would
+    // keep manifest.screens empty, which later made a repair drop every
+    // screen from the doc once it existed.
+    const unbuiltDoc: AppDoc = { ...doc, screens: [] }
+    const m = syncManifest(unbuiltDoc, plan)
+    expect(Object.keys(m.screens).sort()).toEqual(["add-habit", "habit-detail", "home", "profile"])
+    expect(m.navigation.tabs).toEqual(["home", "profile"])
+    const { diagnostics } = validateManifest(m)
+    expect(diagnostics).toEqual([])
+  })
 })

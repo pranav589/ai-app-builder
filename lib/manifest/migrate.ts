@@ -141,8 +141,17 @@ function pruneRemovedScreens(manifest: AppManifest, plan: AppPlan): AppManifest 
  * later rebuild.
  */
 export function syncManifest(doc: AppDoc, plan: AppPlan): AppManifest {
-  if (!doc.manifest) return fromLegacy(plan, doc)
-  const pruned = pruneRemovedScreens(doc.manifest, plan)
+  // A brand-new project has no manifest yet, and fromLegacy conservatively
+  // keeps it empty (nothing is built yet, by definition, before this
+  // project's first build runs). Route it through the same "added screens"
+  // reconciliation below as any other plan change, so every plan screen
+  // gets a manifest entry (and nav coverage) before the build loop starts,
+  // instead of staying permanently missing once screens are, in fact, built
+  // (a screen whose manifest entry never arrives gets dropped by the first
+  // repair that round-trips the doc through the manifest, since a repair
+  // only keeps screens the manifest still lists).
+  const base = doc.manifest ?? fromLegacy(plan, doc)
+  const pruned = pruneRemovedScreens(base, plan)
   const added = plan.screens.filter((s) => !pruned.screens[s.id])
   if (!added.length) return pruned
   const ops = patchForAddedScreens(pruned, plan, added)

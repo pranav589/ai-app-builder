@@ -16,6 +16,7 @@ import {
   Loader2,
   MousePointerClick,
   Palette,
+  RefreshCw,
   RotateCcw,
   Shapes,
   SlidersHorizontal,
@@ -25,6 +26,8 @@ import {
   TextCursorInput,
   Type,
   Underline,
+  Upload,
+  Wand2,
   X,
   Move,
   Layers,
@@ -33,6 +36,7 @@ import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { apiClient } from "@/lib/api-client"
 import { THEME_COLOR_KEYS, type ThemeColorKey } from "@/lib/app-runtime/theme"
 import { elementKind, elementName, type ElementKind } from "@/lib/preview/element-names"
 import type { ElementEdit, SelectedElement } from "@/lib/preview/protocol"
@@ -321,8 +325,9 @@ function ColorRow({
 
 // ---------------------------------------------------------------- the editor
 
-type TabId = "text" | "colors" | "spacing" | "layout" | "border" | "effects"
+type TabId = "image" | "text" | "colors" | "spacing" | "layout" | "border" | "effects"
 const TABS: { id: TabId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { id: "image", label: "Image", icon: ImageIcon },
   { id: "text", label: "Text", icon: Type },
   { id: "colors", label: "Colors", icon: Palette },
   { id: "spacing", label: "Spacing", icon: Move },
@@ -343,7 +348,34 @@ const KIND_ICON: Record<ElementKind, React.ComponentType<{ className?: string }>
 
 const SUGGESTIONS = ["Make it bigger", "Use the primary color", "Add more breathing room", "Round the corners"]
 
-type PendingEdit = { text?: string; style?: Record<string, string> }
+const TRANSFORM_PRESETS = [
+  { label: "🪄 Remove BG", prompt: "remove background" },
+  { label: "🌆 Sunset Skyline", prompt: "change background to sunset city skyline" },
+  { label: "☕ Cozy Cafe", prompt: "change background to cozy cafe with warm lighting" },
+  { label: "🌿 Wooden Studio", prompt: "change background to wooden table with soft studio lighting" },
+  { label: "👥 Drop Shadow", prompt: "add drop shadow" },
+  { label: "📐 Generative Fill", prompt: "expand canvas with generative fill" },
+  { label: "⚡ AI Upscale", prompt: "ai upscale and enhance" },
+  { label: "🖤 Black & White", prompt: "make it black and white" },
+]
+
+const GENERATE_STYLES = [
+  { id: "photo", label: "Photorealistic" },
+  { id: "minimal3d", label: "Minimalist 3D" },
+  { id: "illustration", label: "Illustration" },
+  { id: "isometric", label: "Isometric" },
+  { id: "cyberpunk", label: "Cyberpunk" },
+  { id: "watercolor", label: "Watercolor" },
+]
+
+const QUICK_REPLACE_PRESETS = [
+  { name: "Sample Product", url: "https://ik.imagekit.io/demo/img/default-image.jpg" },
+  { name: "User Avatar", url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500&auto=format&fit=crop&q=80" },
+  { name: "Coffee & Food", url: "https://images.unsplash.com/photo-1509042239860-f550ce710b93?w=500&auto=format&fit=crop&q=80" },
+  { name: "Tech Minimal", url: "https://images.unsplash.com/photo-1518770660439-4636190af475?w=500&auto=format&fit=crop&q=80" },
+]
+
+type PendingEdit = { text?: string; style?: Record<string, string>; imageSrc?: string }
 type SaveResult = { ok: boolean; error?: string; resynced?: boolean; aborted?: boolean }
 type SizeMode = "auto" | "fill" | "fixed"
 
@@ -382,12 +414,14 @@ export function ElementEditor({
   const theme = useAppTheme()
   const eid = element.eid
   const kind = elementKind(element.tag)
+  const isImage = kind === "image" || Boolean(element.imageSrc)
   const canEditText = element.text !== null
   const canEditStyle = !element.kit
   const isFlex = element.styles.display === "flex"
 
   const orig = React.useRef<Vals>(initialValues(element.styles))
   const origText = React.useRef(element.text ?? "")
+  const origImage = React.useRef<string>(element.imageSrc ?? "")
   const origShadow = React.useRef(parseShadow(element.styles.boxShadow))
   const [text, setText] = React.useState(origText.current)
   const [vals, setVals] = React.useState<Vals>(orig.current)
@@ -396,13 +430,26 @@ export function ElementEditor({
   const [shadow, setShadow] = React.useState<Shadow>(origShadow.current)
   const [sizeMode, setSizeMode] = React.useState<{ width: SizeMode; height: SizeMode }>({ width: "auto", height: "auto" })
   const [cornersEach, setCornersEach] = React.useState(() => new Set([orig.current.borderTopLeftRadius, orig.current.borderTopRightRadius, orig.current.borderBottomRightRadius, orig.current.borderBottomLeftRadius]).size > 1)
-  const tabs = TABS.filter((t) => (t.id === "text" ? canEditText : canEditStyle))
-  const [tab, setTab] = React.useState<TabId>(canEditText ? "text" : "colors")
+  const tabs = TABS.filter((t) => (t.id === "image" ? isImage : t.id === "text" ? canEditText : canEditStyle))
+  const [tab, setTab] = React.useState<TabId>(() => (isImage ? "image" : canEditText ? "text" : "colors"))
   const [aiOpen, setAiOpen] = React.useState(false)
   const [aiText, setAiText] = React.useState("")
   const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved" | "error">("idle")
   const [error, setError] = React.useState<string | null>(null)
   const [dirty, setDirty] = React.useState(false)
+
+  // ImageKit states
+  const [currentImage, setCurrentImage] = React.useState<string>(element.imageSrc ?? "")
+  const [imageMode, setImageMode] = React.useState<"transform" | "generate" | "replace">("transform")
+  const [transformPrompt, setTransformPrompt] = React.useState("")
+  const [generatePrompt, setGeneratePrompt] = React.useState("")
+  const [generateStyle, setGenerateStyle] = React.useState("photo")
+  const [replaceUrl, setReplaceUrl] = React.useState("")
+  const [imageLoading, setImageLoading] = React.useState(false)
+  const [imageError, setImageError] = React.useState<string | null>(null)
+  const [imageSuccess, setImageSuccess] = React.useState<string | null>(null)
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const imageTouched = React.useRef(false)
 
   const pending = React.useRef<PendingEdit>({})
   // The text as it is in the source right now: sent with a text edit so the
@@ -423,7 +470,11 @@ export function ElementEditor({
     inflight.current = null
     f.ctrl.abort()
     if (f.edit.text !== undefined) abandonedText.current = f.edit.text
-    pending.current = { text: pending.current.text ?? f.edit.text, style: { ...f.edit.style, ...pending.current.style } }
+    pending.current = {
+      text: pending.current.text ?? f.edit.text,
+      style: { ...f.edit.style, ...pending.current.style },
+      imageSrc: pending.current.imageSrc ?? f.edit.imageSrc,
+    }
   }, [])
 
   const flush = React.useCallback(() => {
@@ -432,7 +483,8 @@ export function ElementEditor({
     takeBackInflight()
     const edit = pending.current
     const hasStyle = !!edit.style && Object.keys(edit.style).length > 0
-    if (edit.text === undefined && !hasStyle) return
+    const hasImage = edit.imageSrc !== undefined
+    if (edit.text === undefined && !hasStyle && !hasImage) return
     pending.current = {}
     const ctrl = new AbortController()
     const mine = { ctrl, edit }
@@ -447,6 +499,7 @@ export function ElementEditor({
         from: sentText !== undefined ? savedText.current : undefined,
         fromAlt: sentText !== undefined ? abandonedText.current : undefined,
         style: hasStyle ? edit.style : undefined,
+        imageSrc: edit.imageSrc,
       },
       ctrl.signal
     ).then((r) => {
@@ -461,7 +514,11 @@ export function ElementEditor({
         setSaveState("saved")
       } else if (!r.aborted) {
         // Keep what failed, so the next change retries it together with its own.
-        pending.current = { text: pending.current.text ?? edit.text, style: { ...edit.style, ...pending.current.style } }
+        pending.current = {
+          text: pending.current.text ?? edit.text,
+          style: { ...edit.style, ...pending.current.style },
+          imageSrc: pending.current.imageSrc ?? edit.imageSrc,
+        }
         setSaveState("error")
         setError(r.error ?? "Couldn't save that change.")
       }
@@ -474,7 +531,11 @@ export function ElementEditor({
       // A save still in flight is out of date the moment another change is made:
       // cancel it now and send everything together shortly.
       takeBackInflight()
-      pending.current = { text: edit.text ?? pending.current.text, style: { ...pending.current.style, ...edit.style } }
+      pending.current = {
+        text: edit.text ?? pending.current.text,
+        style: { ...pending.current.style, ...edit.style },
+        imageSrc: edit.imageSrc ?? pending.current.imageSrc,
+      }
       setSaveState("saving")
       if (timer.current) clearTimeout(timer.current)
       timer.current = setTimeout(flush, 400)
@@ -483,6 +544,19 @@ export function ElementEditor({
   )
   // Whatever is still waiting is saved when the editor closes or moves to another element.
   React.useEffect(() => () => flush(), [flush])
+
+  const applyImageSrc = React.useCallback(
+    (newUrl: string) => {
+      setCurrentImage(newUrl)
+      imageTouched.current = true
+      setDirty(true)
+      onPreview({ eid, imageSrc: newUrl })
+      apply({ imageSrc: newUrl })
+      setImageSuccess("Image updated!")
+      setTimeout(() => setImageSuccess(null), 3000)
+    },
+    [eid, onPreview, apply]
+  )
 
   /** Sets style properties: shown now, saved shortly. Values may be "theme:<token>:<hex>". */
   const set = (style: Record<string, string>) => {
@@ -559,6 +633,10 @@ export function ElementEditor({
       apply({ text: origText.current })
       textTouched.current = false
     }
+    if (imageTouched.current) {
+      applyImageSrc(origImage.current)
+      imageTouched.current = false
+    }
   }
 
   const sendAI = () => {
@@ -568,7 +646,406 @@ export function ElementEditor({
     setAiText("")
   }
 
+  // ---- ImageKit handlers
+  const handleApplyTransform = async (customPrompt?: string) => {
+    const promptToUse = customPrompt || transformPrompt
+    if (!promptToUse.trim()) return
+    setImageLoading(true)
+    setImageError(null)
+    setImageSuccess(null)
+    try {
+      const fallbackBase = "https://ik.imagekit.io/demo/img/default-image.jpg"
+      const res = await apiClient.post<{ ok: boolean; transformedUrl: string; error?: string }>(
+        "/api/imagekit/transform",
+        {
+          imageUrl: currentImage || fallbackBase,
+          prompt: promptToUse,
+        }
+      )
+      if (res.data.transformedUrl) {
+        applyImageSrc(res.data.transformedUrl)
+      } else {
+        setImageError(res.data.error || "Failed to transform image")
+      }
+    } catch (e: unknown) {
+      console.error("ImageKit transform failed", e)
+      const err = e as { response?: { data?: { error?: string } } }
+      setImageError(err?.response?.data?.error || "Failed to apply transformation. Please try again.")
+    } finally {
+      setImageLoading(false)
+    }
+  }
+
+  const handleGenerateImage = async () => {
+    if (!generatePrompt.trim()) return
+    setImageLoading(true)
+    setImageError(null)
+    setImageSuccess(null)
+    try {
+      const res = await apiClient.post<{ ok: boolean; imageUrl: string; error?: string }>(
+        "/api/imagekit/generate",
+        {
+          prompt: generatePrompt,
+          style: generateStyle,
+        }
+      )
+      if (res.data.imageUrl) {
+        applyImageSrc(res.data.imageUrl)
+      } else {
+        setImageError(res.data.error || "Failed to generate image")
+      }
+    } catch (e: unknown) {
+      console.error("ImageKit generation failed", e)
+      const err = e as { response?: { data?: { error?: string } } }
+      setImageError(err?.response?.data?.error || "Failed to generate AI image. Please try again.")
+    } finally {
+      setImageLoading(false)
+    }
+  }
+
+  const handleReplaceWithUrl = (urlToUse?: string) => {
+    const targetUrl = (urlToUse || replaceUrl).trim()
+    if (!targetUrl) return
+    applyImageSrc(targetUrl)
+    setReplaceUrl("")
+  }
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImageLoading(true)
+    setImageError(null)
+    setImageSuccess(null)
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      const res = await apiClient.post<{ ok: boolean; url: string; error?: string }>(
+        "/api/imagekit/upload",
+        formData,
+        {
+          headers: { "Content-Type": "multipart/form-data" },
+        }
+      )
+      if (res.data.url) {
+        applyImageSrc(res.data.url)
+      } else {
+        setImageError(res.data.error || "Failed to upload image")
+      }
+    } catch (e: unknown) {
+      console.error("ImageKit upload failed", e)
+      const err = e as { response?: { data?: { error?: string } } }
+      setImageError(err?.response?.data?.error || "Failed to upload image. Please try again.")
+    } finally {
+      setImageLoading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ""
+    }
+  }
+
   // ---- sections
+  const imageSection = (
+    <div className="space-y-3">
+      {/* Action Mode Switcher */}
+      <Segmented
+        label="Image action"
+        className="w-full"
+        value={imageMode}
+        options={[
+          { value: "transform", label: "AI Transform", icon: Sparkles },
+          { value: "generate", label: "Generate AI", icon: Wand2 },
+          { value: "replace", label: "Replace", icon: RefreshCw },
+        ]}
+        onChange={(v) => {
+          setImageMode(v as "transform" | "generate" | "replace")
+          setImageError(null)
+          setImageSuccess(null)
+        }}
+      />
+
+      {/* Current Image Card */}
+      <div className="flex items-center gap-2.5 rounded-(--r-md) border border-border bg-muted/40 p-2">
+        <div className="relative size-12 shrink-0 overflow-hidden rounded-[calc(var(--r-md)-2px)] border border-border bg-background">
+          {currentImage ? (
+            <img
+              src={currentImage}
+              alt="Current element"
+              className="size-full object-cover"
+              onError={(e) => {
+                ;(e.currentTarget as HTMLImageElement).src = "https://ik.imagekit.io/demo/img/default-image.jpg"
+              }}
+            />
+          ) : (
+            <div className="flex size-full items-center justify-center text-muted-foreground">
+              <ImageIcon className="size-5" />
+            </div>
+          )}
+        </div>
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-xs font-semibold">
+              {currentImage?.includes("imagekit.io") ? "ImageKit Active" : "Selected Image"}
+            </span>
+            <span className="rounded bg-primary/10 px-1 py-0.5 text-[9px] font-medium text-primary">
+              ImageKit AI
+            </span>
+          </div>
+          <p className="truncate text-[10px] text-muted-foreground" title={currentImage}>
+            {currentImage ? currentImage.replace(/^https?:\/\//, "") : "No image URL"}
+          </p>
+        </div>
+        {currentImage !== origImage.current && origImage.current && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            title="Revert to original image"
+            onClick={() => {
+              applyImageSrc(origImage.current)
+              imageTouched.current = false
+            }}
+          >
+            <RotateCcw className="size-3.5" />
+          </Button>
+        )}
+      </div>
+
+      {/* Option 1: AI Transformation */}
+      {imageMode === "transform" && (
+        <div className="space-y-2.5 animate-in fade-in-50 duration-150">
+          <div>
+            <label className="text-xs font-semibold text-foreground flex items-center gap-1">
+              <Sparkles className="size-3.5 text-primary" /> Transform with ImageKit AI
+            </label>
+            <p className="text-[11px] text-muted-foreground">
+              Describe how to transform this image (background, shadow, fill, upscale).
+            </p>
+          </div>
+
+          <div className="rounded-(--r-md) border border-input bg-background p-1.5 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30">
+            <textarea
+              rows={2}
+              value={transformPrompt}
+              placeholder="e.g. 'remove background and add shadow' or 'change background to sunset city'..."
+              aria-label="ImageKit AI transformation prompt"
+              onChange={(e) => setTransformPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  if (transformPrompt.trim() && !imageLoading) void handleApplyTransform()
+                }
+              }}
+              className="block w-full resize-none bg-transparent px-1 text-xs outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <span className="text-[10px] font-medium text-muted-foreground">Quick transformations:</span>
+            <div className="flex flex-wrap gap-1">
+              {TRANSFORM_PRESETS.map((q) => (
+                <button
+                  key={q.label}
+                  type="button"
+                  onClick={() => {
+                    setTransformPrompt(q.prompt)
+                    void handleApplyTransform(q.prompt)
+                  }}
+                  disabled={imageLoading}
+                  className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95 disabled:opacity-50"
+                >
+                  {q.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            disabled={imageLoading || !transformPrompt.trim()}
+            onClick={() => void handleApplyTransform()}
+            className="w-full h-8 text-xs font-medium bg-linear-to-r from-primary to-violet-600 text-primary-foreground shadow-sm hover:brightness-110"
+          >
+            {imageLoading ? (
+              <>
+                <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                Transforming with ImageKit AI...
+              </>
+            ) : (
+              <>
+                <Sparkles className="mr-1.5 size-3.5" />
+                Apply AI Transformation
+              </>
+            )}
+          </Button>
+        </div>
+      )}
+
+      {/* Option 2: Generate AI Image */}
+      {imageMode === "generate" && (
+        <div className="space-y-2.5 animate-in fade-in-50 duration-150">
+          <div>
+            <label className="text-xs font-semibold text-foreground flex items-center gap-1">
+              <Wand2 className="size-3.5 text-primary" /> Generate AI Image
+            </label>
+            <p className="text-[11px] text-muted-foreground">
+              Generate a new image and manage/transform it via ImageKit.
+            </p>
+          </div>
+
+          <div className="rounded-(--r-md) border border-input bg-background p-1.5 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30">
+            <textarea
+              rows={2}
+              value={generatePrompt}
+              placeholder="e.g. 'Fresh avocado toast with poached egg on marble counter'..."
+              aria-label="Generate AI image prompt"
+              onChange={(e) => setGeneratePrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  if (generatePrompt.trim() && !imageLoading) void handleGenerateImage()
+                }
+              }}
+              className="block w-full resize-none bg-transparent px-1 text-xs outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <span className="text-[10px] font-medium text-muted-foreground">Visual Style:</span>
+            <div className="flex flex-wrap gap-1">
+              {GENERATE_STYLES.map((st) => (
+                <button
+                  key={st.id}
+                  type="button"
+                  onClick={() => setGenerateStyle(st.id)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[10px] transition-colors",
+                    generateStyle === st.id
+                      ? "border-primary bg-primary/10 text-primary font-medium"
+                      : "border-border bg-background text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {st.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            disabled={imageLoading || !generatePrompt.trim()}
+            onClick={() => void handleGenerateImage()}
+            className="w-full h-8 text-xs font-medium bg-linear-to-r from-violet-600 to-indigo-600 text-white shadow-sm hover:brightness-110"
+          >
+            {imageLoading ? (
+              <>
+                <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                Generating & Hosting with ImageKit...
+              </>
+            ) : (
+              <>
+                <Wand2 className="mr-1.5 size-3.5" />
+                Generate AI Image
+              </>
+            )}
+          </Button>
+        </div>
+      )}
+
+      {/* Option 3: Replace Image */}
+      {imageMode === "replace" && (
+        <div className="space-y-2.5 animate-in fade-in-50 duration-150">
+          <div>
+            <label className="text-xs font-semibold text-foreground flex items-center gap-1">
+              <RefreshCw className="size-3.5 text-primary" /> Replace Image
+            </label>
+            <p className="text-[11px] text-muted-foreground">
+              Upload from your computer to ImageKit or provide an image URL.
+            </p>
+          </div>
+
+          {/* Upload file to ImageKit */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => void handleFileUpload(e)}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={imageLoading}
+            onClick={() => fileInputRef.current?.click()}
+            className="w-full h-8 text-xs font-medium border-dashed hover:border-primary/60"
+          >
+            {imageLoading ? (
+              <>
+                <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                Uploading to ImageKit...
+              </>
+            ) : (
+              <>
+                <Upload className="mr-1.5 size-3.5" />
+                Upload Image File
+              </>
+            )}
+          </Button>
+
+          {/* Enter URL */}
+          <div className="flex gap-1.5">
+            <Input
+              value={replaceUrl}
+              onChange={(e) => setReplaceUrl(e.target.value)}
+              placeholder="Paste image URL (https://...)"
+              className="h-8 text-xs"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && replaceUrl.trim()) {
+                  e.preventDefault()
+                  handleReplaceWithUrl()
+                }
+              }}
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={!replaceUrl.trim()}
+              onClick={() => handleReplaceWithUrl()}
+              className="h-8 shrink-0 text-xs px-2.5"
+            >
+              Apply
+            </Button>
+          </div>
+
+          {/* Curated Presets */}
+          <div className="space-y-1">
+            <span className="text-[10px] font-medium text-muted-foreground">Curated Presets:</span>
+            <div className="grid grid-cols-2 gap-1.5">
+              {QUICK_REPLACE_PRESETS.map((p) => (
+                <button
+                  key={p.name}
+                  type="button"
+                  onClick={() => handleReplaceWithUrl(p.url)}
+                  className="flex items-center gap-1.5 rounded-(--r-md) border border-border p-1 text-left transition-colors hover:border-primary/40 hover:bg-muted/30"
+                >
+                  <img src={p.url} alt={p.name} className="size-6 rounded object-cover shrink-0" />
+                  <span className="truncate text-[10px] font-medium">{p.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Feedback States */}
+      {imageSuccess && (
+        <p className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium animate-in fade-in-50">
+          <Check className="size-3 shrink-0" /> {imageSuccess}
+        </p>
+      )}
+      {imageError && (
+        <p className="text-[11px] text-destructive leading-tight">{imageError}</p>
+      )}
+    </div>
+  )
 
   const textSection = (
     <div className="space-y-1">
@@ -793,8 +1270,8 @@ export function ElementEditor({
     </div>
   )
 
-  const sectionBody: Record<TabId, React.ReactNode> = { text: textSection, colors: colorsSection, spacing: spacingSection, layout: layoutSection, border: borderSection, effects: effectsSection }
-  const activeTab = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "colors")
+  const sectionBody: Record<TabId, React.ReactNode> = { image: imageSection, text: textSection, colors: colorsSection, spacing: spacingSection, layout: layoutSection, border: borderSection, effects: effectsSection }
+  const activeTab = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? (isImage ? "image" : "colors"))
 
   const KindIcon = KIND_ICON[kind]
   const title = elementName(element.tag)
@@ -803,7 +1280,10 @@ export function ElementEditor({
     <div
       role="dialog"
       aria-label={`Edit ${title}`}
-      className="flex max-h-[500px] w-[340px] flex-col overflow-hidden rounded-(--r-lg) border border-border bg-background text-foreground shadow-2xl animate-in fade-in-0 zoom-in-95 duration-150"
+      className={cn(
+        "flex max-h-[550px] flex-col overflow-hidden rounded-(--r-lg) border border-border bg-background text-foreground shadow-2xl animate-in fade-in-0 zoom-in-95 duration-150",
+        isImage ? "w-[350px]" : "w-[340px]"
+      )}
     >
       {/* Header */}
       <div className="flex shrink-0 items-center gap-2.5 px-3 pt-3 pb-2.5">

@@ -8,6 +8,7 @@ const NAMES: Record<string, string> = {
   RNText: "Text",
   Image: "Image",
   ImageBackground: "Image",
+  ExpoImage: "Image",
   Pressable: "Button",
   TouchableOpacity: "Button",
   TouchableHighlight: "Button",
@@ -32,7 +33,7 @@ export function elementKind(tag: string): ElementKind {
   const n = NAMES[tag]
   if (n === "Container" || n === "Screen" || n === "Card" || n === "Scroll view" || n === "List" || n === "Gradient") return "container"
   if (n === "Text") return "text"
-  if (n === "Image") return "image"
+  if (n === "Image" || tag.toLowerCase().includes("image")) return "image"
   if (n === "Button") return "button"
   if (n === "Icon") return "icon"
   if (n === "Input") return "input"

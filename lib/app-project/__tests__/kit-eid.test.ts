@@ -66,7 +66,13 @@ describe("canvas inspector eid through a @/kit component", () => {
 
   it("points at the screen's own usage line, not at kit's internal implementation", async () => {
     const theme = { exports: { useTheme: () => ({ colors: { text: "#111", textMuted: "#666", primary: "#246", success: "#2a2", warning: "#a80", danger: "#a22", surface: "#fff", border: "#ddd", onPrimary: "#fff", background: "#fff" }, spacing: {}, radius: {} }) } }
-    const kit = loadModule(KIT_PATH, KIT_SOURCE, { react: React, "react-native": RNW, "@expo/vector-icons": { Ionicons: () => null }, "@/theme": theme.exports })
+    const kit = loadModule(KIT_PATH, KIT_SOURCE, {
+      react: React,
+      "react-native": RNW,
+      "react-native-safe-area-context": { useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) },
+      "@expo/vector-icons": { Ionicons: () => null },
+      "@/theme": theme.exports,
+    })
 
     const screenSource = `import { Text } from "@/kit"\n\nexport default function Home() {\n  return <Text variant="title">Hi there</Text>\n}\n`
     const screen = loadModule("app/home.tsx", screenSource, { react: React, "@/kit": kit }) as { default: React.ComponentType }

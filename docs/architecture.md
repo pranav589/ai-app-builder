@@ -247,9 +247,12 @@ tagged-reply protocol similar to the main orchestrator's.
 - **Hand-applied SQL** (`db/sql/*.sql`, applied via `npm run db:sql` →
   `scripts/migrate-sql.mjs`, all idempotent): `users`, `projects` (holds `prompt`,
   `preview_screens` as the whole `AppDoc` JSON, `current_version`, `assets`),
-  `messages` (chat history + plan/pipeline data). These mirror tables that are also
-  used by/shared with the CloudHike-hosted side, which is why they're not
-  drizzle-kit-managed.
+  `messages` (chat history + plan/pipeline data), `image_library` (curated seed image
+  library with generated `tsvector` column and GIN index for full-text search),
+  and `image_library_misses` (gap tracker for unmatched image queries with upsert
+  hit counter). These mirror tables that are also
+  used by/shared with the CloudHike-hosted side or managed via SQL scripts, which is
+  why they're not drizzle-kit-managed.
 
 ---
 
@@ -257,6 +260,9 @@ tagged-reply protocol similar to the main orchestrator's.
 
 - **`scripts/build-preview.mjs`** — esbuild-bundles `preview-runtime/` into
   `public/preview/runtime.js`; runs automatically before `dev`/`build`.
+- **`scripts/seed-image-library.ts`** (`npm run seed:images`) — bulk imports a manifest
+  of curated photos into ImageKit (`/appforge/library/<category>`) and Postgres
+  `image_library`, idempotent on re-runs.
 - **`scripts/device-preview.ts`** / **`lib/device/**`** — local Metro lane CLI for
   real-device preview.
 - **`scripts/eval.ts`** + **`eval/**`** — evaluation harness that runs the agent

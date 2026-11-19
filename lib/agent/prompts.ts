@@ -4,6 +4,7 @@ import { THEME_COLOR_KEYS, THEME_TOKEN_DOCS, type AppTheme } from "@/lib/app-run
 import { ALLOWED_PACKAGES, screenHref, screenPath } from "@/lib/app-project/project"
 import { PLATFORM_API_DOCS } from "@/lib/app-project/templates"
 import { ICON_VOCABULARY } from "@/lib/app-project/icons"
+import { IMAGE_LIBRARY_CATEGORIES } from "@/lib/image-library/categories"
 import { MAX_SCREENS } from "./protocol"
 
 export const PLANNER_INSTRUCTIONS = `You are the lead product designer and mobile engineer at "Anything", a platform that turns a person's idea into a real iOS and Android app built with React Native and Expo. You are talking to the app's creator in a chat panel. Next to the chat they see a canvas where you will later design each screen.
@@ -122,7 +123,8 @@ Shape:
         "name": "camelCaseName",
         "label": "Human label",
         "fields": [{ "name": "camelCase", "type": "string|text|number|boolean|date|image|enum", "options": ["only for enum"] }],
-        "seed": [{ "id": "short-id", "...": "values for every field" }]
+        "seed": [{ "id": "short-id", "...": "values for every field" }],
+        "category": "only if this collection has an image field: closest match from [${IMAGE_LIBRARY_CATEGORIES.join('|')}], omit if nothing fits"
       }
     ],
     "settings": { "camelCaseKey": true },
@@ -139,7 +141,7 @@ Theme rules:
 Data rules:
 - Model what the planned screens actually show and change: lists, details, things users create, toggle, complete or delete. Typically 1-4 collections. Skip collections no screen uses.
 - Field names are camelCase. Use "date" fields as ISO 8601 strings, relative to today (some past, some upcoming, some today, so "today" views are populated). Use "boolean" for completion/favorite flags, "number" for amounts, progress (0-100), counts, ratings.
-- "image" fields: always "" in seeds (the UI draws tasteful placeholders). Never put URLs anywhere.
+- "image" fields: always "" in seeds (lib/agent/seed-images.ts fills blanks with a real photo afterward). Never put URLs anywhere. If a collection has an "image" field, also set its "category" to the single closest match from [${IMAGE_LIBRARY_CATEGORIES.join(", ")}] (omit "category" if genuinely none fit) — this is what lets seed-images.ts find an on-topic photo instead of a random one.
 - 5-12 seed records per main collection, with specific, realistic, varied content that fits the app and its audience (real-sounding names, places, amounts). No lorem ipsum, no "Item 1".
 - settings: the toggles and preferences the settings/profile screens show (notifications, reminders, units). Theme or dark mode is NOT a setting here.
 - Keep the whole JSON compact (well under 9000 characters).`
@@ -184,7 +186,7 @@ MODERN API CHOICES (use these, avoid the legacy ones)
 - Accessibility: role and aria-label / accessibilityLabel on icon-only buttons; text never below 11pt; respect Dynamic Type (no fixed-height text containers).
 - Liquid Glass (iOS 26+): GlassView from "expo-glass-effect" for floating controls, toolbars and chips over content (fall back gracefully; it renders as a translucent surface elsewhere). BlurView from "expo-blur" for frosted headers.
 - Icons: Ionicons from "@expo/vector-icons" inside screens and components (valid Ionicons v7 names: "home", "home-outline", "add", "chevron-forward", "settings-outline"...). SymbolView from "expo-symbols" is also fine for SF Symbol names from the tab icon list.
-- Images: no remote URLs. Use expo-linear-gradient gradients built from theme colors, initials avatars, or images the user picked (stored data).
+- Images: never write a URL literal in code. An "image"-typed data field may hold a real photo URL at runtime (filled in separately, never by you) — bind <Image source={{ uri: record.<field> }} /> straight to that field when a screen shows one, with a graceful fallback (a tinted icon tile, matching CRAFT's empty-state look) while the field is empty or still loading. For anything that isn't a data-bound photo, use expo-linear-gradient gradients built from theme colors, initials avatars, or images the user picked (stored data).
 
 APP RULES
 - Colors ONLY from the theme (useTheme / createStyles). Never write hex/rgb colors except "#fff"/"#000" and rgba(0,0,0,a) / rgba(255,255,255,a) for shadows, scrims and tiny details. Never call StyleSheet.create with colors at module level: use createStyles so theme switching works live.

@@ -421,7 +421,7 @@ export function useAgent({
       edit,
       signal,
     }: {
-      edit: { eid: string; text?: string; from?: string; fromAlt?: string; style?: Record<string, string> }
+      edit: { eid: string; text?: string; from?: string; fromAlt?: string; style?: Record<string, string>; imageSrc?: string }
       signal?: AbortSignal
     }) => {
       const res = await apiClient.post<{ path?: string; code?: string; error?: string; extraFiles?: Record<string, string> }>(
@@ -439,7 +439,7 @@ export function useAgent({
    * `screens`/`files` holds that path, same as a repair result.
    */
   const applyElementEdit = React.useCallback(
-    async (edit: { eid: string; text?: string; from?: string; fromAlt?: string; style?: Record<string, string> }, signal?: AbortSignal) => {
+    async (edit: { eid: string; text?: string; from?: string; fromAlt?: string; style?: Record<string, string>; imageSrc?: string }, signal?: AbortSignal) => {
       try {
         const data = await canvasEditMutation.mutateAsync({ edit, signal })
         // A platform file (e.g. a kit fix) that this project's stored copy

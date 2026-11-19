@@ -132,7 +132,7 @@ function EditorPopover({ zoom, element, screenName, inline }: { zoom: number; el
       }}
     >
       <ElementEditor
-        key={`${element.eid}|${element.text ?? ""}`}
+        key={`${element.eid}|${element.text ?? ""}|${element.imageSrc ?? ""}`}
         element={element}
         screenName={screenName}
         onSelectParent={inline.onSelectParent}

@@ -673,6 +673,28 @@ flowchart TD
 - Foundation and shell really do run in `Promise.all` together, not
   sequential-but-labeled-parallel — and each is skipped entirely (no model call at
   all) if its hash didn't change from the last build.
+- The AI never writes an image URL itself (`lib/agent/prompts.ts`'s data rules: an
+  `"image"` field is always `""` in the model's seed JSON). When a collection has an
+  image field, the AI also sets that collection's `category` to its closest match from
+  `IMAGE_LIBRARY_CATEGORIES` (`lib/image-library/categories.ts`: `avatars`, `beauty`,
+  `books`, `clothing`, `electronics`, `fitness`, `food`, `home`, `jewelry`, `shoes`,
+  `vehicles`), or omits it if nothing fits. Right after the foundation step produces
+  that data, `lib/agent/seed-images.ts`'s `fillSeedImages()` fills every blank
+  `"image"` field. It queries the curated ImageKit library first
+  (`lib/image-library/match.ts`, querying `image_library` via Postgres full-text
+  search + tags, with per-run de-duplication for variety). When the collection has a
+  `category`, the query is **hard-filtered** to it — without that, a single shared
+  word (e.g. "leather") could match an unrelated category's image (a watch instead of
+  a shoe) purely on text overlap; with no `category` to filter on, it instead falls
+  back to requiring 2+ overlapping tokens as a weaker safety net against that same
+  single-word-fluke problem. If still no match meets the rank threshold, it records
+  the query in `image_library_misses` (`lib/image-library/misses.ts`, upserting and
+  bumping `hit_count`) and falls back to `lib/stock-images/index.ts`, backed by
+  https://picsum.photos (free, keyless fallback so a field is never blank). It only
+  ever fills blanks, so a photo an earlier build or a manual edit already set survives
+  later rebuilds (the data model is cache-keyed by hash, same as everything else in
+  this step). Screens bind `<Image>` straight to that field (`lib/agent/prompts.ts`'s
+  TECH_RULES) rather than ever hardcoding a URL literal.
 - The screen worker pool has no explicit lock: it's `queue.shift()` inside plain
   async functions, which is race-free because JavaScript's event loop never
   preempts synchronous code — the `.shift()` call itself can't be interrupted

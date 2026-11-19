@@ -21,7 +21,9 @@
     "typebundle:install": "npm --prefix vendor/type-bundle ci --ignore-scripts --legacy-peer-deps",
     "device:deps": "tsx scripts/device-deps.ts",
     "device": "tsx --env-file=.env scripts/device-preview.ts",
-    "migrate-to-verified": "tsx --env-file=.env scripts/migrate-to-verified.ts"
+    "migrate-to-verified": "tsx --env-file=.env scripts/migrate-to-verified.ts",
+    "seed:images": "tsx --env-file=.env scripts/seed-image-library.ts",
+    "seed:curate": "tsx --env-file=.env scripts/curate-and-seed.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1169.0",

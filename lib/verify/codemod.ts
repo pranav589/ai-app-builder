@@ -153,7 +153,7 @@ export type CodemodResult = { code: string } | { error: string }
 export function applyElementEdit(
   code: string,
   target: Omit<EidTarget, "file">,
-  edit: Pick<ElementEdit, "text" | "style" | "from">
+  edit: Pick<ElementEdit, "text" | "style" | "from" | "imageSrc">
 ): CodemodResult {
   const sf = ts.createSourceFile("file.tsx", code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
 
@@ -171,8 +171,14 @@ export function applyElementEdit(
   // forwardRef's displayName), so a lone element on the line still counts,
   // but only for a text-only edit, which the `from` check below verifies.
   let candidates = onLine.filter((n) => tagOf(n) === target.tag || tagOf(n).split(".").pop() === target.tag)
-  if (!candidates.length && onLine.length === 1 && edit.from !== undefined && !edit.style) candidates = onLine
+  if (!candidates.length && onLine.length === 1 && (edit.from !== undefined || edit.imageSrc !== undefined) && !edit.style) candidates = onLine
+  if (!candidates.length && edit.imageSrc !== undefined) candidates = onLine.filter((n) => /image/i.test(tagOf(n)))
   if (!candidates.length) return { error: "That element has moved in the code. Tap it again." }
+
+  if (candidates.length > 1 && edit.imageSrc !== undefined) {
+    const imgs = candidates.filter((n) => /image/i.test(tagOf(n)))
+    if (imgs.length === 1) candidates = imgs
+  }
 
   const wantsText = edit.text !== undefined
   if (candidates.length > 1 && wantsText && edit.from !== undefined) {
@@ -191,6 +197,43 @@ export function applyElementEdit(
       return { error: "That text comes from data or code, not a fixed string, so it can't be edited here. Ask in chat instead." }
     }
     spans.push(t.span)
+  }
+
+  if (edit.imageSrc !== undefined) {
+    const srcLiteral = JSON.stringify(edit.imageSrc)
+    const sourceAttr = opening.attributes.properties.find(
+      (p): p is ts.JsxAttribute =>
+        ts.isJsxAttribute(p) && (p.name.getText(sf) === "source" || p.name.getText(sf) === "src")
+    )
+
+    if (sourceAttr) {
+      if (sourceAttr.name.getText(sf) === "src") {
+        if (sourceAttr.initializer) {
+          spans.push({ start: sourceAttr.initializer.getStart(sf), end: sourceAttr.initializer.getEnd(), text: srcLiteral })
+        } else {
+          spans.push({ start: sourceAttr.getStart(sf), end: sourceAttr.getEnd(), text: `src=${srcLiteral}` })
+        }
+      } else {
+        const init = sourceAttr.initializer
+        if (init && ts.isJsxExpression(init) && init.expression && ts.isObjectLiteralExpression(init.expression)) {
+          const uriProp = init.expression.properties.find(
+            (pr): pr is ts.PropertyAssignment =>
+              ts.isPropertyAssignment(pr) && (pr.name.getText(sf) === "uri" || (ts.isIdentifier(pr.name) && pr.name.text === "uri"))
+          )
+          if (uriProp) {
+            spans.push({ start: uriProp.initializer.getStart(sf), end: uriProp.initializer.getEnd(), text: srcLiteral })
+          } else {
+            spans.push({ start: init.getStart(sf), end: init.getEnd(), text: `{{ uri: ${srcLiteral} }}` })
+          }
+        } else if (init) {
+          spans.push({ start: init.getStart(sf), end: init.getEnd(), text: `{{ uri: ${srcLiteral} }}` })
+        } else {
+          spans.push({ start: sourceAttr.getStart(sf), end: sourceAttr.getEnd(), text: `source={{ uri: ${srcLiteral} }}` })
+        }
+      }
+    } else {
+      spans.push({ start: opening.tagName.getEnd(), end: opening.tagName.getEnd(), text: ` source={{ uri: ${srcLiteral} }}` })
+    }
   }
 
   if (edit.style && Object.keys(edit.style).length) {

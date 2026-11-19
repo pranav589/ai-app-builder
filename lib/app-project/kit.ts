@@ -28,6 +28,7 @@ export const KIT_SOURCE = `// Platform module: the screen component kit. Screens
 // type scale stay consistent across the whole app. Import, never rewrite.
 import * as React from "react"
 import { Pressable, ScrollView, Switch, Text as RNText, TextInput, View } from "react-native"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useTheme, type Theme } from "@/theme"
 
@@ -74,7 +75,9 @@ function toneColor(tone: Tone | undefined, c: Theme["colors"]) {
 
 export function Screen({ children, scroll = true, padded = true, ...rest }: ScreenProps) {
   const t = useTheme()
-  const style = { padding: padded ? t.spacing.lg : 0, gap: t.spacing.lg }
+  const insets = useSafeAreaInsets()
+  const base = padded ? t.spacing.lg : 0
+  const style = { paddingTop: base + insets.top, paddingBottom: base + insets.bottom, paddingHorizontal: base, gap: t.spacing.lg }
   if (!scroll) return <View {...rest} style={[{ flex: 1, backgroundColor: t.colors.background }, style]}>{children}</View>
   return (
     <ScrollView {...rest} style={{ flex: 1, backgroundColor: t.colors.background }} contentContainerStyle={style}>

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { customType, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 // Mirrors the live CloudHike `users` table. `id` is the CloudHike Auth user id.
 export const users = pgTable("users", {
@@ -185,3 +185,53 @@ export const appBackends = pgTable("app_backends", {
 });
 
 export type AppBackendRow = typeof appBackends.$inferSelect;
+
+// ---------------------------------------------------------------- image library
+// Curated image library for seed images, pre-populated in ImageKit with category/
+// description/tags and queried via Postgres full-text search.
+// Created by db/sql/image-library.sql (npm run db:sql).
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
+
+export const imageLibrary = pgTable(
+  "image_library",
+  {
+    id: text("id").primaryKey(),
+    imagekitFileId: text("imagekit_file_id").notNull().unique(),
+    url: text("url").notNull(),
+    category: text("category").notNull(),
+    description: text("description"),
+    tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
+    search: tsvector("search"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("image_library_search_idx").using("gin", t.search),
+    index("image_library_category_idx").on(t.category),
+  ]
+);
+
+export type ImageLibraryRow = typeof imageLibrary.$inferSelect;
+export type NewImageLibraryRow = typeof imageLibrary.$inferInsert;
+
+export const imageLibraryMisses = pgTable(
+  "image_library_misses",
+  {
+    id: text("id").primaryKey(),
+    query: text("query").notNull().unique(),
+    collectionLabel: text("collection_label"),
+    subject: text("subject"),
+    hitCount: integer("hit_count").notNull().default(1),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("image_library_misses_hit_count_idx").on(t.hitCount),
+  ]
+);
+
+export type ImageLibraryMissRow = typeof imageLibraryMisses.$inferSelect;
+export type NewImageLibraryMissRow = typeof imageLibraryMisses.$inferInsert;

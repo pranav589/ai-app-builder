@@ -47,10 +47,10 @@ export async function applyCanvasEdit(projectId: string, edit: ElementEdit, sign
   const code = ws.files[target.file]
   if (code === undefined) return { error: "That file isn't part of the project anymore.", extraFiles }
 
-  let result = applyElementEdit(code, target, { text: edit.text, from: edit.from, style: edit.style })
+  let result = applyElementEdit(code, target, { text: edit.text, from: edit.from, style: edit.style, imageSrc: edit.imageSrc })
   // The abandoned save before this one may have landed, leaving its text in the source.
   if ("error" in result && edit.text !== undefined && edit.fromAlt !== undefined) {
-    result = applyElementEdit(code, target, { text: edit.text, from: edit.fromAlt, style: edit.style })
+    result = applyElementEdit(code, target, { text: edit.text, from: edit.fromAlt, style: edit.style, imageSrc: edit.imageSrc })
   }
   if ("error" in result) return { error: result.error, extraFiles }
   if (signal?.aborted) return superseded
