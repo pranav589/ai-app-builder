@@ -1,11 +1,13 @@
 "use client"
 
 import * as React from "react"
+import { useMutation, useQuery } from "@tanstack/react-query"
 
 import type { AgentEvent, AgentPhase, BackendInfo, GeneratedScreen } from "@/lib/agent/types"
 import type { DataModel } from "@/lib/app-runtime/data-model"
 import type { ThemePackage } from "@/lib/app-runtime/theme"
 import type { ElementRef } from "@/lib/preview/protocol"
+import { apiClient, getApiErrorData, getApiErrorStatus, isApiCancelled } from "@/lib/api-client"
 import type { ChatMessage } from "./types"
 
 type Action = "start" | "resume" | "message" | "approve" | "backend"
@@ -65,6 +67,17 @@ export function useAgent({
   const [backend, setBackend] = React.useState<BackendInfo | null>(initialBackend)
   const [cloudhike, setCloudhike] = React.useState(initialCloudhike)
 
+  const backendQuery = useQuery({
+    queryKey: ["project-backend", projectId],
+    queryFn: async () => {
+      const res = await apiClient.get<{ configured: boolean; accountConnected: boolean; backend: BackendInfo | null }>(
+        `/api/projects/${projectId}/backend`
+      )
+      return res.data
+    },
+    enabled: false,
+  })
+
   /**
    * The CloudHike connection and backend state as the server sees them right
    * now: both are rendered once at page load and otherwise only move through
@@ -75,15 +88,14 @@ export function useAgent({
    */
   const refreshBackend = React.useCallback(async () => {
     try {
-      const res = await fetch(`/api/projects/${projectId}/backend`)
-      if (!res.ok) return
-      const data = (await res.json()) as { configured: boolean; accountConnected: boolean; backend: BackendInfo | null }
+      const { data } = await backendQuery.refetch()
+      if (!data) return
       setCloudhike({ configured: data.configured, accountConnected: data.accountConnected })
       setBackend(data.backend)
     } catch {
       // Keep whatever we had; the next action will try again.
     }
-  }, [projectId])
+  }, [backendQuery])
 
   // Streaming code is buffered and flushed on a timer, not per token.
   const codeBuf = React.useRef(new Map<string, string>())
@@ -186,6 +198,20 @@ export function useAgent({
     [scheduleFlush]
   )
 
+  const agentMutation = useMutation({
+    mutationFn: async (req: Request) => {
+      const res = await apiClient.post<ReadableStream>(
+        `/api/projects/${projectId}/agent`,
+        req,
+        {
+          adapter: "fetch",
+          responseType: "stream",
+        }
+      )
+      return res
+    },
+  })
+
   const send = React.useCallback(
     async (req: Request) => {
       setError(null)
@@ -195,21 +221,24 @@ export function useAgent({
       )
       setStatusSince(Date.now())
       try {
-        const res = await fetch(`/api/projects/${projectId}/agent`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(req),
-        })
-        if (!res.ok || !res.body) {
-          const data = (await res.json().catch(() => ({}))) as { error?: string }
+        let stream: ReadableStream | null = null
+        try {
+          const res = await agentMutation.mutateAsync(req)
+          stream = res.data ?? (res.request?.response as Response | undefined)?.body ?? null
+          if (!stream) {
+            throw new Error("No response body")
+          }
+        } catch (err) {
+          const status = getApiErrorStatus(err)
+          const data = getApiErrorData<{ error?: string }>(err)
           // The account/backend state this request relied on may be stale (disconnected
           // elsewhere, revoked on CloudHike's side): resync it so the header and the
           // Connect dialog show what's actually true, instead of repeating the same failure.
           if (req.action === "backend") void refreshBackend()
-          setError({ message: data.error ?? "The agent couldn't start. Please try again.", retry: res.status === 409 ? undefined : req })
+          setError({ message: data?.error ?? "The agent couldn't start. Please try again.", retry: status === 409 ? undefined : req })
           return
         }
-        const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+        const reader = stream.pipeThrough(new TextDecoderStream()).getReader()
         let buf = ""
         let sawDone = false
         for (;;) {
@@ -255,7 +284,7 @@ export function useAgent({
         setStreaming((s) => (s && s.text ? s : null))
       }
     },
-    [projectId, handle, flushCode, refreshBackend]
+    [projectId, handle, flushCode, refreshBackend, agentMutation]
   )
 
   // Start working as soon as the workspace opens on a fresh project, or
@@ -281,6 +310,12 @@ export function useAgent({
     void send({ action: "approve", text })
   }, [send])
 
+  const themeMutation = useMutation({
+    mutationFn: async (themeId: string) => {
+      await apiClient.patch(`/api/projects/${projectId}/theme`, { themeId })
+    },
+  })
+
   /** Switches theme instantly in every screen, then saves the choice. */
   const setActiveTheme = React.useCallback(
     (themeId: string) => {
@@ -289,20 +324,12 @@ export function useAgent({
         previous = t?.activeId
         return t ? { ...t, activeId: themeId } : t
       })
-      void fetch(`/api/projects/${projectId}/theme`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ themeId }),
+      themeMutation.mutateAsync(themeId).catch(() => {
+        // Keep the look the server has, so a reload doesn't surprise anyone.
+        if (previous) setThemes((t) => (t && t.activeId === themeId ? { ...t, activeId: previous! } : t))
       })
-        .then((res) => {
-          if (!res.ok) throw new Error(String(res.status))
-        })
-        .catch(() => {
-          // Keep the look the server has, so a reload doesn't surprise anyone.
-          if (previous) setThemes((t) => (t && t.activeId === themeId ? { ...t, activeId: previous! } : t))
-        })
     },
-    [projectId]
+    [projectId, themeMutation]
   )
 
   // ---- Self-repair: a file that crashes in the preview is sent to the agent,
@@ -319,6 +346,16 @@ export function useAgent({
   const agentBusyRef = React.useRef(agentBusy)
   agentBusyRef.current = agentBusy
 
+  const repairMutation = useMutation({
+    mutationFn: async ({ path, message }: { path: string; message: string }) => {
+      const res = await apiClient.post<{ fixed: boolean; path?: string; code?: string; screenId?: string }>(
+        `/api/projects/${projectId}/repair`,
+        { path, message }
+      )
+      return res.data
+    },
+  })
+
   const pumpRepairs = React.useCallback(async () => {
     if (repairBusy.current || agentBusyRef.current || retryTimer.current) return
     const next = waiting.current.entries().next()
@@ -332,23 +369,17 @@ export function useAgent({
     setRepairing(path)
     let retryLater = false
     try {
-      const res = await fetch(`/api/projects/${projectId}/repair`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path, message }),
-      })
-      if (res.status === 409) {
+      const data = await repairMutation.mutateAsync({ path, message })
+      if (data.fixed && data.code) {
+        if (data.screenId) setScreens((prev) => prev.map((s) => (s.id === data.screenId ? { ...s, code: data.code } : s)))
+        else setFiles((prev) => ({ ...prev, [data.path!]: data.code! }))
+      }
+    } catch (err) {
+      if (getApiErrorStatus(err) === 409) {
         // The agent is busy with other work: try once more later (this call still counts).
         waiting.current.set(path, message)
         retryLater = true
-      } else if (res.ok) {
-        const data = (await res.json()) as { fixed: boolean; path?: string; code?: string; screenId?: string }
-        if (data.fixed && data.code) {
-          if (data.screenId) setScreens((prev) => prev.map((s) => (s.id === data.screenId ? { ...s, code: data.code } : s)))
-          else setFiles((prev) => ({ ...prev, [data.path!]: data.code! }))
-        }
       }
-    } catch {
       // Network trouble: the call still counts toward the limit.
     } finally {
       repairBusy.current = false
@@ -360,7 +391,7 @@ export function useAgent({
         }, BUSY_RETRY_MS)
       } else void pumpRepairs()
     }
-  }, [projectId])
+  }, [repairMutation])
 
   React.useEffect(() => () => {
     if (retryTimer.current) clearTimeout(retryTimer.current)
@@ -385,6 +416,23 @@ export function useAgent({
     if (error?.retry) void send(error.retry)
   }, [error, send])
 
+  const canvasEditMutation = useMutation({
+    mutationFn: async ({
+      edit,
+      signal,
+    }: {
+      edit: { eid: string; text?: string; from?: string; fromAlt?: string; style?: Record<string, string> }
+      signal?: AbortSignal
+    }) => {
+      const res = await apiClient.post<{ path?: string; code?: string; error?: string; extraFiles?: Record<string, string> }>(
+        `/api/projects/${projectId}/canvas-edit`,
+        edit,
+        { signal }
+      )
+      return res.data
+    },
+  })
+
   /**
    * A canvas inspector edit (Phase 8, item 3): no AI call, just the AST
    * codemod and the usual gates. Applies the saved code to whichever of
@@ -393,13 +441,7 @@ export function useAgent({
   const applyElementEdit = React.useCallback(
     async (edit: { eid: string; text?: string; from?: string; fromAlt?: string; style?: Record<string, string> }, signal?: AbortSignal) => {
       try {
-        const res = await fetch(`/api/projects/${projectId}/canvas-edit`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(edit),
-          signal,
-        })
-        const data = (await res.json().catch(() => null)) as { path?: string; code?: string; error?: string; extraFiles?: Record<string, string> } | null
+        const data = await canvasEditMutation.mutateAsync({ edit, signal })
         // A platform file (e.g. a kit fix) that this project's stored copy
         // predates: picked up right away, whether or not the edit itself
         // succeeded. The server keeps sending it until an edit is saved, so
@@ -408,18 +450,20 @@ export function useAgent({
         const extra = data?.extraFiles
         const resynced = !!extra && Object.entries(extra).some(([p, c]) => filesRef.current[p] !== c)
         if (extra && resynced) setFiles((prev) => ({ ...prev, ...extra }))
-        if (!res.ok || !data || data.error || !data.path || data.code === undefined) return { ok: false as const, error: data?.error ?? "Couldn't apply that edit.", resynced }
+        if (!data || data.error || !data.path || data.code === undefined) return { ok: false as const, error: data?.error ?? "Couldn't apply that edit.", resynced }
         const { path, code } = data as { path: string; code: string }
         setScreens((prev) => (prev.some((s) => s.path === path) ? prev.map((s) => (s.path === path ? { ...s, code } : s)) : prev))
         setFiles((prev) => (prev[path] !== undefined ? { ...prev, [path]: code } : prev))
         return { ok: true as const, resynced }
       } catch (e) {
         // Abandoned on purpose (a newer edit replaced it): not an error.
-        if (e instanceof DOMException && e.name === "AbortError") return { ok: false as const, aborted: true as const }
+        if (isApiCancelled(e) || signal?.aborted) {
+          return { ok: false as const, aborted: true as const }
+        }
         return { ok: false as const, error: "Couldn't reach the server." }
       }
     },
-    [projectId]
+    [canvasEditMutation]
   )
 
   return {

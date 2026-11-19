@@ -1,10 +1,12 @@
 "use client"
 
 import * as React from "react"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import qrcode from "qrcode-generator"
 import { Check, Copy, Loader2, Play, QrCode, RotateCw, Smartphone, Square } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { apiClient, getApiErrorMessage } from "@/lib/api-client"
 import {
   Dialog,
   DialogContent,
@@ -41,44 +43,46 @@ type Lane = { url: string | null; status: LaneStatus; error?: string }
  * so the QR appears without the user touching a terminal.
  */
 function useDeviceLane(projectId: string, active: boolean) {
-  const [lane, setLane] = React.useState<Lane>({ url: null, status: "stopped" })
-  const [busy, setBusy] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
+  const [overrideLane, setOverrideLane] = React.useState<Lane | null>(null)
+  const [customError, setCustomError] = React.useState<string | null>(null)
   const endpoint = `/api/projects/${projectId}/device`
 
-  React.useEffect(() => {
-    if (!active) return
-    let cancelled = false
-    const poll = () =>
-      fetch(endpoint)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => data && !cancelled && setLane(data))
-        .catch(() => {})
-    void poll()
-    // Faster while Metro is starting, so the QR appears promptly.
-    const t = setInterval(poll, lane.status === "starting" ? 1500 : 3000)
-    return () => {
-      cancelled = true
-      clearInterval(t)
-    }
-  }, [endpoint, active, lane.status])
+  const laneQuery = useQuery({
+    queryKey: ["device-lane", projectId],
+    queryFn: async () => {
+      const res = await apiClient.get<Lane>(endpoint)
+      return res.data
+    },
+    enabled: active,
+    refetchInterval: (query) => (query.state.data?.status === "starting" ? 1500 : 3000),
+  })
+
+  const laneMutation = useMutation({
+    mutationFn: async (method: "POST" | "DELETE") => {
+      const res =
+        method === "POST"
+          ? await apiClient.post<Lane>(endpoint)
+          : await apiClient.delete<Lane>(endpoint)
+      return res.data
+    },
+    onSuccess: (data) => {
+      if (data) setOverrideLane(data)
+    },
+    onError: (err) => {
+      setCustomError(getApiErrorMessage(err))
+    },
+  })
+
+  const lane = overrideLane ?? laneQuery.data ?? { url: null, status: "stopped" }
+  const busy = laneMutation.isPending
+  const error = customError
 
   const send = React.useCallback(
-    async (method: "POST" | "DELETE") => {
-      setBusy(true)
-      setError(null)
-      try {
-        const res = await fetch(endpoint, { method })
-        const data = await res.json().catch(() => null)
-        if (!res.ok) setError(data?.error ?? "Something went wrong.")
-        else if (data) setLane(data)
-      } catch {
-        setError("Couldn't reach the server.")
-      } finally {
-        setBusy(false)
-      }
+    (method: "POST" | "DELETE") => {
+      setCustomError(null)
+      laneMutation.mutate(method)
     },
-    [endpoint],
+    [laneMutation]
   )
 
   return { lane, busy, error, start: () => send("POST"), stop: () => send("DELETE") }

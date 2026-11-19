@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import * as React from "react"
+import { useQuery } from "@tanstack/react-query"
 import {
   Activity,
   BookOpen,
@@ -20,6 +21,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { apiClient } from "@/lib/api-client"
 
 type GalleryApp = {
   id: string
@@ -174,28 +176,22 @@ function GallerySkeleton() {
 export function AppGallery() {
   const { user, isPending } = useAuth()
   const isSignedIn = Boolean(user)
-  const [mine, setMine] = React.useState<MyProject[] | null>(null)
-  const [loadFailed, setLoadFailed] = React.useState(false)
-  const [reloadKey, setReloadKey] = React.useState(0)
 
-  React.useEffect(() => {
-    if (!user) {
-      setMine(null)
-      return
-    }
-    let cancelled = false
-    setLoadFailed(false)
-    fetch("/api/projects", { cache: "no-store" })
-      .then((r) => {
-        if (!r.ok) throw new Error("load failed")
-        return r.json()
-      })
-      .then((d) => !cancelled && setMine(d.projects))
-      .catch(() => !cancelled && (setMine([]), setLoadFailed(true)))
-    return () => {
-      cancelled = true
-    }
-  }, [user, reloadKey])
+  const projectsQuery = useQuery({
+    queryKey: ["projects", user?.id],
+    queryFn: async () => {
+      const res = await apiClient.get<{ projects: MyProject[] }>("/api/projects")
+      return res.data.projects
+    },
+    enabled: isSignedIn,
+  })
+
+  const mine = !isSignedIn
+    ? null
+    : projectsQuery.isLoading || (projectsQuery.isFetching && !projectsQuery.data)
+      ? null
+      : (projectsQuery.data ?? (projectsQuery.isError ? [] : null))
+  const loadFailed = isSignedIn && projectsQuery.isError
 
   if (isPending) {
     return (
@@ -227,7 +223,7 @@ export function AppGallery() {
         ) : loadFailed ? (
           <div className="flex flex-col items-center justify-center gap-3 rounded-(--r-lg) border border-dashed border-border py-16 text-center">
             <p className="text-sm font-medium">We couldn&apos;t load your projects</p>
-            <Button variant="outline" className="h-11 rounded-(--r-sm) px-6 text-base" onClick={() => { setMine(null); setReloadKey((k) => k + 1) }}>
+            <Button variant="outline" className="h-11 rounded-(--r-sm) px-6 text-base" onClick={() => { void projectsQuery.refetch() }}>
               Try again
             </Button>
           </div>

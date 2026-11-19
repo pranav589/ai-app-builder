@@ -11,6 +11,7 @@
 // device or tab changed something.
 
 import type { DataModel } from "@/lib/app-runtime/data-model"
+import { apiClient, getApiErrorData, isApiNetworkError } from "@/lib/api-client"
 import { compressImage } from "./local-backend"
 import { BackendError, type AppBackend, type AppRecord, type AppUser, type BackendChange } from "./types"
 
@@ -48,19 +49,23 @@ export class CloudHikeBackend implements AppBackend {
   }
 
   private async call<T>(op: string, body: Record<string, unknown> = {}): Promise<T> {
-    let res: Response
     try {
-      res = await fetch(`/api/projects/${encodeURIComponent(this.appId)}/backend/data`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-app-session": this.session },
-        body: JSON.stringify({ op, ...body }),
-      })
-    } catch {
-      throw new BackendError("You're offline. Check your connection and try again.")
+      const res = await apiClient.post<{ result?: T; error?: string }>(
+        `/api/projects/${encodeURIComponent(this.appId)}/backend/data`,
+        { op, ...body },
+        {
+          headers: { "x-app-session": this.session },
+        }
+      )
+      return res.data.result as T
+    } catch (err) {
+      const data = getApiErrorData<{ error?: string }>(err)
+      if (data?.error) throw new BackendError(data.error)
+      if (isApiNetworkError(err)) {
+        throw new BackendError("You're offline. Check your connection and try again.")
+      }
+      throw new BackendError("Something went wrong. Please try again.")
     }
-    const data = (await res.json().catch(() => ({}))) as { result?: T; error?: string }
-    if (!res.ok) throw new BackendError(data.error ?? "Something went wrong. Please try again.")
-    return data.result as T
   }
 
   private emit(change: BackendChange) {

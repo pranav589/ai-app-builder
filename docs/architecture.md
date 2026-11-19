@@ -1,0 +1,285 @@
+# Architecture
+
+This document describes the system architecture of **Anything** — a Lovable/v0-style
+builder that turns a text prompt into a real Expo/React Native mobile app, with live
+browser preview, canvas-based visual editing, QR-to-phone preview via Expo Go, a
+Code tab with diffs/versions, and an optional "Connect Backend" step that provisions
+a real Postgres/Auth/Storage backend via **CloudHike** (the platform this app runs on
+and integrates with for auth, job queueing, and storage).
+
+A companion document, [`codebase-walkthrough.md`](./codebase-walkthrough.md), is a
+file-by-file, flow-by-flow tour intended for someone who hasn't read this codebase
+before. This document instead focuses on the *shape* of the system: the major
+subsystems, how they fit together, and the design decisions behind them.
+
+An interactive version of this document (with rendered diagrams) was also published
+as a Claude Artifact.
+
+---
+
+## 1. System overview
+
+```mermaid
+flowchart LR
+    subgraph Browser
+        UI["Workspace UI\n(components/workspace/**)"]
+        Runtime["AppRuntimeProvider\n(Sucrase compile + iframes)"]
+    end
+
+    subgraph Server["Next.js server (app/**)"]
+        API["API routes\napp/api/**"]
+        Agent["Agent orchestrator\nlib/agent/**"]
+        Verify["Verified-code gateway\nlib/verify/**"]
+    end
+
+    subgraph External
+        AIModel["AI model\n(OpenAI-compatible gateway)"]
+        CloudHike["CloudHike\n(Auth, Jobs queue, Storage, hosted Postgres)"]
+    end
+
+    DB[("Postgres\ndb/schema.ts")]
+
+    UI -- "HTTP / SSE" --> API
+    API --> Agent
+    Agent -- "ChangeSet" --> Verify
+    Verify -- "parse/policy/typecheck/render gates" --> Verify
+    Agent <--> AIModel
+    Agent <--> CloudHike
+    API <--> DB
+    Agent --> DB
+    UI --> Runtime
+    Runtime -- "postMessage" --> Frames["Sandboxed iframes\nrunning preview-runtime/"]
+```
+
+The core idea: **the AI never writes code directly into the project.** Every change —
+whether from a chat message, a plan approval, or a tap-to-edit on the canvas — is
+expressed as a `ChangeSet` and pushed through a verification pipeline (parse → policy
+→ typecheck → render) with bounded automatic repair before it is committed as a new
+version. This is the "verified code engine," the active focus of current development
+(see §5).
+
+---
+
+## 2. Major subsystems
+
+| Subsystem | Location | Responsibility |
+|---|---|---|
+| Workspace UI | `components/workspace/**` | Chat, Canvas, Preview, Code, Changes, Versions panes |
+| Client API & Query Layer | `lib/api-client.ts`, `components/query-provider.tsx` | React Query + Axios client for all client component data queries and mutations |
+| Agent orchestrator | `lib/agent/**` | Planning, screen/theme/data generation, run lifecycle, SSE streaming |
+| Verified-code gateway | `lib/verify/**` | `ChangeSet` application, gates, bounded repair, commit |
+| App manifest | `lib/manifest/**` | Zod-validated structural model (screens/nav/collections) compiled deterministically into layout/nav/type files |
+| Platform kit | `lib/app-project/kit.ts` | Typed component vocabulary (`@/kit`) the AI is restricted to |
+| Preview runtime | `preview-runtime/` + `lib/preview/**` | Sandboxed iframe runtime: file-based router, RN/Expo shims, element inspector |
+| Device preview | `lib/device/**` | Exports a project as a real Expo project, runs a local Metro lane, QR-to-Expo-Go |
+| Backend integration | `lib/cloudhike/**`, `lib/backend/**` | Connects a project to a real CloudHike-hosted Postgres/Auth/Storage backend |
+| Versioning | `lib/versions/**` | Snapshot store, diffing, restore |
+| Jobs | `lib/jobs/**` | Cloudhike Jobs HTTP queue client; routes agent runs to a worker or runs inline in dev |
+| Persistence | `db/**` | Drizzle schema + hand-applied SQL for non-drizzle-managed tables |
+
+---
+
+## 3. Request flow: "build an app from a prompt"
+
+```mermaid
+sequenceDiagram
+    participant U as User (browser)
+    participant W as Workspace UI
+    participant API as /api/projects/[id]/agent
+    participant Run as run-store (DB mutex)
+    participant Jobs as Cloudhike Jobs
+    participant Orch as orchestrator.ts
+    participant AI as AI model
+    participant Ver as verify/run.ts (gates)
+    participant Ver2 as versions/store.ts
+
+    U->>W: submit prompt
+    W->>API: POST agent {action: start}
+    API->>Run: openRun(projectId)
+    API->>Jobs: enqueue (prod) / run inline (dev)
+    Jobs->>Orch: executeRun()
+    Orch->>AI: planning prompt
+    AI-->>Orch: <plan>...</plan> (streamed)
+    Orch-->>W: SSE: plan text (via run-store events)
+    U->>W: approve plan
+    W->>API: POST agent {action: approve}
+    API->>Orch: executeRun() (generation)
+    par theme/data/shell
+        Orch->>AI: foundation + shell prompts
+    end
+    loop each screen
+        Orch->>Ver: runChange(ChangeSet)
+        Ver->>AI: coder prompt -> ChangeSet
+        Ver->>Ver: gates: parse -> policy -> typecheck -> render
+        alt gate fails
+            Ver->>AI: repair prompt (<=3 rounds)
+        end
+        Ver-->>Orch: committed workspace
+    end
+    Orch->>Ver2: commitSnapshot()
+    Ver2-->>W: SSE: done, new preview_screens
+    W->>W: AppRuntimeProvider recompiles + re-renders iframes
+```
+
+Key properties of this flow:
+
+- **One run per project at a time.** `lib/agent/run-store.ts` enforces this with a
+  DB-level partial unique index, not just in-memory state — so it is safe across
+  Cloudhike Jobs workers and server restarts.
+- **Dev vs. prod dispatch is transparent to the orchestrator.** `lib/jobs/cloudhike-jobs.ts`
+  picks between enqueueing to the Cloudhike Jobs HTTP queue and calling `executeRun`
+  in-process for local development; `app/api/jobs/agent/route.ts` is the webhook the
+  queue worker calls back into.
+- **Progress streams over SSE**, backed by an `agent_events` table rather than a raw
+  in-memory stream, so a client reconnect (or a page it opens from a second tab)
+  can resume mid-run.
+
+---
+
+## 4. The verified-code pipeline
+
+```mermaid
+flowchart TD
+    Start["Model proposes a ChangeSet\n(lib/verify/coder.ts)"] --> Parse
+    Parse["Parse gate\n(syntax, file shape)"] -->|pass| Policy
+    Parse -->|fail| Repair
+    Policy["Policy gate\n(ownership, allowed imports, line-count rules)"] -->|pass| Typecheck
+    Policy -->|fail| Repair
+    Typecheck["Typecheck gate\n(real tsc LanguageService vs vendor/type-bundle)"] -->|pass| Render
+    Typecheck -->|fail| Repair
+    Render["Render gate\n(headless jsdom mount of the actual preview bundle)"] -->|pass| Commit
+    Render -->|fail| Repair
+    Repair["Repair prompt\n(<=3 rounds, feeds diagnostics back to model)"] -->|retry| Parse
+    Repair -->|exhausted| Fail["Run fails / falls back\n(generation-guard keeps last good screen)"]
+    Commit["commitSnapshot()\nlib/versions/store.ts"] --> Done["New app_snapshots row,\nprojects.preview_screens updated"]
+```
+
+Why this exists: earlier versions of this product let the model write files directly
+into the project. That produced apps that looked right in the chat transcript but
+crashed in the actual preview (bad imports, type errors, or runtime exceptions in
+React Native-specific code the model doesn't reliably know). The verified-code engine
+closes that gap by gating every change against the *real* toolchain — a real
+TypeScript compiler, and a real mount of the real preview bundle — before it's ever
+shown to the user as "done."
+
+Supporting pieces:
+
+- **`lib/manifest/**`** — screens, navigation, and data collections are modeled as a
+  Zod-validated manifest, not free-form files. Layout/nav/type files are compiled
+  *deterministically* from the manifest (`lib/manifest/compile.ts`), so the AI cannot
+  break routing or navigation — it only edits manifest-owned content and screen bodies.
+- **`lib/app-project/kit.ts`** (`@/kit`) — a constrained, typed component vocabulary
+  (Screen/Stack/Text/Button/Card/etc.) the model is steered toward, instead of raw
+  React Native primitives, to reduce the space of mistakes it can make.
+- **`lib/verify/router.ts`** — a fast classifier that skips full planning for small
+  edits (e.g. "make the button blue"), routing straight to a targeted `ChangeSet`.
+- **`lib/verify/codemod.ts`** — canvas tap-to-edit applies AST-level codemods with
+  *no model call at all*, then still runs through the same gates.
+- **Phase status**: this is the only pipeline in the app as of 2026-11-18 (the legacy
+  non-verified engine was fully removed, not just flagged off). See
+  [`verified-code-plan.md`](./verified-code-plan.md) and
+  [`verified-code-pending.md`](./verified-code-pending.md) for the phase-by-phase plan
+  and open items (hosted/no-Wi-Fi device preview is the only not-started phase).
+
+---
+
+## 5. Preview system: three ways to see the app
+
+```mermaid
+flowchart LR
+    Doc["AppDoc\n(files + manifest + theme + data)"] --> Compile["compileForPreview()\nlib/app-project/project.ts\n(Sucrase, browser-side)"]
+    Compile --> Canvas["Canvas thumbnails\n(components/workspace/canvas-panel.tsx)"]
+    Compile --> Preview["Interactive Preview pane\n(components/workspace/preview-panel.tsx)"]
+    Canvas --> Frame1["iframe running preview-runtime/\n(sandboxed, postMessage protocol)"]
+    Preview --> Frame1
+    Doc --> Export["exportExpoProject()\nlib/device/export.ts"]
+    Export --> Metro["Real Expo/Metro process\nlib/device/lane.ts"]
+    Metro --> QR["QR code -> Expo Go on phone\ncomponents/workspace/expo-qr.tsx"]
+```
+
+1. **Canvas / in-browser preview** — every project file is compiled client-side with
+   Sucrase and loaded into sandboxed `<iframe sandbox="allow-scripts allow-forms">`
+   elements via a `postMessage` protocol (`lib/preview/protocol.ts`). The iframe side
+   runs `preview-runtime/`, a single bundled file (`public/preview/runtime.js`, built
+   by `scripts/build-preview.mjs`) that includes an Expo-Router-like file-based router,
+   React Native/Expo API shims, and a dev JSX factory that stamps every element with a
+   `data-eid` for the inspector and codemod targeting.
+2. **Render gate** — the *same* preview bundle is mounted headless in jsdom as part of
+   the verified-code pipeline (§4), so "does it render" is checked with the real
+   runtime, not a mock.
+3. **Real device preview** — `lib/device/export.ts` writes the project out as an actual
+   Expo project; `lib/device/lane.ts` manages a local Metro process per project; the
+   user scans a QR code with Expo Go to see the app on a real phone. A hosted
+   (no-shared-Wi-Fi) variant is planned but not yet built — see §4.
+
+---
+
+## 6. Backend integration ("Connect Backend")
+
+```mermaid
+flowchart LR
+    UI["backend-connect.tsx"] --> Connect["lib/cloudhike/connect.ts\n(OAuth-like connect, encrypted token)"]
+    Connect --> MCP["lib/cloudhike/mcp.ts\n(CloudHike MCP client)"]
+    MCP --> Prov["lib/cloudhike/provision.ts\n(\"backend engineer\" agent)"]
+    Prov --> CH["CloudHike platform\n(real Postgres / Auth / Storage project)"]
+    CH --> Sync["lib/cloudhike/app-backend.ts\n(syncs schema/env back)"]
+    Sync --> Generated["Generated app code calls\nlib/backend (AppBackend interface)"]
+```
+
+Generated apps never call CloudHike directly. They call a small `AppBackend`
+interface (`lib/backend/types.ts`) with implementations for local/in-device storage
+(`local-backend.ts`) and a real provisioned CloudHike project (`cloudhike-backend.ts`),
+selected by `createBackend()` (`lib/backend/index.ts`). This keeps generated app code
+backend-agnostic and makes "preview without a backend" vs. "connected to a real
+backend" a configuration switch rather than two codepaths.
+
+Provisioning itself is agentic: `lib/cloudhike/provision.ts` runs a "backend engineer"
+AI loop that calls CloudHike's MCP tools (create project, deploy services) in a
+tagged-reply protocol similar to the main orchestrator's.
+
+---
+
+## 7. Persistence
+
+- **Drizzle-managed**: `agent_runs` / `agent_events` (run mutex + SSE log),
+  `app_snapshots` (version history), `cloudhike_connections` / `app_backends`
+  (backend-connect feature, secrets encrypted via `lib/crypto/secret-box.ts`).
+- **Hand-applied SQL** (`db/sql/*.sql`, applied via `npm run db:sql` →
+  `scripts/migrate-sql.mjs`, all idempotent): `users`, `projects` (holds `prompt`,
+  `preview_screens` as the whole `AppDoc` JSON, `current_version`, `assets`),
+  `messages` (chat history + plan/pipeline data). These mirror tables that are also
+  used by/shared with the CloudHike-hosted side, which is why they're not
+  drizzle-kit-managed.
+
+---
+
+## 8. Build & eval tooling
+
+- **`scripts/build-preview.mjs`** — esbuild-bundles `preview-runtime/` into
+  `public/preview/runtime.js`; runs automatically before `dev`/`build`.
+- **`scripts/device-preview.ts`** / **`lib/device/**`** — local Metro lane CLI for
+  real-device preview.
+- **`scripts/eval.ts`** + **`eval/**`** — evaluation harness that runs the agent
+  against fixed project fixtures and measures first-pass vs. verified-and-committed
+  success rate and time-to-verified (current baseline on the `notes` fixture: 42%
+  first-pass, 77% verified-and-committed, p50 21.1s).
+- **`vendor/type-bundle/`** — a pinned, isolated `node_modules` install the real `tsc`
+  gate type-checks generated code against, independent of this app's own dependencies.
+- **`scripts/migrate-to-verified.ts`** — one-off script used to migrate all existing
+  projects onto the manifest/verified engine when the legacy engine was removed.
+
+---
+
+## 9. Design decisions worth knowing
+
+- **The AI is never trusted to be correct; it's trusted to be checkable.** Every
+  mechanism above (manifest compilation, the `@/kit` vocabulary, the gate pipeline,
+  bounded repair) exists to narrow what the model can break and to catch it
+  deterministically when it does, rather than relying on prompt quality alone.
+- **Preview and "the real app" are the same code path.** There is no separate "demo
+  renderer" — the browser preview, the render gate, and (via export) the real Expo/
+  Metro build all run the same project files and the same `preview-runtime/` bundle
+  family. This is what makes the render gate meaningful.
+- **Structure vs. content split.** The manifest/compile step owns anything that, if
+  broken, would break the whole app (navigation, routing, data types). The AI only
+  ever touches screen bodies and manifest *entries*, never the compiled output.

@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
+import { useMutation } from "@tanstack/react-query"
 import {
   AlertCircle,
   ArrowUp,
@@ -15,6 +16,7 @@ import {
 
 import { cn } from "cn"
 import { useAuth } from "@/components/auth/auth-provider"
+import { apiClient, getApiErrorMessage, getApiErrorStatus } from "@/lib/api-client"
 import {
   ASSET_ACCEPT,
   MAX_ASSETS,
@@ -113,8 +115,26 @@ export function PromptBox() {
     setError(null)
   }
 
+  const createProjectMutation = useMutation({
+    mutationFn: async ({
+      form,
+      onProgress,
+    }: {
+      form: FormData
+      onProgress: (percent: number) => void
+    }) => {
+      const res = await apiClient.post<{ projectId?: string; error?: string }>("/api/projects", form, {
+        headers: { "Content-Type": "multipart/form-data" },
+        onUploadProgress: (e) => {
+          if (e.total) onProgress(Math.round((e.loaded / e.total) * 100))
+        },
+      })
+      return res.data
+    },
+  })
+
   // Nothing is uploaded or saved until this runs, i.e. until the user presses Send.
-  const createProject = (prompt: string, attached: PendingFile[]) => {
+  const createProject = async (prompt: string, attached: PendingFile[]) => {
     setError(null)
     setProgress(0)
     setPhase(attached.length ? "uploading" : "creating")
@@ -128,30 +148,29 @@ export function PromptBox() {
       setError(message)
     }
 
-    const xhr = new XMLHttpRequest()
-    xhr.open("POST", "/api/projects")
-    xhr.upload.onprogress = (e) => e.lengthComputable && setProgress(Math.round((e.loaded / e.total) * 100))
-    xhr.upload.onload = () => setPhase("creating")
-    xhr.onerror = () => fail("Network error. Check your connection and try again.")
-    xhr.onload = () => {
-      let data: { projectId?: string; error?: string } = {}
-      try {
-        data = JSON.parse(xhr.responseText)
-      } catch {
-        // non-JSON error page
-      }
-      if (xhr.status >= 200 && xhr.status < 300 && data.projectId) {
+    try {
+      const data = await createProjectMutation.mutateAsync({
+        form,
+        onProgress: (pct) => {
+          setProgress(pct)
+          if (pct >= 100) setPhase("creating")
+        },
+      })
+      if (data.projectId) {
         setPhase("done")
         router.push(`/workspace/${data.projectId}`)
-      } else if (xhr.status === 401) {
-        // Session expired while the page was open: sign in again, then retry.
-        setPhase("idle")
-        openAuthDialog({ mode: "sign-in", onSuccess: () => createProject(prompt, attached) })
       } else {
         fail(data.error ?? "We couldn't create your project. Please try again.")
       }
+    } catch (err) {
+      if (getApiErrorStatus(err) === 401) {
+        // Session expired while the page was open: sign in again, then retry.
+        setPhase("idle")
+        openAuthDialog({ mode: "sign-in", onSuccess: () => createProject(prompt, attached) })
+        return
+      }
+      fail(getApiErrorMessage(err, "We couldn't create your project. Please try again."))
     }
-    xhr.send(form)
   }
 
   const handleSubmit = () => {

@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useMutation } from "@tanstack/react-query"
 import { AlertCircle, Eye, EyeOff, Gift, Sparkles } from "lucide-react"
 
 import {
@@ -24,6 +25,7 @@ import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
 import { GitHubIcon, GoogleIcon } from "@/components/auth/social-icons"
 import type { AuthMode, AuthUser, SocialProvider } from "@/components/auth/auth-provider"
+import { apiClient, getApiErrorData, getApiErrorMessage } from "@/lib/api-client"
 
 type Props = {
   open: boolean
@@ -36,18 +38,17 @@ type Props = {
 }
 
 export function AuthDialog({ open, mode, initialError, onModeChange, onClose, onSuccess, onSocial }: Props) {
-  const [loading, setLoading] = React.useState(false)
+  const [busy, setBusy] = React.useState(false)
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && !loading && onClose()}>
+    <Dialog open={open} onOpenChange={(next) => !next && !busy && onClose()}>
       <DialogContent className="gap-6 rounded-3xl p-8 sm:max-w-md">
         {/* Remount per mode so every attempt starts from a clean form. */}
         <AuthForm
           key={mode}
           mode={mode}
           initialError={initialError}
-          loading={loading}
-          setLoading={setLoading}
+          onBusyChange={setBusy}
           onModeChange={onModeChange}
           onSuccess={onSuccess}
           onSocial={onSocial}
@@ -60,21 +61,45 @@ export function AuthDialog({ open, mode, initialError, onModeChange, onClose, on
 function AuthForm({
   mode,
   initialError,
-  loading,
-  setLoading,
+  onBusyChange,
   onModeChange,
   onSuccess,
   onSocial,
 }: Pick<Props, "mode" | "initialError" | "onModeChange" | "onSuccess" | "onSocial"> & {
-  loading: boolean
-  setLoading: (v: boolean) => void
+  onBusyChange?: (busy: boolean) => void
 }) {
   const isSignUp = mode === "sign-up"
   const [values, setValues] = React.useState({ name: "", email: "", password: "" })
   const [errors, setErrors] = React.useState<FieldErrors>({})
   const [formError, setFormError] = React.useState<string | null>(initialError ?? null)
   const [socialLoading, setSocialLoading] = React.useState<SocialProvider | null>(null)
-  const busy = loading || socialLoading !== null
+
+  const authMutation = useMutation({
+    mutationFn: async (body: Record<string, unknown>) => {
+      const res = await apiClient.post<{ user: AuthUser; fieldErrors?: FieldErrors; error?: string }>(
+        `/api/auth/${mode}`,
+        body
+      )
+      return res.data
+    },
+    onSuccess: (data) => {
+      onSuccess(data.user)
+    },
+    onError: (err) => {
+      const data = getApiErrorData<{ fieldErrors?: FieldErrors; error?: string }>(err)
+      if (data?.fieldErrors) {
+        setErrors(data.fieldErrors)
+        focusFirstError(data.fieldErrors)
+      }
+      setFormError(getApiErrorMessage(err))
+    },
+  })
+
+  const busy = authMutation.isPending || socialLoading !== null
+
+  React.useEffect(() => {
+    onBusyChange?.(busy)
+  }, [busy, onBusyChange])
 
   // Coming back via the browser's back button restores this page from cache mid-redirect.
   React.useEffect(() => {
@@ -115,7 +140,7 @@ function AuthForm({
     if (first) refs[first].current?.focus()
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (busy) return
 
@@ -129,33 +154,11 @@ function AuthForm({
     setFormError(null)
     if (Object.keys(next).length) return focusFirstError(next)
 
-    setLoading(true)
-    try {
-      const res = await fetch(`/api/auth/${mode}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...(isSignUp ? { name: values.name } : {}),
-          email: values.email,
-          password: values.password,
-        }),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        if (data.fieldErrors) {
-          setErrors(data.fieldErrors)
-          focusFirstError(data.fieldErrors)
-        }
-        setFormError(data.error ?? "Something went wrong. Try again.")
-        setLoading(false)
-        return
-      }
-      setLoading(false)
-      onSuccess(data.user)
-    } catch {
-      setFormError("Network error. Check your connection and try again.")
-      setLoading(false)
-    }
+    authMutation.mutate({
+      ...(isSignUp ? { name: values.name } : {}),
+      email: values.email,
+      password: values.password,
+    })
   }
 
   const fieldProps = (field: AuthField) => ({
@@ -282,7 +285,7 @@ function AuthForm({
         </div>
 
         <Button type="submit" disabled={busy} className="mt-1 h-11 rounded-(--r-md) text-base">
-          {loading ? (
+          {authMutation.isPending ? (
             <>
               <Spinner /> {isSignUp ? "Creating account…" : "Signing in…"}
             </>

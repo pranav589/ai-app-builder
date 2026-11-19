@@ -1,8 +1,10 @@
 "use client"
 
 import * as React from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { AuthDialog } from "@/components/auth/auth-dialog"
+import { apiClient, getApiErrorMessage } from "@/lib/api-client"
 
 export type AuthUser = {
   id: string
@@ -69,16 +71,11 @@ function initAuth(): Promise<InitResult> {
 
       if (trusted && token) {
         try {
-          const res = await fetch("/api/auth/social", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ token }),
-          })
-          const data = await res.json().catch(() => ({}))
-          if (res.ok) return { user: data.user as AuthUser, error: null }
-          return { user: null, error: data.error ?? "We couldn't sign you in. Try again." }
-        } catch {
-          return { user: null, error: "Network error. Check your connection and try again." }
+          const res = await apiClient.post<{ user?: AuthUser; error?: string }>("/api/auth/social", { token })
+          if (res.data.user) return { user: res.data.user, error: null }
+          return { user: null, error: res.data.error ?? "We couldn't sign you in. Try again." }
+        } catch (err) {
+          return { user: null, error: getApiErrorMessage(err) }
         }
       }
       if (trusted && providerError) {
@@ -93,9 +90,8 @@ function initAuth(): Promise<InitResult> {
     }
 
     try {
-      const res = await fetch("/api/auth/session", { cache: "no-store" })
-      const data = await res.json()
-      return { user: (data.user as AuthUser | null) ?? null, error: null }
+      const res = await apiClient.get<{ user?: AuthUser | null }>("/api/auth/session")
+      return { user: (res.data.user as AuthUser | null) ?? null, error: null }
     } catch {
       return { user: null, error: null }
     }
@@ -104,8 +100,7 @@ function initAuth(): Promise<InitResult> {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = React.useState<AuthUser | null>(null)
-  const [isPending, setIsPending] = React.useState(true)
+  const queryClient = useQueryClient()
   const [dialog, setDialog] = React.useState<{
     open: boolean
     mode: AuthMode
@@ -114,13 +109,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const onSuccessRef = React.useRef<OpenOptions["onSuccess"]>(undefined)
   const onBeforeRedirectRef = React.useRef<OpenOptions["onBeforeSocialRedirect"]>(undefined)
 
+  const sessionQuery = useQuery({
+    queryKey: ["auth-session"],
+    queryFn: initAuth,
+    staleTime: Infinity,
+  })
+
+  const user = sessionQuery.data?.user ?? null
+  const isPending = sessionQuery.isPending
+
   React.useEffect(() => {
-    initAuth().then(({ user, error }) => {
-      setUser(user)
-      setIsPending(false)
-      if (error) setDialog({ open: true, mode: "sign-in", error })
-    })
-  }, [])
+    if (sessionQuery.data?.error) {
+      setDialog({ open: true, mode: "sign-in", error: sessionQuery.data.error })
+    }
+  }, [sessionQuery.data?.error])
 
   const openAuthDialog = React.useCallback((options: OpenOptions = {}) => {
     onSuccessRef.current = options.onSuccess
@@ -134,15 +136,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setDialog((d) => ({ ...d, open: false, error: null }))
   }, [])
 
-  const handleSuccess = React.useCallback((next: AuthUser) => {
-    const callback = onSuccessRef.current
-    onSuccessRef.current = undefined
-    onBeforeRedirectRef.current = undefined
-    setUser(next)
-    setDialog((d) => ({ ...d, open: false, error: null }))
-    // Let the signed-in UI render before resuming whatever the user was doing.
-    if (callback) setTimeout(() => callback(next), 0)
-  }, [])
+  const handleSuccess = React.useCallback(
+    (next: AuthUser) => {
+      const callback = onSuccessRef.current
+      onSuccessRef.current = undefined
+      onBeforeRedirectRef.current = undefined
+      queryClient.setQueryData<InitResult>(["auth-session"], { user: next, error: null })
+      setDialog((d) => ({ ...d, open: false, error: null }))
+      // Let the signed-in UI render before resuming whatever the user was doing.
+      if (callback) setTimeout(() => callback(next), 0)
+    },
+    [queryClient]
+  )
 
   const startSocialSignIn = React.useCallback((provider: SocialProvider) => {
     onBeforeRedirectRef.current?.()
@@ -155,14 +160,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     location.href = `${process.env.NEXT_PUBLIC_AUTH_URL}/social/${provider}?to=${to}`
   }, [])
 
+  const signOutMutation = useMutation({
+    mutationFn: async () => {
+      await apiClient.post("/api/auth/sign-out", {})
+    },
+    onSuccess: () => {
+      queryClient.setQueryData<InitResult>(["auth-session"], { user: null, error: null })
+    },
+  })
+
   const signOut = React.useCallback(async () => {
-    await fetch("/api/auth/sign-out", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-    }).catch(() => undefined)
-    setUser(null)
-  }, [])
+    await signOutMutation.mutateAsync().catch(() => undefined)
+    queryClient.setQueryData<InitResult>(["auth-session"], { user: null, error: null })
+  }, [signOutMutation, queryClient])
 
   const value = React.useMemo(
     () => ({ user, isPending, openAuthDialog, signOut }),

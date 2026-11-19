@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useQuery } from "@tanstack/react-query"
 import { ChevronDown, FilePlus, FileMinus, FilePen } from "lucide-react"
 import { cn } from "cn"
 
@@ -10,6 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { apiClient, getApiErrorMessage } from "@/lib/api-client"
 
 type DiffLine = { type: "context" | "add" | "remove"; line: string }
 type FileDiff = { path: string; status: "added" | "removed" | "modified"; lines: DiffLine[] }
@@ -49,44 +51,40 @@ function DiffFile({ file }: { file: FileDiff }) {
 
 /** What changed in a version, against the one it was committed on top of (Phase 9). */
 export function ChangesView({ projectId }: { projectId: string }) {
-  const [versions, setVersions] = React.useState<VersionRow[]>([])
-  const [currentVersion, setCurrentVersion] = React.useState<number | null>(null)
-  const [version, setVersion] = React.useState<number | null>(null)
-  const [files, setFiles] = React.useState<FileDiff[] | null>(null)
-  const [intent, setIntent] = React.useState<string | null>(null)
-  const [error, setError] = React.useState<string | null>(null)
-  const [loading, setLoading] = React.useState(false)
+  const [selectedVersion, setSelectedVersion] = React.useState<number | null>(null)
 
-  React.useEffect(() => {
-    void fetch(`/api/projects/${projectId}/versions`)
-      .then((r) => r.json())
-      .then((data) => {
-        setVersions(data.versions ?? [])
-        setCurrentVersion(data.current ?? null)
-        setVersion((v) => v ?? data.current ?? null)
-      })
-      .catch(() => {})
-  }, [projectId])
+  const versionsQuery = useQuery({
+    queryKey: ["project-versions", projectId],
+    queryFn: async () => {
+      const res = await apiClient.get<{ versions: VersionRow[]; current: number | null }>(
+        `/api/projects/${projectId}/versions`
+      )
+      return res.data
+    },
+  })
 
-  React.useEffect(() => {
-    if (version === null) return
-    let cancelled = false
-    setLoading(true)
-    setError(null)
-    fetch(`/api/projects/${projectId}/versions/${version}/diff`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return
-        if (data.error) throw new Error(data.error)
-        setFiles(data.files ?? [])
-        setIntent(data.intent ?? null)
-      })
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "Couldn't load that version's changes."))
-      .finally(() => !cancelled && setLoading(false))
-    return () => {
-      cancelled = true
-    }
-  }, [projectId, version])
+  const versions = versionsQuery.data?.versions ?? []
+  const currentVersion = versionsQuery.data?.current ?? null
+  const version = selectedVersion ?? currentVersion
+
+  const diffQuery = useQuery({
+    queryKey: ["version-diff", projectId, version],
+    queryFn: async () => {
+      const res = await apiClient.get<{ files?: FileDiff[]; intent?: string | null; error?: string }>(
+        `/api/projects/${projectId}/versions/${version}/diff`
+      )
+      if (res.data.error) throw new Error(res.data.error)
+      return res.data
+    },
+    enabled: version !== null,
+  })
+
+  const files = diffQuery.data?.files ?? null
+  const intent = diffQuery.data?.intent ?? null
+  const error = diffQuery.isError ? getApiErrorMessage(diffQuery.error, "Couldn't load that version's changes.") : null
+  const loading = diffQuery.isLoading
+
+  const setVersion = (v: number) => setSelectedVersion(v)
 
   return (
     <div className="flex h-full min-h-0 flex-col">

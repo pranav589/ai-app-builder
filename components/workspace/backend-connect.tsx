@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useMutation } from "@tanstack/react-query"
 import {
   AlertTriangle,
   Check,
@@ -20,6 +21,7 @@ import {
 import { cn } from "cn"
 
 import type { BackendInfo } from "@/lib/agent/types"
+import { apiClient, getApiErrorMessage } from "@/lib/api-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -325,7 +327,6 @@ export function BackendControl({
   const [notice, setNotice] = React.useState<string | null>(null)
   const [confirm, setConfirm] = React.useState(false)
   const [forgetAccount, setForgetAccount] = React.useState(false)
-  const [disconnecting, setDisconnecting] = React.useState(false)
   const [disconnectError, setDisconnectError] = React.useState<string | null>(null)
   // After "also remove my authorization" the server-rendered flag is stale.
   const [accountForgotten, setAccountForgotten] = React.useState(false)
@@ -350,24 +351,29 @@ export function BackendControl({
     }
   }, [onSetupBackend])
 
-  const disconnect = async () => {
-    setDisconnecting(true)
-    setDisconnectError(null)
-    try {
-      const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/backend`, {
-        method: "DELETE",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ forgetAccount }),
-      })
-      if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Couldn't disconnect. Try again.")
+  const disconnectMutation = useMutation({
+    mutationFn: async ({ forget }: { forget: boolean }) => {
+      const res = await apiClient.delete<{ error?: string }>(
+        `/api/projects/${encodeURIComponent(projectId)}/backend`,
+        { data: { forgetAccount: forget } }
+      )
+      return res.data
+    },
+    onSuccess: (_, { forget }) => {
       setConfirm(false)
-      if (forgetAccount) setAccountForgotten(true)
+      if (forget) setAccountForgotten(true)
       onDisconnected()
-    } catch (e) {
-      setDisconnectError(e instanceof Error ? e.message : "Couldn't disconnect. Try again.")
-    } finally {
-      setDisconnecting(false)
-    }
+    },
+    onError: (e) => {
+      setDisconnectError(getApiErrorMessage(e, "Couldn't disconnect. Try again."))
+    },
+  })
+
+  const disconnecting = disconnectMutation.isPending
+
+  const disconnect = () => {
+    setDisconnectError(null)
+    disconnectMutation.mutate({ forget: forgetAccount })
   }
 
   // The connection/backend state shown here is a snapshot: resync before

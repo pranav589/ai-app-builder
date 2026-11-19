@@ -53,6 +53,8 @@ export function WorkspaceShell({
   })
 
   const [pane, setPane] = React.useState<Pane>(project.phase === "draft" || project.phase === "planning" ? "chat" : "canvas")
+  // On desktop canvas and preview are both always on screen; on mobile only the active pane is.
+  const appActive = isDesktop || pane !== "chat"
   const [positions, setPositions] = React.useState<Record<string, { x: number; y: number }>>({})
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [previewPick, setPreviewPick] = React.useState<string | null>(null)
@@ -302,6 +304,7 @@ export function WorkspaceShell({
       backendConfig={backendConfig}
       files={projectFiles}
       planned={planned}
+      active={appActive}
       onThemeChange={agent.setActiveTheme}
       onRuntimeError={agent.reportCrash}
     >
