@@ -713,6 +713,60 @@ flowchart TD
 
 ---
 
+## 13. Homepage: project cards, previews, and public sharing
+
+**What it does**: signed-in users see their own projects on the homepage as cards
+with a live, always-current mini preview of the app (not a stale screenshot) and a
+three-dot menu (Open, Rename, Duplicate, Share, Export, Delete). Sharing a project
+makes it visible to signed-out visitors in a public gallery; clicking a public card
+opens a dialog where the visitor can actually use the generated app — real UI,
+sandboxed sample data — without signing up.
+
+**The flow**:
+
+```mermaid
+flowchart TD
+    A["Homepage loads"] --> B{Signed in?}
+    B -- yes --> C["GET /api/projects\n(own projects + isPublic/publicSlug)"]
+    B -- no --> D["GET /api/public/projects\n(only projects marked public)"]
+    C --> E["ProjectCard: live mini preview\n+ three-dot dropdown"]
+    D --> F["PublicProjectCard: live mini preview"]
+    E -->|Share toggle| G["PATCH /api/projects/[id]/visibility"]
+    F -->|Click| H["PublicPreviewDialog\nGET /api/public/projects/[slug]"]
+    G --> I["projects.is_public / public_slug"]
+    H --> J["AppRuntimeProvider + RuntimeFrame,\nforced to a fresh local backend"]
+```
+
+**Step by step, in plain English**:
+
+1. Every project card's preview is a real, live render of the app's first screen — it lazily mounts the same sandboxed iframe runtime the workspace canvas/preview uses (`RuntimeFrame`/`AppRuntimeProvider`), scaled down. There's no separate screenshot pipeline to keep in sync.
+2. The three-dot menu on an owner's card calls one small owner-only route per action: rename and delete share `app/api/projects/[projectId]/route.ts` (PATCH/DELETE), duplicate and visibility each get their own sub-route, and Export reuses the existing `export/zip` route.
+3. Turning "Share" on sets `projects.is_public = true` and generates a `public_slug` the first time (kept stable afterward). That's what makes the project show up in `GET /api/public/projects` and resolvable at `/p/[slug]`. The same toggle is also reachable from inside the workspace itself, via the header's Export menu → "Share project…" (`components/workspace/workspace-header.tsx`'s `ShareDialog`), which calls the identical `visibility` endpoint.
+4. A signed-out visitor clicking a public card never gets the owner's real data or connected backend: the preview always runs against a brand-new `LocalBackend` (seeded from the project's own sample data, isolated to the visitor's browser), regardless of what the project is actually configured to use.
+5. The same public payload (`screens`, `themes`, `dataModel`, `files`) also powers a standalone `/p/[slug]` page, so a shared link works for someone who never visits the homepage gallery.
+
+**Files involved**:
+
+| File | Role |
+|---|---|
+| `components/home/app-gallery.tsx` | Fetches + lays out the signed-in and signed-out grids |
+| `components/home/project-card.tsx` | Owner's card: dropdown (rename/duplicate/share/export/delete dialogs) |
+| `components/home/public-project-card.tsx` | Visitor's card: opens the preview dialog |
+| `components/home/card-preview.tsx` | Lazy-mounted live mini render shared by both card types |
+| `components/home/public-preview-dialog.tsx` | Fetches a public project client-side and renders it interactively |
+| `components/home/public-app-player.tsx` | Shared `AppRuntimeProvider` + `AppPreview` wiring (local-only backend), used by the dialog and the `/p/[slug]` page |
+| `app/p/[slug]/page.tsx` | Standalone public page for a shared link (server-fetches, no client round trip) |
+| `db/projects.ts` | `renameProject`, `deleteProjectForUser`, `duplicateProject`, `setProjectVisibility`, `listPublicProjects`, `getPublicProjectBySlug` |
+| `db/sql/project-visibility.sql` | Adds `is_public` / `public_slug` to `projects` |
+| `app/api/projects/[projectId]/route.ts` | PATCH (rename) / DELETE |
+| `app/api/projects/[projectId]/duplicate/route.ts` | POST |
+| `app/api/projects/[projectId]/visibility/route.ts` | PATCH |
+| `app/api/public/projects/route.ts` | GET (unauthenticated list) |
+| `app/api/public/projects/[slug]/route.ts` | GET (unauthenticated single-project preview payload) |
+| `lib/app-runtime/app-doc.ts` | `projectFilesFromDoc`, `plannedRoutesFromScreens` — shared helpers also used by the workspace |
+
+---
+
 # Part 2: Deep Dives (technical internals)
 
 Part 1 above explains *what* each feature does and roughly how. This part is for

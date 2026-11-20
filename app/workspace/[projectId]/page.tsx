@@ -84,6 +84,8 @@ export default async function WorkspacePage({
     backend: doc.backend,
     backendInfo: backendInfo(backendRow),
     cloudhike: { configured: isConnectConfigured(), accountConnected },
+    isPublic: project.isPublic,
+    publicSlug: project.publicSlug,
   }
 
   // The project's attachments belong to the first prompt.

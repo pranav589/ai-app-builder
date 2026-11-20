@@ -153,8 +153,26 @@ export function syncManifest(doc: AppDoc, plan: AppPlan): AppManifest {
   const base = doc.manifest ?? fromLegacy(plan, doc)
   const pruned = pruneRemovedScreens(base, plan)
   const added = plan.screens.filter((s) => !pruned.screens[s.id])
-  if (!added.length) return pruned
-  const ops = patchForAddedScreens(pruned, plan, added)
-  const { doc: patched } = applyPatch(pruned, ops)
-  return patched ?? pruned
+  const next = added.length ? applyPatch(pruned, patchForAddedScreens(pruned, plan, added)).doc ?? pruned : pruned
+  return fixDanglingInitial(next)
+}
+
+/**
+ * Real bug: fromLegacy's own fallback for `navigation.initial` (when nothing
+ * is built yet and there's no tab screen) is a placeholder id that isn't
+ * guaranteed to ever become a real screen. pruneRemovedScreens only revisits
+ * `initial` when it actually drops a screen, so a manifest that reaches here
+ * with an `initial` that was *never* valid (not one a removal just broke)
+ * slips through untouched, and `app/index.tsx` ends up redirecting to a
+ * route nothing builds — an "unmatched route" on every device, forever,
+ * since nothing else ever rechecks it once the manifest exists.
+ */
+function fixDanglingInitial(manifest: AppManifest): AppManifest {
+  if (manifest.screens[manifest.navigation.initial]) return manifest
+  const ids = Object.keys(manifest.screens)
+  // Prefer a tab, then any screen that doesn't need a param (a detail/modal
+  // screen can't be where the app opens with nothing to show it yet).
+  const initial = manifest.navigation.tabs.find((id) => manifest.screens[id]) ?? ids.find((id) => !manifest.screens[id].params) ?? ids[0]
+  if (!initial) return manifest
+  return { ...manifest, navigation: { ...manifest.navigation, initial } }
 }

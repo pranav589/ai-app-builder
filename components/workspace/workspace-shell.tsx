@@ -320,6 +320,8 @@ export function WorkspaceShell({
         onSetupBackend={agent.setupBackend}
         onBackendDisconnected={() => agent.setBackend(null)}
         onRefreshBackend={agent.refreshBackend}
+        initialIsPublic={project.isPublic}
+        initialPublicSlug={project.publicSlug}
       />
 
       {isDesktop ? (

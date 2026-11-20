@@ -28,6 +28,8 @@ export type WorkspaceProject = {
   /** The app's CloudHike backend (status only, never credentials). */
   backendInfo: BackendInfo | null
   cloudhike: { configured: boolean; accountConnected: boolean }
+  isPublic: boolean
+  publicSlug: string | null
 }
 
 export type ChatMessage = StoredMessage & {

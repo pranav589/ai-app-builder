@@ -3,6 +3,7 @@
 
 import type { GeneratedScreen } from "@/lib/agent/types"
 import type { AppManifest } from "@/lib/manifest/schema"
+import type { PlannedRoute } from "@/lib/preview/protocol"
 import type { DataModel } from "./data-model"
 import type { ThemePackage } from "./theme"
 
@@ -26,6 +27,23 @@ export type AppDoc = {
   backend: BackendConfig
   /** Verified-engine apps only (Phase 6); migrated lazily on first open (lib/manifest/migrate.ts fromLegacy). */
   manifest?: AppManifest
+}
+
+/** Every project file the runtime needs to compile: platform/shared files plus each finished screen. */
+export function mergeScreensIntoFiles(files: Record<string, string> | undefined, screens: GeneratedScreen[]): Record<string, string> {
+  const out: Record<string, string> = { ...(files ?? {}) }
+  for (const s of screens) if (s.state === "ready" && s.code && s.path) out[s.path] = s.code
+  return out
+}
+
+/** Every project file the runtime needs to compile, read straight off an AppDoc. */
+export function projectFilesFromDoc(doc: AppDoc): Record<string, string> {
+  return mergeScreensIntoFiles(doc.files, doc.screens)
+}
+
+/** The app's own router needs every screen's route to navigate between them. */
+export function plannedRoutesFromScreens(screens: GeneratedScreen[]): PlannedRoute[] {
+  return screens.map((s) => ({ pathname: `/${s.id}`, name: s.name, state: s.state }))
 }
 
 export function readAppDoc(raw: unknown): AppDoc {

@@ -188,4 +188,36 @@ describe("syncManifest", () => {
     const { diagnostics } = validateManifest(m)
     expect(diagnostics).toEqual([])
   })
+
+  it("recovers a dangling initial screen when nothing was ever a tab and no screen is literally named 'home' (real bug: an all-stack app's first sync, before anything is built, falls back to fromLegacy's placeholder initial id, which never matches a real screen once building finishes, redirecting to a route that doesn't exist on every device)", () => {
+    const shopPlan: AppPlan = {
+      ...plan,
+      screens: [
+        { id: "product-list", name: "Shop", purpose: "", keyElements: [], navigatesTo: ["product-detail"], presentation: "stack" },
+        { id: "product-detail", name: "Product Detail", purpose: "", keyElements: [], navigatesTo: [], presentation: "stack" },
+        { id: "settings", name: "Settings", purpose: "", keyElements: [], navigatesTo: [], presentation: "stack" },
+      ],
+    }
+    const unbuiltDoc: AppDoc = { ...doc, screens: [] }
+    const m = syncManifest(unbuiltDoc, shopPlan)
+    expect(m.navigation.tabs).toEqual([])
+    expect(m.screens.home).toBeUndefined()
+    expect(m.navigation.initial).toBe("product-list")
+    const { diagnostics } = validateManifest(m)
+    expect(diagnostics).toEqual([])
+  })
+
+  it("prefers a screen that doesn't need a param when recovering a dangling initial, even if it comes first in the plan", () => {
+    const detailFirstPlan: AppPlan = {
+      ...plan,
+      screens: [
+        { id: "item-detail", name: "Item Detail", purpose: "", keyElements: [], navigatesTo: [], presentation: "modal" },
+        { id: "shop", name: "Shop", purpose: "", keyElements: [], navigatesTo: ["item-detail"], presentation: "stack" },
+      ],
+    }
+    const unbuiltDoc: AppDoc = { ...doc, screens: [] }
+    const m = syncManifest(unbuiltDoc, detailFirstPlan)
+    expect(m.screens["item-detail"].params).toEqual({ id: "string" })
+    expect(m.navigation.initial).toBe("shop")
+  })
 })

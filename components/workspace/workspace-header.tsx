@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   AlertCircle,
   Check,
@@ -28,7 +28,7 @@ import { cn } from "cn"
 
 import { useAuth } from "@/components/auth/auth-provider"
 import type { BackendInfo } from "@/lib/agent/types"
-import { apiClient } from "@/lib/api-client"
+import { apiClient, getApiErrorMessage } from "@/lib/api-client"
 import { slug } from "@/lib/app-project/scaffold"
 import { BackendControl } from "./backend-connect"
 import { ExpoConnectDialog } from "./expo-connect-dialog"
@@ -135,14 +135,41 @@ function ProjectTitle({
   )
 }
 
-function ShareDialog({ open, onOpenChange, projectId }: { open: boolean; onOpenChange: (o: boolean) => void; projectId: string }) {
-  const [access, setAccess] = React.useState<"private" | "link">("private")
+function ShareDialog({
+  open,
+  onOpenChange,
+  projectId,
+  initialIsPublic,
+  initialPublicSlug,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  projectId: string
+  initialIsPublic: boolean
+  initialPublicSlug: string | null
+}) {
+  const queryClient = useQueryClient()
   const [copied, setCopied] = React.useState(false)
-  const [url, setUrl] = React.useState("")
 
-  React.useEffect(() => {
-    setUrl(`${window.location.origin}/share/${projectId}`)
-  }, [projectId])
+  const mutation = useMutation({
+    mutationFn: async (isPublic: boolean) => {
+      const res = await apiClient.patch<{ isPublic: boolean; publicSlug: string | null }>(
+        `/api/projects/${projectId}/visibility`,
+        { isPublic }
+      )
+      return res.data
+    },
+    onSuccess: () => {
+      // Keeps the homepage gallery (and its own cached list) in sync next time it's visited.
+      void queryClient.invalidateQueries({ queryKey: ["projects"] })
+      void queryClient.invalidateQueries({ queryKey: ["public-projects"] })
+    },
+  })
+
+  const isPublic = mutation.data?.isPublic ?? initialIsPublic
+  const publicSlug = mutation.data?.publicSlug ?? initialPublicSlug
+  const url = publicSlug && typeof window !== "undefined" ? `${window.location.origin}/p/${publicSlug}` : ""
+  const access = isPublic ? "link" : "private"
 
   React.useEffect(() => {
     if (!copied) return
@@ -152,7 +179,7 @@ function ShareDialog({ open, onOpenChange, projectId }: { open: boolean; onOpenC
 
   const options = [
     { id: "private", icon: Lock, title: "Only you", body: "Nobody else can open this project." },
-    { id: "link", icon: Globe, title: "Anyone with the link", body: "People with the link can view the app preview." },
+    { id: "link", icon: Globe, title: "Anyone with the link", body: "Visitors can try a live, interactive preview of your app — never your real data." },
   ] as const
 
   return (
@@ -170,9 +197,10 @@ function ShareDialog({ open, onOpenChange, projectId }: { open: boolean; onOpenC
               type="button"
               role="radio"
               aria-checked={access === o.id}
-              onClick={() => setAccess(o.id)}
+              disabled={mutation.isPending}
+              onClick={() => mutation.mutate(o.id === "link")}
               className={cn(
-                "flex items-start gap-3 rounded-(--r-md) border p-3 text-left transition-colors",
+                "flex items-start gap-3 rounded-(--r-md) border p-3 text-left transition-colors disabled:opacity-60",
                 access === o.id ? "border-primary/50 bg-primary/5" : "border-border hover:bg-muted"
               )}
             >
@@ -198,11 +226,11 @@ function ShareDialog({ open, onOpenChange, projectId }: { open: boolean; onOpenC
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Link2 className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input readOnly value={url} disabled={access === "private"} className="h-9 pl-8 text-sm" aria-label="Share link" />
+            <Input readOnly value={url} disabled={!isPublic} className="h-9 pl-8 text-sm" aria-label="Share link" />
           </div>
           <Button
             className="h-9 px-3.5"
-            disabled={access === "private"}
+            disabled={!isPublic}
             onClick={() =>
               navigator.clipboard
                 .writeText(url)
@@ -214,7 +242,13 @@ function ShareDialog({ open, onOpenChange, projectId }: { open: boolean; onOpenC
             {copied ? "Copied" : "Copy link"}
           </Button>
         </div>
-        <p className="-mt-2 text-xs text-muted-foreground">Sharing goes live once your first build is ready.</p>
+        {mutation.isError ? (
+          <p className="-mt-2 text-xs text-destructive">{getApiErrorMessage(mutation.error)}</p>
+        ) : (
+          <p className="-mt-2 text-xs text-muted-foreground">
+            {isPublic ? "This app also shows up in the homepage gallery for signed-out visitors." : "Sharing goes live once your first build is ready."}
+          </p>
+        )}
       </DialogContent>
     </Dialog>
   )
@@ -268,6 +302,8 @@ export function WorkspaceHeader({
   onSetupBackend,
   onBackendDisconnected,
   onRefreshBackend,
+  initialIsPublic,
+  initialPublicSlug,
 }: {
   projectId: string
   name: string
@@ -279,6 +315,8 @@ export function WorkspaceHeader({
   onSetupBackend: (services: string[]) => void
   onBackendDisconnected: () => void
   onRefreshBackend: () => void
+  initialIsPublic: boolean
+  initialPublicSlug: string | null
 }) {
   const [shareOpen, setShareOpen] = React.useState(false)
   const [githubOpen, setGithubOpen] = React.useState(false)
@@ -418,7 +456,13 @@ export function WorkspaceHeader({
         <UserMenu />
       </div>
 
-      <ShareDialog open={shareOpen} onOpenChange={setShareOpen} projectId={projectId} />
+      <ShareDialog
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+        projectId={projectId}
+        initialIsPublic={initialIsPublic}
+        initialPublicSlug={initialPublicSlug}
+      />
       <GithubPushDialog
         open={githubOpen}
         onOpenChange={setGithubOpen}

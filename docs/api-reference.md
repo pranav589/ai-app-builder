@@ -39,7 +39,11 @@ List the current user's projects.
       "prompt": "Build a recipe tracker app",
       "status": "ready",
       "createdAt": "2026-11-10T12:00:00.000Z",
-      "assetCount": 1
+      "assetCount": 1,
+      "themeColor": "#8b5cf6",
+      "previewScreens": { "v": 2, "screens": ["..."] },
+      "isPublic": false,
+      "publicSlug": null
     }
   ]
 }
@@ -48,6 +52,108 @@ List the current user's projects.
 **Error 503**
 ```json
 { "error": "We're having trouble reaching our servers. Please try again in a moment." }
+```
+
+---
+
+### `PATCH /api/projects/[projectId]`
+Renames a project.
+
+- **Auth**: required; must own the project (404 otherwise)
+- **Request**: `{ "name": string }`
+
+**Response 200**
+```json
+{ "ok": true, "name": "New name" }
+```
+
+---
+
+### `DELETE /api/projects/[projectId]`
+Deletes a project. Dependent rows (messages, snapshots, builds, backend,
+GitHub link, web deployments...) cascade via FK constraints; uploaded assets
+are removed from storage after the row is deleted.
+
+- **Auth**: required; must own the project (404 otherwise)
+
+**Response 200**
+```json
+{ "ok": true }
+```
+
+---
+
+### `POST /api/projects/[projectId]/duplicate`
+Clones a project (screens, assets list, engine...) into a new, private project
+owned by the same user.
+
+- **Auth**: required; must own the source project (404 otherwise)
+
+**Response 200**
+```json
+{ "project": { "id": "proj-1700000000111-d4e5f6", "name": "Recipe Tracker (copy)", "...": "same shape as GET /api/projects" } }
+```
+
+---
+
+### `PATCH /api/projects/[projectId]/visibility`
+Turns public sharing on or off. A public project appears in the signed-out
+homepage gallery and is viewable (read-only preview data) via its public slug,
+without auth. Enabling it the first time generates a `publicSlug`, which is
+kept (not rotated) across future toggles.
+
+- **Auth**: required; must own the project (404 otherwise)
+- **Request**: `{ "isPublic": boolean }`
+
+**Response 200**
+```json
+{ "isPublic": true, "publicSlug": "app-9f8e7d6c5b", "publicUrl": "https://example.com/p/app-9f8e7d6c5b" }
+```
+
+---
+
+### `GET /api/public/projects`
+Public, unauthenticated list of projects their owners have made public, for
+the signed-out homepage gallery. Only public-safe fields are returned (no
+`prompt`, `assets`, or `userId`).
+
+- **Auth**: none
+
+**Response 200**
+```json
+{
+  "projects": [
+    { "id": "proj-...", "name": "Recipe Tracker", "tagline": null, "themeColor": "#8b5cf6", "previewScreens": { "...": "..." }, "publicSlug": "app-9f8e7d6c5b" }
+  ]
+}
+```
+
+---
+
+### `GET /api/public/projects/[slug]`
+Public, unauthenticated preview payload for one public project — everything
+the sandboxed preview runtime (`AppRuntimeProvider`/`RuntimeFrame`) needs to
+run the app interactively against a fresh local backend. 404s if the slug
+doesn't exist or the project has since been made private.
+
+- **Auth**: none
+
+**Response 200**
+```json
+{
+  "id": "proj-...",
+  "name": "Recipe Tracker",
+  "themeColor": "#8b5cf6",
+  "screens": ["..."],
+  "themes": { "themes": ["..."], "activeId": "light", "hash": "..." },
+  "dataModel": { "collections": ["..."], "settings": {}, "user": { "name": "Alex" }, "hash": "..." },
+  "files": { "app/_layout.tsx": "..." }
+}
+```
+
+**Error 404**
+```json
+{ "error": "This app isn't available." }
 ```
 
 ---

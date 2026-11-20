@@ -42,6 +42,12 @@ export type ThemePackage = {
   hash: string
 }
 
+/** The theme a package's `activeId` points at, falling back to its first theme. */
+export function activeThemeOf(themes: ThemePackage | null | undefined): AppTheme | null {
+  if (!themes) return null
+  return themes.themes.find((t) => t.id === themes.activeId) ?? themes.themes[0] ?? null
+}
+
 /** CSS variable name for each color key, e.g. onPrimary -> --color-on-primary. */
 export const cssVar = (k: ThemeColorKey) => `--color-${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`
 

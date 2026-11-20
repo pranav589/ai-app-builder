@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { customType, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, customType, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 // Mirrors the live CloudHike `users` table. `id` is the CloudHike Auth user id.
 export const users = pgTable("users", {
@@ -43,6 +43,9 @@ export const projects = pgTable("projects", {
   assets: jsonb("assets").$type<ProjectAsset[]>(),
   engine: text("engine").notNull().default("legacy"),
   currentVersion: integer("current_version").notNull().default(0),
+  // Created by db/sql/project-visibility.sql (npm run db:sql).
+  isPublic: boolean("is_public").notNull().default(false),
+  publicSlug: text("public_slug").unique(),
 });
 
 // Mirrors the live `messages` table (the project's chat history).
