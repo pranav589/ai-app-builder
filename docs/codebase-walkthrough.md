@@ -544,22 +544,24 @@ sequenceDiagram
 
 ---
 
-## 11. Publish & EAS Builds: Native App Export
+## 11. Publish & EAS Builds: Native App Export & Web Hosting
 
-**What it does**: compiles generated apps into installable native packages (`.apk` / `.aab` for Android, `.ipa` for iOS) by offloading compute to the user's connected GitHub repository (GitHub Actions minutes) and their own Expo / EAS account. Links directly to EAS cloud-hosted artifacts.
+**What it does**: compiles generated apps either into installable native packages (`.apk` / `.aab` for Android, `.ipa` for iOS) or publishes them as live websites via Expo EAS Hosting with a stable URL preserved across republishes. Offloads compute to the user's connected GitHub repository (GitHub Actions minutes) and their own Expo / EAS account. Links directly to EAS cloud-hosted artifacts and live web hosting URLs.
 
-**The flow**:
+**The flows**:
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant UI as PublishDialog
-    participant API as /api/projects/[id]/publish
+    participant UI as PublishDialog / PreviewPanel
+    participant API as /api/projects/[id]/publish & .../publish/web
     participant GH as GitHub API & Actions
-    participant EAS as Expo EAS Cloud
-    participant WH as /api/publish/webhook
+    participant EAS as Expo EAS Cloud & Hosting
+    participant WH as /api/publish/webhook & .../web-webhook
     participant DB as Postgres
 
+    rect rgb(240, 248, 255)
+    note right of U: Native App Build Flow
     U->>UI: Select platform, format, version & click Publish
     UI->>API: POST /api/projects/[id]/publish
     API->>DB: Seed/read project_app_identities & insert queued builds row
@@ -573,32 +575,60 @@ sequenceDiagram
     WH->>DB: markReady / markFailed
     UI->>DB: Poll /api/projects/[id]/builds every 4s
     UI->>U: Display Ready badge + direct Download link
+    end
+
+    rect rgb(245, 255, 245)
+    note right of U: Web Hosting Deploy Flow
+    U->>UI: Click Publish to Web / Republish
+    UI->>API: POST /api/projects/[id]/publish/web
+    API->>DB: Atomic claim web_deployments (status: queued)
+    API->>GH: Push eas-web-deploy.yml, report-web-deploy.js, and app.json
+    API->>GH: POST /actions/workflows/eas-web-deploy.yml/dispatches
+    GH->>GH: npx expo export -p web
+    GH->>WH: POST /api/publish/web-webhook (ping: stage: "deploying")
+    WH->>DB: markWebDeploying
+    GH->>EAS: eas deploy --prod --json
+    EAS-->>GH: Deployed (url)
+    GH->>WH: POST /api/publish/web-webhook (status: "ready", url)
+    WH->>DB: markWebReady (preserves URL across republishes)
+    UI->>DB: Poll /api/projects/[id]/publish/web every 3s
+    UI->>U: Show Live badge + Open / Copy Link buttons in Dialog & Preview toolbar
+    end
 ```
 
 **Files involved**:
 
 | File | Role |
 |---|---|
-| `components/workspace/publish-dialog.tsx` | Platform/format/version picker, prerequisites check (GitHub + Expo), active build polling, and download/retry controls |
+| `components/workspace/publish-dialog.tsx` | Native build picker, web deployment tab with 4-step progress row (Preparing → Building → Deploying → Live), URL copy/open, and build history |
+| `components/workspace/preview-panel.tsx` | Preview toolbar chip displaying active deploy stage or ready pill with live host and copy-link button |
 | `components/workspace/expo-connect-dialog.tsx` | Token-paste dialog connecting user's Expo Personal Access Token to their account |
 | `components/workspace/workspace-header.tsx` | Dropdown menu links to Expo Connect / Publish dialogs and dynamic Publish button |
-| `lib/publish/eas-config.ts` | Profile naming, `eas.json` generator, `app.json` patcher, and workflow/script template builders |
+| `lib/publish/dispatch.ts` | Shared helper extracting default branch resolution, project push, secret upsert, workflow dispatch, and correlation |
+| `lib/publish/eas-config.ts` | Profile naming, `eas.json` generator, `app.json` patcher, and workflow/script template builders for native builds |
+| `lib/publish/eas-web-config.ts` | `patchAppJsonForWebDeploy`, `buildWebDeployWorkflowYaml`, and `buildWebDeployReportScript` for EAS web hosting |
+| `lib/publish/web-deploy.ts` | Web deployment database helpers: `claimWebDeployment`, `getWebDeployment`, `markWebDispatched`, `markWebBuilding`, `markWebDeploying`, `markWebReady`, `markWebFailed` |
+| `lib/publish/run-web-deploy.ts` | Orchestrates web deploy: workspaces app doc → patches app.json → dispatches `eas-web-deploy.yml` workflow |
 | `lib/publish/app-identity.ts` | Stable Android package name and iOS bundle identifier persistence (`project_app_identities`) |
 | `lib/publish/github-secrets.ts` | Libsodium `crypto_box_seal` encryption for GitHub Actions repository secrets |
-| `lib/publish/webhook-auth.ts` | Stripe-style HMAC-SHA256 signature generation and verification for the build report webhook |
+| `lib/publish/webhook-auth.ts` | Stripe-style HMAC-SHA256 signature generation and verification for publish webhooks |
 | `lib/publish/expo-connect.ts` | Personal Access Token validation via Expo GraphQL API, AES-GCM encryption, and connection management |
 | `lib/publish/builds.ts` | Query helpers for build row lifecycle (`createQueuedBuild`, `markDispatched`, `markReady`, `markFailed`) |
-| `lib/publish/run-publish.ts` | End-to-end publish orchestration: assemble files → patch `app.json` → push → upsert secrets → dispatch workflow |
-| `app/api/projects/[projectId]/publish/route.ts` | Endpoint to validate targets, insert queued build, and trigger publish workflow |
+| `lib/publish/run-publish.ts` | End-to-end native publish orchestration: assemble files → patch `app.json` → dispatch via `dispatchProjectWorkflow` |
+| `app/api/projects/[projectId]/publish/route.ts` | Endpoint to validate targets, insert queued build, and trigger native publish workflow |
+| `app/api/projects/[projectId]/publish/web/route.ts` | POST: triggers web deploy with atomic claim; GET: returns current project web deployment |
 | `app/api/projects/[projectId]/builds/route.ts` | Returns ordered list of builds for a project (polled by Publish dialog) |
 | `app/api/projects/[projectId]/builds/[buildId]/retry/route.ts` | Retries a failed build by dispatching a new build attempt row |
-| `app/api/publish/webhook/route.ts` | Unauthenticated, HMAC-verified webhook receiving build results from GitHub Actions |
+| `app/api/publish/webhook/route.ts` | Unauthenticated, HMAC-verified webhook receiving native build results from GitHub Actions |
+| `app/api/publish/web-webhook/route.ts` | Unauthenticated, HMAC-verified webhook receiving web deploy stage pings and terminal results |
 | `app/api/expo/connect/route.ts` | Validates and saves an Expo Personal Access Token |
 | `app/api/expo/status/route.ts` | Reports whether current user has an active Expo connection |
 | `app/api/expo/disconnect/route.ts` | Disconnects the user's Expo account |
-| `db/schema.ts` | `builds`, `project_app_identities`, and `expo_connections` tables with partial unique index |
+| `db/schema.ts` | `builds`, `web_deployments`, `project_app_identities`, and `expo_connections` tables with partial unique index |
 | `.github/workflows/eas-build.yml` | Generated GitHub Actions workflow running in user's repo to execute EAS build |
-| `.github/scripts/report-build.js` | Generated Node script running in user's workflow to sign and report build results back |
+| `.github/workflows/eas-web-deploy.yml` | Generated GitHub Actions workflow running in user's repo to export web and deploy via EAS Hosting |
+| `.github/scripts/report-build.js` | Generated Node script running in user's workflow to sign and report native build results back |
+| `.github/scripts/report-web-deploy.js` | Generated Node script running in user's workflow to sign and report web deploy stage & result back |
 | `eas.json` | Generated EAS configuration file defining production profiles with remote versioning |
 
 ---

@@ -15,6 +15,20 @@
       "when": 1795156546282,
       "tag": "0001_equal_vulcan",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795170286025,
+      "tag": "0002_exotic_black_tarantula",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795178173597,
+      "tag": "0003_wild_jack_flag",
+      "breakpoints": true
     }
   ]
 }

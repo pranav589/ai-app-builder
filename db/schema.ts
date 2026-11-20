@@ -341,3 +341,55 @@ export const expoConnections = pgTable("expo_connections", {
 
 export type ExpoConnectionRow = typeof expoConnections.$inferSelect;
 export type NewExpoConnectionRow = typeof expoConnections.$inferInsert;
+
+export type WebDeployStatus = "queued" | "dispatching" | "building" | "deploying" | "ready" | "failed";
+
+// Current-state pointer: one row per project, holding the live URL (preserved across
+// republishes) and the in-flight status of whichever run `currentRunId` points at.
+export const webDeployments = pgTable("web_deployments", {
+  projectId: text("project_id").primaryKey().references(() => projects.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  status: text("status").$type<WebDeployStatus>().notNull().default("queued"),
+  url: text("url"), // live production URL once ready; preserved across republishes
+  repoOwner: text("repo_owner"),
+  repoName: text("repo_name"),
+  workflowRunId: text("workflow_run_id"),
+  workflowRunUrl: text("workflow_run_url"),
+  /** The web_deploy_runs.id this pointer is currently tracking; guards against a late webhook from a superseded run. */
+  currentRunId: text("current_run_id"),
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+  lastDeployedAt: timestamp("last_deployed_at", { withTimezone: true }),
+});
+
+export type WebDeploymentRow = typeof webDeployments.$inferSelect;
+export type NewWebDeploymentRow = typeof webDeployments.$inferInsert;
+
+// Append-only history of web deploy attempts (one row per Publish/Republish click),
+// analogous to `builds` for native builds. `webDeployments` above is the current-state
+// pointer derived from the latest run; this table is what the "Deployment History" list reads.
+export const webDeployRuns = pgTable(
+  "web_deploy_runs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    status: text("status").$type<WebDeployStatus>().notNull().default("queued"),
+    url: text("url"),
+    repoOwner: text("repo_owner"),
+    repoName: text("repo_name"),
+    workflowRunId: text("workflow_run_id"),
+    workflowRunUrl: text("workflow_run_url"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [index("web_deploy_runs_project_created").on(t.projectId, t.createdAt)]
+);
+
+export type WebDeployRunRow = typeof webDeployRuns.$inferSelect;
+export type NewWebDeployRunRow = typeof webDeployRuns.$inferInsert;
+

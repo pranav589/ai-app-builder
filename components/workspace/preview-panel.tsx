@@ -1,10 +1,27 @@
 "use client"
 
 import * as React from "react"
-import { ChevronLeft, ChevronRight, Code2, DatabaseZap, Eye, GitCompare, MoreVertical, QrCode, RotateCw } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Code2,
+  Copy,
+  DatabaseZap,
+  Eye,
+  GitCompare,
+  Globe,
+  MoreVertical,
+  QrCode,
+  RotateCw,
+} from "lucide-react"
 import { cn } from "cn"
 
+import type { WebDeploymentRow } from "@/db"
+import { apiClient } from "@/lib/api-client"
 import { Button } from "@/components/ui/button"
+import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   DropdownMenu,
@@ -152,6 +169,29 @@ export function PreviewPanel({
   const [platform, setPlatform] = React.useState<DevicePlatform>("ios")
   const [reloadKey, setReloadKey] = React.useState(0)
   const [qrOpen, setQrOpen] = React.useState(false)
+  const [copiedUrl, setCopiedUrl] = React.useState(false)
+
+  const webDeployQuery = useQuery({
+    queryKey: ["project-web-deploy", projectId],
+    queryFn: async () =>
+      (
+        await apiClient.get<{ deployment: WebDeploymentRow | null }>(
+          `/api/projects/${projectId}/publish/web`
+        )
+      ).data,
+    refetchInterval: (q) => {
+      const s = q.state.data?.deployment?.status
+      return s && s !== "ready" && s !== "failed" ? 3000 : false
+    },
+  })
+
+  const handleCopyUrl = (e: React.MouseEvent, url: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    navigator.clipboard.writeText(url)
+    setCopiedUrl(true)
+    setTimeout(() => setCopiedUrl(false), 1500)
+  }
 
   React.useEffect(() => {
     if (jumpTo) setTab("code")
@@ -173,7 +213,66 @@ export function PreviewPanel({
         </TabsList>
 
         {tab === "preview" && (
-          <div className="flex items-center gap-0.5">
+          <div className="flex items-center gap-1">
+            {(() => {
+              const deployment = webDeployQuery.data?.deployment
+              if (!deployment) return null
+              const status = deployment.status
+
+              if (
+                status === "queued" ||
+                status === "dispatching" ||
+                status === "building" ||
+                status === "deploying"
+              ) {
+                const label =
+                  status === "deploying"
+                    ? "Deploying…"
+                    : status === "building"
+                    ? "Building…"
+                    : "Preparing…"
+                return (
+                  <div className="flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-0.5 text-xs text-muted-foreground">
+                    <Spinner className="size-3 text-primary" />
+                    <span className="font-medium text-[11px]">{label}</span>
+                  </div>
+                )
+              }
+
+              if (status === "ready" && deployment.url) {
+                let host = deployment.url
+                try {
+                  host = new URL(deployment.url).host
+                } catch {}
+
+                return (
+                  <div className="flex items-center rounded-full border border-border bg-muted/40 pl-2 pr-1 py-0.5 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:bg-muted">
+                    <a
+                      href={deployment.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1.5 font-mono text-[11px] text-foreground hover:underline"
+                      title={deployment.url}
+                    >
+                      <Globe className="size-3 text-emerald-500" />
+                      <span className="max-w-[110px] truncate @sm:max-w-[160px]">{host}</span>
+                    </a>
+                    <button
+                      type="button"
+                      onClick={(e) => handleCopyUrl(e, deployment.url!)}
+                      className="flex size-5 items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-background/80 transition-colors ml-0.5"
+                      title={copiedUrl ? "Copied!" : "Copy Link"}
+                      aria-label="Copy Link"
+                    >
+                      {copiedUrl ? <Check className="size-3 text-emerald-500" /> : <Copy className="size-3" />}
+                    </button>
+                  </div>
+                )
+              }
+
+              return null
+            })()}
+
             <div role="radiogroup" aria-label="Device" className="flex items-center rounded-lg bg-muted p-[3px]">
               {(["ios", "android"] as const).map((p) => (
                 <button

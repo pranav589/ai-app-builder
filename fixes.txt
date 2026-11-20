@@ -13,4 +13,5 @@
 12. Good readme generation
     Also in  ecommerce app, there is no home screen, still index screen says to redirect to home screen. It results in unmatched route isssue in mobile phones
 13. Unwanted packages removal in exported app
+13. How to reduce the exported apps size (apk,etc)?
 14. How to install new library/packages?

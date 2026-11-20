@@ -747,6 +747,108 @@ Webhook called by the GitHub Actions runner (`.github/scripts/report-build.js`) 
 
 ---
 
+### `POST /api/projects/[projectId]/publish/web`
+Initiates a new web deployment to Expo EAS Hosting for an Expo project. Pushes the project files and web deploy configurations (`eas.json`, `.github/workflows/eas-web-deploy.yml`, `.github/scripts/report-web-deploy.js`) to the user's connected GitHub repository, registers secrets (`EXPO_TOKEN`, `PUBLISH_WEBHOOK_SECRET`), and triggers `workflow_dispatch`.
+
+- **Auth**: required (user must own project)
+- **CSRF guard**: required (`isSameOriginJson`)
+- **Prerequisites**: project must be pushed to GitHub (`not_linked` 409), GitHub must be connected with `workflow` scope (`github_not_connected` / `github_workflow_scope_missing` 409), Expo PAT must be connected (`expo_not_connected` 409).
+- **Concurrency**: rejected if an in-progress web deployment exists (`deploy_in_progress` 409).
+
+**Sample request**
+`POST /api/projects/[projectId]/publish/web` (no request body)
+
+**Response 200**
+```json
+{
+  "ok": true,
+  "deployment": {
+    "projectId": "proj_abc",
+    "userId": "usr_xyz",
+    "status": "queued",
+    "repoOwner": "alice",
+    "repoName": "my-app"
+  }
+}
+```
+
+**Errors**
+- `409 {"error": "not_linked" | "github_not_connected" | "github_workflow_scope_missing" | "expo_not_connected" | "deploy_in_progress"}`
+- `401 {"error": "github_auth_expired"}`
+- `502 {"error": "github_not_found" | "github_error"}`
+- `500 {"error": "publish_failed"}`
+
+---
+
+### `GET /api/projects/[projectId]/publish/web`
+Returns the current web deployment record for a project. Polled by `PublishDialog` and `PreviewPanel` while status is non-terminal.
+
+- **Auth**: required (user must own project)
+
+**Response 200**
+```json
+{
+  "deployment": {
+    "projectId": "proj_abc",
+    "userId": "usr_xyz",
+    "status": "ready",
+    "url": "https://my-app.expo.app",
+    "repoOwner": "alice",
+    "repoName": "my-app",
+    "workflowRunId": "12345678",
+    "workflowRunUrl": "https://github.com/alice/my-app/actions/runs/12345678",
+    "error": null,
+    "createdAt": "2026-11-20T12:00:00.000Z",
+    "updatedAt": "2026-11-20T12:04:30.000Z",
+    "dispatchedAt": "2026-11-20T12:00:05.000Z",
+    "lastDeployedAt": "2026-11-20T12:04:30.000Z"
+  }
+}
+```
+
+---
+
+### `POST /api/publish/web-webhook`
+Webhook called by the GitHub Actions runner (`.github/scripts/report-web-deploy.js`) for mid-workflow stage pings (`stage: "deploying"`) and terminal deploy outcomes (`status: "ready"` or `"failed"`).
+
+- **Auth**: verified via Stripe-style HMAC-SHA256 signature in `x-publish-signature: t=<timestamp>,v1=<hmac>` header using `PUBLISH_WEBHOOK_SECRET`. No user session.
+- **Idempotent**: always returns 200 if the deployment was already marked terminal (`ready` or `failed`).
+
+**Sample request (Terminal)**
+```json
+{
+  "projectId": "proj_abc",
+  "status": "ready",
+  "url": "https://my-app.expo.app",
+  "error": null,
+  "workflowRunUrl": "https://github.com/alice/my-app/actions/runs/12345678",
+  "easProjectId": "eas-project-uuid",
+  "expoOwner": "alice"
+}
+```
+
+**Sample request (Mid-workflow Ping)**
+```json
+{
+  "projectId": "proj_abc",
+  "stage": "deploying"
+}
+```
+
+**Response 200**
+```json
+{
+  "ok": true
+}
+```
+
+**Errors**
+- `400 {"error": "Missing projectId" | "Invalid JSON body"}`
+- `401 {"error": "Invalid webhook signature"}`
+- `404 {"error": "Deployment not found"}`
+
+---
+
 ## Expo Connect
 
 ### `POST /api/expo/connect`

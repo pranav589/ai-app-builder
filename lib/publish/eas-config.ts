@@ -210,7 +210,7 @@ function extractJson(text) {
   } catch {}
 
   // Look for JSON array or object in output
-  const arrayStart = text.lastIndexOf("[")
+  const arrayStart = text.indexOf("[")
   const arrayEnd = text.lastIndexOf("]")
   if (arrayStart !== -1 && arrayEnd > arrayStart) {
     try {
@@ -218,7 +218,7 @@ function extractJson(text) {
     } catch {}
   }
 
-  const objStart = text.lastIndexOf("{")
+  const objStart = text.indexOf("{")
   const objEnd = text.lastIndexOf("}")
   if (objStart !== -1 && objEnd > objStart) {
     try {
@@ -270,7 +270,15 @@ async function main() {
     }
 
     if (buildData.error) {
-      error = typeof buildData.error === "string" ? buildData.error : (buildData.error.message || JSON.stringify(buildData.error))
+      if (typeof buildData.error === "string") {
+        error = buildData.error
+      } else if (typeof buildData.error.message === "string") {
+        error = buildData.error.message
+      } else if (Array.isArray(buildData.error.errors) && buildData.error.errors[0]?.message) {
+        error = buildData.error.errors[0].message
+      } else {
+        error = "EAS build failed. Check the workflow run log for details."
+      }
     }
   }
 

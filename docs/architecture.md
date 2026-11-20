@@ -272,45 +272,56 @@ The workspace allows creators to export the complete generated Expo project outs
 
 ---
 
-## 8. Publish / EAS builds
+## 8. Publish / EAS builds & Web Hosting
 
-The Publish subsystem enables users to export their generated Expo apps as native installable packages (`.apk` / `.aab` for Android, `.ipa` for iOS). Because this platform is hosted serverlessly (e.g. Vercel) and cannot run native mobile compilation itself, the architecture pushes the compute cost onto infrastructure the user already owns: their own connected GitHub repository (GitHub Actions compute) and their own Expo / EAS account (cloud build workers).
+The Publish subsystem enables users to export their generated Expo apps either as native installable packages (`.apk` / `.aab` for Android, `.ipa` for iOS) or as live websites via Expo EAS Hosting. Because this platform is hosted serverlessly (e.g. Vercel) and cannot run native mobile compilation or heavy export jobs itself, the architecture pushes the compute cost onto infrastructure the user already owns: their own connected GitHub repository (GitHub Actions compute) and their own Expo / EAS account (cloud build workers and hosting).
 
 ```mermaid
 flowchart TD
-    User["Creator / UI"] -->|"Publish (platform, format, version)"| API["Publish Route\n/api/projects/[id]/publish"]
+    User["Creator / UI"] -->|"Publish Native (platform, format, version)"| API["Publish Route\n/api/projects/[id]/publish"]
+    User -->|"Publish Web"| WebAPI["Web Deploy Route\n/api/projects/[id]/publish/web"]
     API -->|"Ensure identity"| IdentityDB[("project_app_identities")]
+    WebAPI -->|"Ensure identity"| IdentityDB
     API -->|"Insert queued row"| BuildsDB[("builds")]
-    API -->|"Push app.json + eas.json + workflow"| GHRepo["User's GitHub Repo"]
-    API -->|"Upsert EXPO_TOKEN & WEBHOOK_SECRET via libsodium"| GHSecrets["Repo Actions Secrets"]
-    API -->|"workflow_dispatch"| GHA["GitHub Actions Runner\n(.github/workflows/eas-build.yml)"]
+    WebAPI -->|"Atomic claim (status: queued)"| WebDeployDB[("web_deployments")]
+    API -->|"dispatchProjectWorkflow"| Dispatch["Shared Dispatch Helper\n(lib/publish/dispatch.ts)"]
+    WebAPI -->|"dispatchProjectWorkflow"| Dispatch
+    Dispatch -->|"Push app.json + eas.json + workflow"| GHRepo["User's GitHub Repo"]
+    Dispatch -->|"Upsert EXPO_TOKEN & WEBHOOK_SECRET via libsodium"| GHSecrets["Repo Actions Secrets"]
+    Dispatch -->|"workflow_dispatch"| GHA["GitHub Actions Runner\n(eas-build.yml / eas-web-deploy.yml)"]
     GHA -->|"eas build --wait --json"| EASCloud["Expo EAS Build Cloud"]
     EASCloud -->|"Artifact (.apk / .aab / .ipa)"| EASStorage["EAS Hosted URL\n(~30-day retention)"]
     GHA -->|"report-build.js (HMAC signed)"| Webhook["Publish Webhook\n/api/publish/webhook"]
     Webhook -->|"Update status (ready / failed)"| BuildsDB
+    GHA -->|"npx expo export -p web\n+ report-web-deploy.js --ping"| WebWebhook["Web Webhook\n/api/publish/web-webhook"]
+    GHA -->|"eas deploy --prod --json\n+ report-web-deploy.js"| WebWebhook
+    WebWebhook -->|"Update stage/ready (url) / failed"| WebDeployDB
     User -->|"Polls builds query (4s interval)"| BuildsDB
+    User -->|"Polls web deploy query (3s interval)"| WebDeployDB
 ```
 
 ### Key Architectural Components
 
-1. **GitHub-Actions-in-User's-Repo Compute**:
-   - Reuses `pushProject()` and `buildExportFileMap()` to commit `eas.json`, `.github/workflows/eas-build.yml`, and `.github/scripts/report-build.js` along with patched `app.json`.
-   - Triggers the workflow via `workflow_dispatch` without leaking secrets in workflow parameters.
-   - The workflow runs `continue-on-error: true` on the build step and an `if: always()` report step, ensuring terminal status is always reported.
+1. **GitHub-Actions-in-User's-Repo Compute & Shared Dispatcher**:
+   - `dispatchProjectWorkflow()` in `lib/publish/dispatch.ts` unifies pushing workflow files and code, upserting repository secrets, and dispatching GitHub Actions runs with automatic workflow run correlation.
+   - For native builds: commits `eas.json`, `.github/workflows/eas-build.yml`, and `.github/scripts/report-build.js` along with version-patched `app.json`.
+   - For web hosting: commits `eas.json`, `.github/workflows/eas-web-deploy.yml`, and `.github/scripts/report-web-deploy.js` with identity-patched `app.json` (no version bump). Runs `npx expo export -p web` followed by `eas deploy --prod --json`.
+   - Workflows run with `continue-on-error: true` and `if: always()` report scripts to ensure terminal outcomes are always reported back.
 
 2. **Sealed-Box Secret Delivery**:
    - Repository Actions secrets (`EXPO_TOKEN` and `PUBLISH_WEBHOOK_SECRET`) are encrypted in-memory using libsodium's `crypto_box_seal` with the repository's Actions public key (`GET /repos/{owner}/{repo}/actions/secrets/public-key`), then uploaded idempotently via `PUT /repos/{owner}/{repo}/actions/secrets/{name}`.
 
-3. **Database Schema & Append-Only Philosophy**:
-   - `builds`: Append-only build records. Retrying a build inserts a new record rather than mutating the old one. A partial unique index `builds_one_active_per_target` on `(projectId, platform, format) WHERE status in ('queued', 'dispatching', 'building')` provides database-level enforcement against concurrent duplicate builds.
+3. **Database Schema & Current-State Web Deployments**:
+   - `builds`: Append-only build records for native packages. Retrying a build inserts a new record rather than mutating the old one. A partial unique index `builds_one_active_per_target` on `(projectId, platform, format) WHERE status in ('queued', 'dispatching', 'building')` provides database-level enforcement against concurrent duplicate builds.
+   - `web_deployments`: Current-state row per project (`projectId` primary key). Tracks current status (`queued` → `dispatching` → `building` → `deploying` → `ready` / `failed`), workflow correlation info, and live production `url`. Rerunning `eas deploy --prod` updates the existing site in place; the `url` is preserved across republishes.
    - `project_app_identities`: Stores immutable package name (`androidPackage`) and bundle identifier (`iosBundleId`) seeded from initial `app.json`, plus EAS metadata (`easProjectId`, `expoOwner`) populated lazily.
    - `expo_connections`: Stores user's Expo Personal Access Token, encrypted at rest using AES-GCM via `lib/crypto/secret-box.ts`.
 
 4. **Webhook Trust Boundary & HMAC Verification**:
-   - The webhook route (`/api/publish/webhook`) has no user session; its trust boundary is strictly authenticated via a Stripe-style HMAC-SHA256 signature in the `x-publish-signature: t=<timestamp>,v1=<hex>` header.
-   - The report script in GitHub Actions computes HMAC-SHA256 over `${timestamp}.${rawBody}` using `PUBLISH_WEBHOOK_SECRET`.
-   - The server verifies timing equality and enforces a 300-second timestamp tolerance window against replay attacks.
-   - Status updates are idempotent: payloads received for builds already in a terminal state (`ready` or `failed`) return 200 immediately.
+   - The webhook routes (`/api/publish/webhook` and `/api/publish/web-webhook`) have no user session; their trust boundary is strictly authenticated via a Stripe-style HMAC-SHA256 signature in the `x-publish-signature: t=<timestamp>,v1=<hex>` header.
+   - Report scripts compute HMAC-SHA256 over `${timestamp}.${rawBody}` using `PUBLISH_WEBHOOK_SECRET`.
+   - Web deploy reports include a mid-workflow ping (`stage: "deploying"`) when export succeeds and `eas deploy` begins, allowing the UI to present accurate progress stages.
+   - Status updates are idempotent: payloads received for builds or web deployments already in a terminal state (`ready` or `failed`) return 200 immediately.
 
 5. **Credentials Failure Detection**:
    - EAS error logs are inspected in the report script for missing Apple Developer signing credentials (distribution certificate / provisioning profile). If detected, `needsIosCredentials` is set to 1, prompting the UI to display dedicated Apple credentials setup instructions.
@@ -323,8 +334,8 @@ flowchart TD
   `app_snapshots` (version history), `cloudhike_connections` / `app_backends`
   (backend-connect feature, secrets encrypted via `lib/crypto/secret-box.ts`),
   `github_connections` / `project_github_links` (GitHub export tokens and repository links),
-  `builds` / `project_app_identities` / `expo_connections` (Publish / EAS builds subsystem,
-  including partial unique index `builds_one_active_per_target` and encrypted Expo credentials).
+  `builds` / `project_app_identities` / `expo_connections` / `web_deployments` (Publish / EAS builds and web hosting subsystem,
+  including partial unique index `builds_one_active_per_target`, live web deployment status, and encrypted Expo credentials).
 - **Hand-applied SQL** (`db/sql/*.sql`, applied via `npm run db:sql` →
   `scripts/migrate-sql.mjs`, all idempotent): `users`, `projects` (holds `prompt`,
   `preview_screens` as the whole `AppDoc` JSON, `current_version`, `assets`),

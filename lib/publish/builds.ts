@@ -79,14 +79,20 @@ export async function markDispatched(
     workflowRunUrl?: string | null
   }
 ): Promise<void> {
-  const values: Partial<NewBuildRow> = {
-    status: "dispatching",
-    dispatchedAt: new Date(),
+  const [existing] = await db.select().from(builds).where(eq(builds.id, buildId)).limit(1)
+  if (!existing) return
+
+  const values: Partial<NewBuildRow> = {}
+  if (existing.status === "queued") {
+    values.status = "dispatching"
+    values.dispatchedAt = new Date()
   }
   if (opts.workflowRunId !== undefined) values.workflowRunId = opts.workflowRunId
   if (opts.workflowRunUrl !== undefined) values.workflowRunUrl = opts.workflowRunUrl
 
-  await db.update(builds).set(values).where(eq(builds.id, buildId))
+  if (Object.keys(values).length > 0) {
+    await db.update(builds).set(values).where(eq(builds.id, buildId))
+  }
 }
 
 export async function markBuilding(
