@@ -90,9 +90,15 @@ export async function pushProject(token: string, opts: PushOptions): Promise<Pus
   let existingRefExists = false
 
   if (isNewBranch) {
-    const baseRef = await getRef(token, owner, repoName, `heads/${baseBranch}`)
-    if (baseRef) {
-      parentCommitSha = baseRef.object.sha
+    const existingTargetRef = await getRef(token, owner, repoName, `heads/${targetBranch}`)
+    if (existingTargetRef) {
+      parentCommitSha = existingTargetRef.object.sha
+      existingRefExists = true
+    } else {
+      const baseRef = await getRef(token, owner, repoName, `heads/${baseBranch}`)
+      if (baseRef) {
+        parentCommitSha = baseRef.object.sha
+      }
     }
   } else {
     const ref = await getRef(token, owner, repoName, `heads/${targetBranch}`)

@@ -1,6 +1,6 @@
 import "server-only"
 
-export const GITHUB_SCOPE = "repo"
+export const GITHUB_SCOPE = "repo workflow"
 
 export class GithubConfigError extends Error {}
 

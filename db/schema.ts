@@ -158,6 +158,7 @@ export const cloudhikeConnections = pgTable("cloudhike_connections", {
   apiUrl: text("api_url").notNull(),
   /** "active", or "revoked" once CloudHike answered 401 (the user disconnected the app). */
   status: text("status").notNull().default("active"),
+  connectedAt: timestamp("connected_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -269,3 +270,74 @@ export const projectGithubLinks = pgTable("project_github_links", {
 
 export type ProjectGithubLinkRow = typeof projectGithubLinks.$inferSelect;
 export type NewProjectGithubLinkRow = typeof projectGithubLinks.$inferInsert;
+
+// ---------------------------------------------------------------- Publish / EAS builds
+export type BuildPlatform = "android" | "ios";
+export type BuildFormat = "aab" | "apk" | "ipa";
+export type BuildStatus = "queued" | "dispatching" | "building" | "ready" | "failed";
+
+export const builds = pgTable(
+  "builds",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    platform: text("platform").$type<BuildPlatform>().notNull(),
+    format: text("format").$type<BuildFormat>().notNull(),
+    version: text("version").notNull(),
+    status: text("status").$type<BuildStatus>().notNull().default("queued"),
+    repoOwner: text("repo_owner"),
+    repoName: text("repo_name"),
+    workflowRunId: text("workflow_run_id"),
+    workflowRunUrl: text("workflow_run_url"),
+    easBuildId: text("eas_build_id"),
+    artifactUrl: text("artifact_url"),
+    error: text("error"),
+    needsIosCredentials: integer("needs_ios_credentials").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("builds_one_active_per_target")
+      .on(t.projectId, t.platform, t.format)
+      .where(sql`status in ('queued', 'dispatching', 'building')`),
+    index("builds_project_created").on(t.projectId, t.createdAt),
+  ]
+);
+
+export type BuildRow = typeof builds.$inferSelect;
+export type NewBuildRow = typeof builds.$inferInsert;
+
+export const projectAppIdentities = pgTable("project_app_identities", {
+  projectId: text("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  androidPackage: text("android_package").notNull(),
+  iosBundleId: text("ios_bundle_id").notNull(),
+  easProjectId: text("eas_project_id"),
+  expoOwner: text("expo_owner"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type ProjectAppIdentityRow = typeof projectAppIdentities.$inferSelect;
+export type NewProjectAppIdentityRow = typeof projectAppIdentities.$inferInsert;
+
+export const expoConnections = pgTable("expo_connections", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  accessTokenEnc: text("access_token_enc").notNull(),
+  expoUsername: text("expo_username"),
+  status: text("status").notNull().default("active"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type ExpoConnectionRow = typeof expoConnections.$inferSelect;
+export type NewExpoConnectionRow = typeof expoConnections.$inferInsert;

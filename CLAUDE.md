@@ -23,6 +23,24 @@ Project conventions for anyone (human or AI) working in this repo. Follow these 
 9. **Types over `any`.** This project runs `strict` TypeScript — don't introduce `any` or `@ts-ignore` to silence errors; fix the underlying type issue.
 10. **Comments explain "why", not "what".** Only comment non-obvious constraints, workarounds, or invariants — not what the code visibly does.
 
+## Database changes
+
+All schema changes go through a migration — never a manual/ad-hoc change against
+the live database.
+
+- **Drizzle-managed tables**: change `db/schema.ts`, then generate a migration with
+  `npm run db:generate` and apply it with `npm run db:push`. Don't hand-edit
+  columns in a DB client or edit a schema and skip generating a migration.
+- **Hand-applied tables** (`users`, `projects`, `messages` — shared with the
+  CloudHike-hosted side, not drizzle-kit-managed): add a new idempotent `.sql` file
+  under `db/sql/` (`if not exists` everywhere) and apply it with `npm run db:sql`.
+  Never edit an already-applied `db/sql/*.sql` file in place — add a new one, the
+  same way you'd add a new migration.
+- **Why**: a migration (Drizzle's or a `db/sql/*.sql` file) is what makes the schema
+  itself versioned and reproducible — anyone can rebuild the DB from history, and it
+  mirrors how `lib/versions/**` treats every app change as an append-only snapshot
+  rather than an in-place edit. A manual schema tweak breaks that guarantee silently.
+
 ## Keeping docs in sync
 
 This repo has three living reference docs under `docs/` (each also has a companion

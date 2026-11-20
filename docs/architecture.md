@@ -272,12 +272,59 @@ The workspace allows creators to export the complete generated Expo project outs
 
 ---
 
-## 8. Persistence
+## 8. Publish / EAS builds
+
+The Publish subsystem enables users to export their generated Expo apps as native installable packages (`.apk` / `.aab` for Android, `.ipa` for iOS). Because this platform is hosted serverlessly (e.g. Vercel) and cannot run native mobile compilation itself, the architecture pushes the compute cost onto infrastructure the user already owns: their own connected GitHub repository (GitHub Actions compute) and their own Expo / EAS account (cloud build workers).
+
+```mermaid
+flowchart TD
+    User["Creator / UI"] -->|"Publish (platform, format, version)"| API["Publish Route\n/api/projects/[id]/publish"]
+    API -->|"Ensure identity"| IdentityDB[("project_app_identities")]
+    API -->|"Insert queued row"| BuildsDB[("builds")]
+    API -->|"Push app.json + eas.json + workflow"| GHRepo["User's GitHub Repo"]
+    API -->|"Upsert EXPO_TOKEN & WEBHOOK_SECRET via libsodium"| GHSecrets["Repo Actions Secrets"]
+    API -->|"workflow_dispatch"| GHA["GitHub Actions Runner\n(.github/workflows/eas-build.yml)"]
+    GHA -->|"eas build --wait --json"| EASCloud["Expo EAS Build Cloud"]
+    EASCloud -->|"Artifact (.apk / .aab / .ipa)"| EASStorage["EAS Hosted URL\n(~30-day retention)"]
+    GHA -->|"report-build.js (HMAC signed)"| Webhook["Publish Webhook\n/api/publish/webhook"]
+    Webhook -->|"Update status (ready / failed)"| BuildsDB
+    User -->|"Polls builds query (4s interval)"| BuildsDB
+```
+
+### Key Architectural Components
+
+1. **GitHub-Actions-in-User's-Repo Compute**:
+   - Reuses `pushProject()` and `buildExportFileMap()` to commit `eas.json`, `.github/workflows/eas-build.yml`, and `.github/scripts/report-build.js` along with patched `app.json`.
+   - Triggers the workflow via `workflow_dispatch` without leaking secrets in workflow parameters.
+   - The workflow runs `continue-on-error: true` on the build step and an `if: always()` report step, ensuring terminal status is always reported.
+
+2. **Sealed-Box Secret Delivery**:
+   - Repository Actions secrets (`EXPO_TOKEN` and `PUBLISH_WEBHOOK_SECRET`) are encrypted in-memory using libsodium's `crypto_box_seal` with the repository's Actions public key (`GET /repos/{owner}/{repo}/actions/secrets/public-key`), then uploaded idempotently via `PUT /repos/{owner}/{repo}/actions/secrets/{name}`.
+
+3. **Database Schema & Append-Only Philosophy**:
+   - `builds`: Append-only build records. Retrying a build inserts a new record rather than mutating the old one. A partial unique index `builds_one_active_per_target` on `(projectId, platform, format) WHERE status in ('queued', 'dispatching', 'building')` provides database-level enforcement against concurrent duplicate builds.
+   - `project_app_identities`: Stores immutable package name (`androidPackage`) and bundle identifier (`iosBundleId`) seeded from initial `app.json`, plus EAS metadata (`easProjectId`, `expoOwner`) populated lazily.
+   - `expo_connections`: Stores user's Expo Personal Access Token, encrypted at rest using AES-GCM via `lib/crypto/secret-box.ts`.
+
+4. **Webhook Trust Boundary & HMAC Verification**:
+   - The webhook route (`/api/publish/webhook`) has no user session; its trust boundary is strictly authenticated via a Stripe-style HMAC-SHA256 signature in the `x-publish-signature: t=<timestamp>,v1=<hex>` header.
+   - The report script in GitHub Actions computes HMAC-SHA256 over `${timestamp}.${rawBody}` using `PUBLISH_WEBHOOK_SECRET`.
+   - The server verifies timing equality and enforces a 300-second timestamp tolerance window against replay attacks.
+   - Status updates are idempotent: payloads received for builds already in a terminal state (`ready` or `failed`) return 200 immediately.
+
+5. **Credentials Failure Detection**:
+   - EAS error logs are inspected in the report script for missing Apple Developer signing credentials (distribution certificate / provisioning profile). If detected, `needsIosCredentials` is set to 1, prompting the UI to display dedicated Apple credentials setup instructions.
+
+---
+
+## 9. Persistence
 
 - **Drizzle-managed**: `agent_runs` / `agent_events` (run mutex + SSE log),
   `app_snapshots` (version history), `cloudhike_connections` / `app_backends`
   (backend-connect feature, secrets encrypted via `lib/crypto/secret-box.ts`),
-  `github_connections` / `project_github_links` (GitHub export tokens and repository links).
+  `github_connections` / `project_github_links` (GitHub export tokens and repository links),
+  `builds` / `project_app_identities` / `expo_connections` (Publish / EAS builds subsystem,
+  including partial unique index `builds_one_active_per_target` and encrypted Expo credentials).
 - **Hand-applied SQL** (`db/sql/*.sql`, applied via `npm run db:sql` →
   `scripts/migrate-sql.mjs`, all idempotent): `users`, `projects` (holds `prompt`,
   `preview_screens` as the whole `AppDoc` JSON, `current_version`, `assets`),
@@ -289,7 +336,7 @@ The workspace allows creators to export the complete generated Expo project outs
 
 ---
 
-## 9. Build & eval tooling
+## 10. Build & eval tooling
 
 - **`scripts/build-preview.mjs`** — esbuild-bundles `preview-runtime/` into
   `public/preview/runtime.js`; runs automatically before `dev`/`build`.
@@ -309,7 +356,7 @@ The workspace allows creators to export the complete generated Expo project outs
 
 ---
 
-## 9. Design decisions worth knowing
+## 11. Design decisions worth knowing
 
 - **The AI is never trusted to be correct; it's trusted to be checkable.** Every
   mechanism above (manifest compilation, the `@/kit` vocabulary, the gate pipeline,

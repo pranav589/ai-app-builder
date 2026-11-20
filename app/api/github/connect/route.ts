@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 
-import { isConnectConfigured } from "@/lib/github/config"
-import { beginConnect, hasConnection, STATE_COOKIE } from "@/lib/github/connect"
+import { isConnectConfigured, GITHUB_SCOPE } from "@/lib/github/config"
+import { beginConnect, getAccess, STATE_COOKIE } from "@/lib/github/connect"
 import { requireOwnedProject } from "@/lib/cloudhike/owner"
 
 export const runtime = "nodejs"
@@ -20,8 +20,15 @@ export async function GET(req: Request) {
   if (owned.error) return owned.error.status === 401 ? NextResponse.redirect(new URL("/", url.origin), { status: 303 }) : owned.error
   if (!isConnectConfigured()) return back({ github: "error", reason: "not_configured" })
 
-  if (url.searchParams.get("reconnect") !== "1" && (await hasConnection(owned.user.id)))
+  const isReconnect = url.searchParams.get("reconnect") === "1"
+  const access = await getAccess(owned.user.id)
+  const hasAllScopes =
+    Boolean(access) &&
+    GITHUB_SCOPE.split(/\s+/).every((s) => access!.scope.split(/[\s,]+/).includes(s))
+
+  if (!isReconnect && access && hasAllScopes) {
     return back({ github: "connected" })
+  }
 
   const { url: authorize, cookie, maxAge } = beginConnect(owned.user.id, projectId)
   const res = NextResponse.redirect(authorize, { status: 303 })

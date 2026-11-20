@@ -621,3 +621,186 @@ Serves a stored asset (image, etc.) by key, scoped to a project.
   `content-security-policy: default-src 'none'; sandbox`
 
 **Error 404** (plain text, not JSON): `Not found`
+
+---
+
+## Publish / EAS Builds
+
+### `POST /api/projects/[projectId]/publish`
+Initiates a new native build (`.aab` / `.apk` / `.ipa`) for an Expo project. Pushes the project files and build configurations (`eas.json`, `.github/workflows/eas-build.yml`, `.github/scripts/report-build.js`) to the user's connected GitHub repository, registers secrets (`EXPO_TOKEN`, `PUBLISH_WEBHOOK_SECRET`) via sealed box encryption, and triggers `workflow_dispatch`.
+
+- **Auth**: required (user must own project)
+- **CSRF guard**: required (`isSameOriginJson`)
+- **Prerequisites**: project must be pushed to GitHub (`not_linked` 409), GitHub must be connected (`github_not_connected` 409), Expo PAT must be connected (`expo_not_connected` 409).
+- **Concurrency**: rejected if an in-progress build exists for `(projectId, platform, format)` (`build_in_progress` 409).
+
+**Sample request**
+```json
+{
+  "platform": "android",
+  "format": "apk",
+  "version": "1.0.0"
+}
+```
+
+**Response 200**
+```json
+{
+  "buildId": "bld_98765432-abcd-ef01-2345-6789abcdef01"
+}
+```
+
+**Errors**
+- `400 {"error": "invalid_platform" | "invalid_format" | "invalid_version"}`
+- `409 {"error": "not_linked" | "github_not_connected" | "expo_not_connected" | "build_in_progress"}`
+- `401 {"error": "github_auth_expired"}`
+
+---
+
+### `GET /api/projects/[projectId]/builds`
+Lists all build attempts for a project, ordered latest first. Polled by `PublishDialog` every ~4s while any build is non-terminal.
+
+- **Auth**: required (user must own project)
+
+**Response 200**
+```json
+{
+  "builds": [
+    {
+      "id": "bld_123",
+      "projectId": "proj_abc",
+      "userId": "usr_xyz",
+      "platform": "android",
+      "format": "apk",
+      "version": "1.0.0",
+      "status": "ready",
+      "repoOwner": "alice",
+      "repoName": "my-app",
+      "workflowRunId": "12345678",
+      "workflowRunUrl": "https://github.com/alice/my-app/actions/runs/12345678",
+      "easBuildId": "eas-build-uuid",
+      "artifactUrl": "https://expo.dev/artifacts/eas/abc.apk",
+      "error": null,
+      "needsIosCredentials": 0,
+      "createdAt": "2026-11-20T12:00:00.000Z",
+      "dispatchedAt": "2026-11-20T12:00:05.000Z",
+      "finishedAt": "2026-11-20T12:04:30.000Z"
+    }
+  ]
+}
+```
+
+---
+
+### `POST /api/projects/[projectId]/builds/[buildId]/retry`
+Retries a failed build by inserting a **new** build row (preserving historical failed records) and re-running the publish pipeline with the previous target platform, format, and version.
+
+- **Auth**: required (user must own project)
+- **CSRF guard**: required (`isSameOriginJson`)
+
+**Response 200**
+```json
+{
+  "buildId": "bld_new_retry_uuid"
+}
+```
+
+**Errors**
+- `404 {"error": "not_found", "message": "Build not found."}`
+- `409 {"error": "conflict", "message": "Only failed builds can be retried."}`
+- `409 {"error": "not_linked" | "github_not_connected" | "expo_not_connected" | "build_in_progress"}`
+
+---
+
+### `POST /api/publish/webhook`
+Webhook called by the GitHub Actions runner (`.github/scripts/report-build.js`) upon completion or failure of an EAS build.
+
+- **Auth**: verified via Stripe-style HMAC-SHA256 signature in `x-publish-signature: t=<timestamp>,v1=<hmac>` header using `PUBLISH_WEBHOOK_SECRET`. No user session.
+- **Idempotent**: always returns 200 if the build was already marked terminal (`ready` or `failed`).
+
+**Sample request**
+```json
+{
+  "buildId": "bld_123",
+  "status": "ready",
+  "easBuildId": "eas-build-uuid",
+  "artifactUrl": "https://expo.dev/artifacts/eas/abc.apk",
+  "error": null,
+  "needsIosCredentials": 0,
+  "workflowRunUrl": "https://github.com/alice/my-app/actions/runs/12345678",
+  "easProjectId": "eas-project-uuid",
+  "expoOwner": "alice"
+}
+```
+
+**Response 200**
+```json
+{
+  "ok": true
+}
+```
+
+**Errors**
+- `400 {"error": "Missing buildId" | "Invalid JSON body"}`
+- `401 {"error": "Invalid webhook signature"}`
+- `404 {"error": "Build not found"}`
+
+---
+
+## Expo Connect
+
+### `POST /api/expo/connect`
+Validates a pasted Personal Access Token against Expo's GraphQL API (`https://api.expo.dev/graphql`), encrypts it via AES-GCM, and upserts an `expo_connections` record.
+
+- **Auth**: required (session user)
+- **CSRF guard**: required (`isSameOriginJson`)
+
+**Sample request**
+```json
+{
+  "token": "expo_pat_abcdef123456"
+}
+```
+
+**Response 200**
+```json
+{
+  "ok": true,
+  "username": "expo_developer"
+}
+```
+
+**Errors**
+- `400 {"error": "missing_token" | "invalid_token"}`
+- `401 {"error": "Unauthorized"}`
+
+---
+
+### `GET /api/expo/status`
+Checks if the current user has an active connected Expo Personal Access Token.
+
+- **Auth**: optional (returns `{ connected: false }` if unauthenticated)
+
+**Response 200**
+```json
+{
+  "connected": true,
+  "username": "expo_developer"
+}
+```
+
+---
+
+### `POST /api/expo/disconnect`
+Disconnects the current user's Expo account by deleting their `expo_connections` record.
+
+- **Auth**: required (session user)
+- **CSRF guard**: required (`isSameOriginJson`)
+
+**Response 200**
+```json
+{
+  "ok": true
+}
+```
+

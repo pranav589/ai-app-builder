@@ -205,10 +205,14 @@ describe("pushProject orchestration", () => {
 
   it("scenario 3: creates a new branch off current tip", async () => {
     const steps: PushStep[] = []
-    vi.mocked(api.getRef).mockResolvedValueOnce({
-      ref: "refs/heads/main",
-      object: { sha: "tip_sha_99", type: "commit" },
-    })
+    // First call checks whether "export-feature" already exists (it doesn't); second
+    // call reads the base branch ("main") to find the tip to branch off of.
+    vi.mocked(api.getRef)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        ref: "refs/heads/main",
+        object: { sha: "tip_sha_99", type: "commit" },
+      })
     vi.mocked(api.createTree).mockResolvedValueOnce({ sha: "tree_sha_3" })
     vi.mocked(api.createCommit).mockResolvedValueOnce({
       sha: "commit_sha_3",
@@ -242,7 +246,8 @@ describe("pushProject orchestration", () => {
       "updating-branch",
     ])
 
-    expect(api.getRef).toHaveBeenCalledWith(token, "user2", "my-app", "heads/main")
+    expect(api.getRef).toHaveBeenNthCalledWith(1, token, "user2", "my-app", "heads/export-feature")
+    expect(api.getRef).toHaveBeenNthCalledWith(2, token, "user2", "my-app", "heads/main")
     expect(api.createCommit).toHaveBeenCalledWith(token, "user2", "my-app", {
       message: "Update my-app: 2 files",
       tree: "tree_sha_3",

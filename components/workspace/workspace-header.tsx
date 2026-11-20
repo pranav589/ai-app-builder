@@ -31,7 +31,9 @@ import type { BackendInfo } from "@/lib/agent/types"
 import { apiClient } from "@/lib/api-client"
 import { slug } from "@/lib/app-project/scaffold"
 import { BackendControl } from "./backend-connect"
+import { ExpoConnectDialog } from "./expo-connect-dialog"
 import { GithubPushDialog } from "./github-push-dialog"
+import { PublishDialog } from "./publish-dialog"
 import { VersionsMenu } from "./versions-menu"
 import { statusLabel } from "@/lib/project-status"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -280,6 +282,8 @@ export function WorkspaceHeader({
 }) {
   const [shareOpen, setShareOpen] = React.useState(false)
   const [githubOpen, setGithubOpen] = React.useState(false)
+  const [expoOpen, setExpoOpen] = React.useState(false)
+  const [publishOpen, setPublishOpen] = React.useState(false)
   const [zipError, setZipError] = React.useState<string | null>(null)
 
   const zipMutation = useMutation({
@@ -399,20 +403,14 @@ export function WorkspaceHeader({
                 <Github /> Push to GitHub
               </DropdownMenuItem>
             </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>Build</DropdownMenuLabel>
-              <DropdownMenuItem disabled>
-                <Smartphone /> Android APK <DropdownMenuShortcut>Soon</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled>
-                <Smartphone /> iOS build <DropdownMenuShortcut>Soon</DropdownMenuShortcut>
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <Button className="hidden h-8 px-3 md:inline-flex" disabled title="Available once your first build is ready">
+        <Button
+          className="hidden h-8 px-3 md:inline-flex"
+          title="Publish a native build (.apk / .aab / .ipa)"
+          onClick={() => setPublishOpen(true)}
+        >
           <Rocket /> Publish
         </Button>
 
@@ -426,6 +424,18 @@ export function WorkspaceHeader({
         onOpenChange={setGithubOpen}
         projectId={projectId}
         projectName={name}
+      />
+      <ExpoConnectDialog
+        open={expoOpen}
+        onOpenChange={setExpoOpen}
+      />
+      <PublishDialog
+        open={publishOpen}
+        onOpenChange={setPublishOpen}
+        projectId={projectId}
+        projectName={name}
+        onOpenGithubDialog={() => setGithubOpen(true)}
+        onOpenExpoDialog={() => setExpoOpen(true)}
       />
     </header>
   )

@@ -544,7 +544,66 @@ sequenceDiagram
 
 ---
 
-## 11. Authentication
+## 11. Publish & EAS Builds: Native App Export
+
+**What it does**: compiles generated apps into installable native packages (`.apk` / `.aab` for Android, `.ipa` for iOS) by offloading compute to the user's connected GitHub repository (GitHub Actions minutes) and their own Expo / EAS account. Links directly to EAS cloud-hosted artifacts.
+
+**The flow**:
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant UI as PublishDialog
+    participant API as /api/projects/[id]/publish
+    participant GH as GitHub API & Actions
+    participant EAS as Expo EAS Cloud
+    participant WH as /api/publish/webhook
+    participant DB as Postgres
+
+    U->>UI: Select platform, format, version & click Publish
+    UI->>API: POST /api/projects/[id]/publish
+    API->>DB: Seed/read project_app_identities & insert queued builds row
+    API->>GH: Push eas.json, workflow, report script, and patched app.json
+    API->>GH: Seal & PUT Actions secrets (EXPO_TOKEN, PUBLISH_WEBHOOK_SECRET)
+    API->>GH: POST /actions/workflows/eas-build.yml/dispatches
+    API-->>UI: { buildId }
+    GH->>EAS: eas build --platform <platform> --profile <profile> --wait --json
+    EAS-->>GH: Build finished / failed (artifactUrl, error)
+    GH->>WH: POST /api/publish/webhook (HMAC-signed report-build.js)
+    WH->>DB: markReady / markFailed
+    UI->>DB: Poll /api/projects/[id]/builds every 4s
+    UI->>U: Display Ready badge + direct Download link
+```
+
+**Files involved**:
+
+| File | Role |
+|---|---|
+| `components/workspace/publish-dialog.tsx` | Platform/format/version picker, prerequisites check (GitHub + Expo), active build polling, and download/retry controls |
+| `components/workspace/expo-connect-dialog.tsx` | Token-paste dialog connecting user's Expo Personal Access Token to their account |
+| `components/workspace/workspace-header.tsx` | Dropdown menu links to Expo Connect / Publish dialogs and dynamic Publish button |
+| `lib/publish/eas-config.ts` | Profile naming, `eas.json` generator, `app.json` patcher, and workflow/script template builders |
+| `lib/publish/app-identity.ts` | Stable Android package name and iOS bundle identifier persistence (`project_app_identities`) |
+| `lib/publish/github-secrets.ts` | Libsodium `crypto_box_seal` encryption for GitHub Actions repository secrets |
+| `lib/publish/webhook-auth.ts` | Stripe-style HMAC-SHA256 signature generation and verification for the build report webhook |
+| `lib/publish/expo-connect.ts` | Personal Access Token validation via Expo GraphQL API, AES-GCM encryption, and connection management |
+| `lib/publish/builds.ts` | Query helpers for build row lifecycle (`createQueuedBuild`, `markDispatched`, `markReady`, `markFailed`) |
+| `lib/publish/run-publish.ts` | End-to-end publish orchestration: assemble files → patch `app.json` → push → upsert secrets → dispatch workflow |
+| `app/api/projects/[projectId]/publish/route.ts` | Endpoint to validate targets, insert queued build, and trigger publish workflow |
+| `app/api/projects/[projectId]/builds/route.ts` | Returns ordered list of builds for a project (polled by Publish dialog) |
+| `app/api/projects/[projectId]/builds/[buildId]/retry/route.ts` | Retries a failed build by dispatching a new build attempt row |
+| `app/api/publish/webhook/route.ts` | Unauthenticated, HMAC-verified webhook receiving build results from GitHub Actions |
+| `app/api/expo/connect/route.ts` | Validates and saves an Expo Personal Access Token |
+| `app/api/expo/status/route.ts` | Reports whether current user has an active Expo connection |
+| `app/api/expo/disconnect/route.ts` | Disconnects the user's Expo account |
+| `db/schema.ts` | `builds`, `project_app_identities`, and `expo_connections` tables with partial unique index |
+| `.github/workflows/eas-build.yml` | Generated GitHub Actions workflow running in user's repo to execute EAS build |
+| `.github/scripts/report-build.js` | Generated Node script running in user's workflow to sign and report build results back |
+| `eas.json` | Generated EAS configuration file defining production profiles with remote versioning |
+
+---
+
+## 12. Authentication
 
 **What it does**: sign-up/sign-in/sign-out (including social login) for the builder
 app itself, delegated to CloudHike's own auth service rather than reimplemented here.

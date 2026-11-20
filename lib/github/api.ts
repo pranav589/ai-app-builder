@@ -87,6 +87,10 @@ export async function listRepos(token: string): Promise<GithubRepo[]> {
   return githubFetch<GithubRepo[]>(token, "/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member")
 }
 
+export async function getRepo(token: string, owner: string, repo: string): Promise<GithubRepo> {
+  return githubFetch<GithubRepo>(token, `/repos/${owner}/${repo}`)
+}
+
 export async function createRepo(
   token: string,
   opts: { name: string; private: boolean; auto_init?: boolean }
@@ -188,3 +192,88 @@ export async function updateRef(
     body: JSON.stringify({ sha, force }),
   })
 }
+
+export type ActionsPublicKey = {
+  key_id: string
+  key: string
+}
+
+export async function getActionsPublicKey(
+  token: string,
+  owner: string,
+  repo: string
+): Promise<ActionsPublicKey> {
+  return githubFetch<ActionsPublicKey>(token, `/repos/${owner}/${repo}/actions/secrets/public-key`)
+}
+
+export async function createOrUpdateRepoSecret(
+  token: string,
+  owner: string,
+  repo: string,
+  secretName: string,
+  encryptedValue: string,
+  keyId: string
+): Promise<void> {
+  await githubFetch<void>(token, `/repos/${owner}/${repo}/actions/secrets/${secretName}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ encrypted_value: encryptedValue, key_id: keyId }),
+  })
+}
+
+export async function dispatchWorkflow(
+  token: string,
+  owner: string,
+  repo: string,
+  workflowId: string,
+  ref: string,
+  inputs: Record<string, string>
+): Promise<void> {
+  let lastErr: unknown
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await githubFetch<void>(token, `/repos/${owner}/${repo}/actions/workflows/${workflowId}/dispatches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ref, inputs }),
+      })
+      return
+    } catch (err) {
+      lastErr = err
+      if (err instanceof GithubApiError && err.status === 404 && attempt < 2) {
+        // Ref propagation or workflow indexing lag: retry after 2 seconds
+        await new Promise((r) => setTimeout(r, 2000))
+        continue
+      }
+      throw err
+    }
+  }
+  if (lastErr) throw lastErr
+}
+
+export type WorkflowRun = {
+  id: number
+  html_url: string
+  created_at: string
+  status: string
+  conclusion: string | null
+}
+
+export async function listWorkflowRuns(
+  token: string,
+  owner: string,
+  repo: string,
+  workflowId: string,
+  params?: { event?: string; created?: string }
+): Promise<{ total_count: number; workflow_runs: WorkflowRun[] }> {
+  const query = new URLSearchParams()
+  if (params?.event) query.set("event", params.event)
+  if (params?.created) query.set("created", params.created)
+  query.set("per_page", "10")
+  const qs = query.toString() ? `?${query.toString()}` : ""
+  return githubFetch<{ total_count: number; workflow_runs: WorkflowRun[] }>(
+    token,
+    `/repos/${owner}/${repo}/actions/workflows/${workflowId}/runs${qs}`
+  )
+}
+

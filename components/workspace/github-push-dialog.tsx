@@ -333,18 +333,32 @@ export function GithubPushDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <div className="flex items-center gap-2">
-            <span className="flex size-8 items-center justify-center rounded-lg bg-zinc-900 text-white dark:bg-white dark:text-zinc-900">
-              <Github className="size-4" />
-            </span>
-            <div>
-              <DialogTitle>Push to GitHub</DialogTitle>
-              <DialogDescription>
-                {statusQuery.data?.login
-                  ? `Connected as @${statusQuery.data.login}`
-                  : "Export your project directly to a GitHub repository"}
-              </DialogDescription>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="flex size-8 items-center justify-center rounded-lg bg-zinc-900 text-white dark:bg-white dark:text-zinc-900">
+                <Github className="size-4" />
+              </span>
+              <div>
+                <DialogTitle>Push to GitHub</DialogTitle>
+                <DialogDescription>
+                  {statusQuery.data?.login
+                    ? `Connected as @${statusQuery.data.login}`
+                    : "Export your project directly to a GitHub repository"}
+                </DialogDescription>
+              </div>
             </div>
+            {statusQuery.data?.login && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => {
+                  window.location.assign(`/api/github/connect?projectId=${encodeURIComponent(projectId)}&reconnect=1`)
+                }}
+              >
+                Reconnect
+              </Button>
+            )}
           </div>
         </DialogHeader>
 
