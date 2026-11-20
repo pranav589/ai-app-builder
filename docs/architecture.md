@@ -72,6 +72,7 @@ version. This is the "verified code engine," the active focus of current develop
 | Platform kit | `lib/app-project/kit.ts` | Typed component vocabulary (`@/kit`) the AI is restricted to |
 | Preview runtime | `preview-runtime/` + `lib/preview/**` | Sandboxed iframe runtime: file-based router, RN/Expo shims, element inspector |
 | Device preview | `lib/device/**` | Exports a project as a real Expo project, runs a local Metro lane, QR-to-Expo-Go |
+| Project Export (ZIP & GitHub) | `lib/github/**`, `lib/app-project/zip-export.ts` | Exports runnable Expo project as ZIP or pushes directly to GitHub with real-time SSE progress |
 | Backend integration | `lib/cloudhike/**`, `lib/backend/**` | Connects a project to a real CloudHike-hosted Postgres/Auth/Storage backend |
 | Versioning | `lib/versions/**` | Snapshot store, diffing, restore |
 | Jobs | `lib/jobs/**` | Cloudhike Jobs HTTP queue client; routes agent runs to a worker or runs inline in dev |
@@ -212,6 +213,10 @@ flowchart LR
    user scans a QR code with Expo Go to see the app on a real phone. A hosted
    (no-shared-Wi-Fi) variant is planned but not yet built — see §4.
 
+   *Note*: `lib/app-project/scaffold.ts` is the shared source for `babel.config.js`,
+   `metro.config.js`, and `.gitignore`, consumed by both the local device preview lane
+   and the standalone project exports (ZIP download and GitHub push).
+
 ---
 
 ## 6. Backend integration ("Connect Backend")
@@ -239,24 +244,52 @@ tagged-reply protocol similar to the main orchestrator's.
 
 ---
 
-## 7. Persistence
+## 7. Project Export (Download as ZIP + Push to GitHub)
+
+The workspace allows creators to export the complete generated Expo project outside Anything:
+
+1. **Download as ZIP** (`lib/app-project/zip-export.ts`, `/api/projects/[projectId]/export/zip`):
+   - Merges workspace files (`workspaceFromDoc`), generic scaffold files (`scaffoldFiles(null)`: `babel.config.js`, generic `metro.config.js`, `.gitignore`), and a generated `README.md` (`readmeFile(projectName)`).
+   - Bundles files into an in-memory ZIP buffer with JSZip (DEFLATE compression) and streams with `content-disposition: attachment; filename="<slug>.zip"`.
+   - Client triggers download via Axios blob mutation and hidden anchor tag.
+
+2. **Push to GitHub** (`lib/github/**`, `components/workspace/github-push-dialog.tsx`):
+   - **OAuth Connect** (`/api/github/connect`, `/api/github/callback`):
+     - Pinned with signed HMAC state cookie (`gh_connect`), requests `repo` scope.
+     - Tokens encrypted at rest using AES-256-GCM (`lib/crypto/secret-box.ts`) with `CLOUDHIKE_ENCRYPTION_KEY`.
+     - Stored in `github_connections` table (`userId`, `accessTokenEnc`, `githubLogin`, `githubUserId`, `scope`, `status`).
+   - **Repository Link Tracking**:
+     - `project_github_links` table records the linked repository (`repoOwner`, `repoName`, `lastBranch`, `lastCommitSha`) per project.
+   - **Full-Tree-Overwrite Push Algorithm** (`lib/github/push.ts`):
+     - Step 1 (`resolving-repo`): creates a new repo or verifies an existing target repo.
+     - Step 2 (`reading-branch`): checks ref for target branch or base branch (404 implies empty repo, no parent).
+     - Step 3 (`building-tree`): calls GitHub Git Data API `POST /repos/.../git/trees` with inline blob contents for all files without passing `base_tree`, guaranteeing files deleted by AI are removed from the commit.
+     - Step 4 (`committing`): calls `POST /repos/.../git/commits` referencing the tree and parent commit (if existing).
+     - Step 5 (`updating-branch`): updates branch ref with `PATCH /repos/.../git/refs/...` (fast-forward) or creates ref with `POST /repos/.../git/refs` (new branch or first commit).
+   - **Real-Time Step Progress**:
+     - Push route (`/api/projects/[projectId]/github/push`) streams Server-Sent Events (`text/event-stream`, using generic helper `lib/http/sse.ts`) reporting step transitions (`resolving-repo` → `reading-branch` → `building-tree` → `committing` → `updating-branch`) and final done/error payloads.
+     - UI displays real-time step checkmarks and spinners.
+
+---
+
+## 8. Persistence
 
 - **Drizzle-managed**: `agent_runs` / `agent_events` (run mutex + SSE log),
   `app_snapshots` (version history), `cloudhike_connections` / `app_backends`
-  (backend-connect feature, secrets encrypted via `lib/crypto/secret-box.ts`).
+  (backend-connect feature, secrets encrypted via `lib/crypto/secret-box.ts`),
+  `github_connections` / `project_github_links` (GitHub export tokens and repository links).
 - **Hand-applied SQL** (`db/sql/*.sql`, applied via `npm run db:sql` →
   `scripts/migrate-sql.mjs`, all idempotent): `users`, `projects` (holds `prompt`,
   `preview_screens` as the whole `AppDoc` JSON, `current_version`, `assets`),
   `messages` (chat history + plan/pipeline data), `image_library` (curated seed image
   library with generated `tsvector` column and GIN index for full-text search),
   and `image_library_misses` (gap tracker for unmatched image queries with upsert
-  hit counter). These mirror tables that are also
-  used by/shared with the CloudHike-hosted side or managed via SQL scripts, which is
-  why they're not drizzle-kit-managed.
+  hit counter), `cloudhike.sql`, and `github.sql` (schema definitions for GitHub connections
+  and project links).
 
 ---
 
-## 8. Build & eval tooling
+## 9. Build & eval tooling
 
 - **`scripts/build-preview.mjs`** — esbuild-bundles `preview-runtime/` into
   `public/preview/runtime.js`; runs automatically before `dev`/`build`.

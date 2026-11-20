@@ -2,7 +2,9 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { useMutation } from "@tanstack/react-query"
 import {
+  AlertCircle,
   Check,
   ChevronDown,
   Coins,
@@ -26,12 +28,17 @@ import { cn } from "cn"
 
 import { useAuth } from "@/components/auth/auth-provider"
 import type { BackendInfo } from "@/lib/agent/types"
+import { apiClient } from "@/lib/api-client"
+import { slug } from "@/lib/app-project/scaffold"
 import { BackendControl } from "./backend-connect"
+import { GithubPushDialog } from "./github-push-dialog"
 import { VersionsMenu } from "./versions-menu"
 import { statusLabel } from "@/lib/project-status"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Spinner } from "@/components/ui/spinner"
 import {
   Dialog,
   DialogContent,
@@ -272,9 +279,65 @@ export function WorkspaceHeader({
   onRefreshBackend: () => void
 }) {
   const [shareOpen, setShareOpen] = React.useState(false)
+  const [githubOpen, setGithubOpen] = React.useState(false)
+  const [zipError, setZipError] = React.useState<string | null>(null)
+
+  const zipMutation = useMutation({
+    mutationFn: async () => {
+      setZipError(null)
+      const res = await apiClient.get<Blob>(
+        `/api/projects/${encodeURIComponent(projectId)}/export/zip`,
+        { responseType: "blob" }
+      )
+      return res.data
+    },
+    onSuccess: (data) => {
+      const url = URL.createObjectURL(data)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `${slug(name)}.zip`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    },
+    onError: async (err: unknown) => {
+      let message = "Failed to download project ZIP."
+      try {
+        const axiosErr = err as { response?: { data?: unknown } }
+        if (axiosErr.response?.data instanceof Blob) {
+          const text = await axiosErr.response.data.text()
+          const parsed = JSON.parse(text)
+          if (parsed?.error) message = parsed.error
+        } else if (typeof axiosErr.response?.data === "object" && (axiosErr.response.data as { error?: string })?.error) {
+          message = (axiosErr.response.data as { error: string }).error
+        }
+      } catch {}
+      setZipError(message)
+    },
+  })
 
   return (
     <header className="relative z-30 grid h-14 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-border bg-background px-3 sm:px-4">
+      {zipError && (
+        <div className="absolute top-full left-1/2 z-50 mt-1 w-full max-w-md -translate-x-1/2 px-2">
+          <Alert variant="destructive" className="relative py-2 shadow-md">
+            <AlertCircle className="size-4" />
+            <div className="flex-1 pr-6">
+              <AlertTitle className="text-xs font-semibold">Download failed</AlertTitle>
+              <AlertDescription className="text-xs">{zipError}</AlertDescription>
+            </div>
+            <button
+              onClick={() => setZipError(null)}
+              className="absolute top-2 right-2 text-xs text-muted-foreground hover:text-foreground"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </Alert>
+        </div>
+      )}
+
       <div className="flex min-w-0 items-center gap-2">
         <Link
           href="/"
@@ -325,10 +388,14 @@ export function WorkspaceHeader({
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
               <DropdownMenuLabel>Export code</DropdownMenuLabel>
-              <DropdownMenuItem disabled>
-                <Download /> Download as ZIP
+              <DropdownMenuItem
+                disabled={zipMutation.isPending}
+                onClick={() => zipMutation.mutate()}
+              >
+                {zipMutation.isPending ? <Spinner className="size-4" /> : <Download />}
+                Download as ZIP
               </DropdownMenuItem>
-              <DropdownMenuItem disabled>
+              <DropdownMenuItem onClick={() => setGithubOpen(true)}>
                 <Github /> Push to GitHub
               </DropdownMenuItem>
             </DropdownMenuGroup>
@@ -354,6 +421,12 @@ export function WorkspaceHeader({
       </div>
 
       <ShareDialog open={shareOpen} onOpenChange={setShareOpen} projectId={projectId} />
+      <GithubPushDialog
+        open={githubOpen}
+        onOpenChange={setGithubOpen}
+        projectId={projectId}
+        projectName={name}
+      />
     </header>
   )
 }

@@ -235,3 +235,37 @@ export const imageLibraryMisses = pgTable(
 
 export type ImageLibraryMissRow = typeof imageLibraryMisses.$inferSelect;
 export type NewImageLibraryMissRow = typeof imageLibraryMisses.$inferInsert;
+
+// ---------------------------------------------------------------- GitHub export
+export const githubConnections = pgTable("github_connections", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  accessTokenEnc: text("access_token_enc").notNull(),
+  githubLogin: text("github_login").notNull(),
+  githubUserId: integer("github_user_id").notNull(),
+  scope: text("scope").notNull(),
+  status: text("status").notNull().default("active"), // "active" | "revoked"
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type GithubConnectionRow = typeof githubConnections.$inferSelect;
+export type NewGithubConnectionRow = typeof githubConnections.$inferInsert;
+
+export const projectGithubLinks = pgTable("project_github_links", {
+  projectId: text("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  repoOwner: text("repo_owner").notNull(),
+  repoName: text("repo_name").notNull(),
+  lastBranch: text("last_branch").notNull(),
+  lastCommitSha: text("last_commit_sha"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type ProjectGithubLinkRow = typeof projectGithubLinks.$inferSelect;
+export type NewProjectGithubLinkRow = typeof projectGithubLinks.$inferInsert;

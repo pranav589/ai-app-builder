@@ -460,7 +460,91 @@ that writes your app's UI."
 
 ---
 
-## 9. Authentication
+## 9. Export: Download as ZIP
+
+**What it does**: exports the current project's complete file tree as a standalone, runnable Expo SDK 58 project packaged into a downloadable `.zip` archive. Unzipping it and running `npm install && npx expo start` gives a ready-to-run app.
+
+**The flow**:
+
+```mermaid
+flowchart TD
+    A["User clicks 'Download as ZIP' in Export menu"] --> B["Client sends GET /api/projects/[id]/export/zip via apiClient"]
+    B --> C["Server validates project ownership"]
+    C --> D["workspaceFromDoc extracts project files from AppDoc"]
+    D --> E["buildExportFileMap adds scaffoldFiles(null) + README.md"]
+    E --> F["zipFileMap packages files into Buffer using JSZip"]
+    F --> G["Server streams application/zip with attachment header"]
+    G --> H["Client receives blob, creates object URL, triggers download"]
+```
+
+**Files involved**:
+
+| File | Role |
+|---|---|
+| `lib/app-project/scaffold.ts` | Shared scaffold files (`babel.config.js`, generic `metro.config.js`, `.gitignore`, `README.md`) |
+| `lib/app-project/zip-export.ts` | `buildExportFileMap` & `zipFileMap` (JSZip in-memory bundling) |
+| `app/api/projects/[projectId]/export/zip/route.ts` | GET route returning the generated zip buffer as an attachment |
+| `components/workspace/workspace-header.tsx` | Export dropdown menu item with loading spinner and error handling |
+
+---
+
+## 10. Export: Push to GitHub
+
+**What it does**: connects a creator's GitHub account via OAuth and exports the complete project directly to a GitHub repository (new or existing) with real-time step-by-step progress streamed via SSE. Subsequent pushes can update the existing branch or branch off to a new branch.
+
+**The flow**:
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant UI as GithubPushDialog
+    participant API as /api/projects/[id]/github/push
+    participant GH as GitHub Git Data API
+    participant DB as Postgres
+
+    U->>UI: Click "Push to GitHub"
+    opt Not Connected
+        UI->>U: Redirect to GitHub OAuth (/api/github/connect)
+        U->>UI: Callback saves encrypted token in github_connections
+    end
+    U->>UI: Configure repo/branch & click Push
+    UI->>API: POST /push (SSE stream request)
+    API->>UI: step: "resolving-repo"
+    API->>GH: Create repo or verify existing repo
+    API->>UI: step: "reading-branch"
+    API->>GH: GET ref for target/base branch (detects empty repo if 404)
+    API->>UI: step: "building-tree"
+    API->>GH: POST /git/trees with all files (no base_tree, full overwrite)
+    API->>UI: step: "committing"
+    API->>GH: POST /git/commits (points to new tree, sets parent sha)
+    API->>UI: step: "updating-branch"
+    API->>GH: PATCH or POST /git/refs (updates or creates branch ref)
+    API->>DB: Upsert project_github_links
+    API->>UI: done: {owner, name, branch, commitSha, htmlUrl}
+    UI->>U: Display success state with link to commit on GitHub
+```
+
+**Files involved**:
+
+| File | Role |
+|---|---|
+| `lib/github/config.ts` | GitHub OAuth client configuration & environment validation |
+| `lib/github/connect.ts` | OAuth authorization URL, state cookies, token exchange, and encrypted persistence |
+| `lib/github/api.ts` | GitHub Git Database API client (`listRepos`, `createRepo`, `createTree`, `createCommit`, `updateRef`, etc.) |
+| `lib/github/push.ts` | `pushProject` orchestration, full-tree-overwrite algorithm, and commit message formatting |
+| `lib/http/sse.ts` | Generic Server-Sent Events headers and event encoder |
+| `app/api/github/connect/route.ts` | Starts GitHub OAuth redirect flow |
+| `app/api/github/callback/route.ts` | Completes OAuth handshake and stores encrypted access token |
+| `app/api/github/status/route.ts` | Reports GitHub integration configuration and connection status |
+| `app/api/github/repos/route.ts` | Lists user's repositories for the picker |
+| `app/api/projects/[projectId]/github/route.ts` | Fetches project link metadata and server-computed suggested commit message |
+| `app/api/projects/[projectId]/github/push/route.ts` | Executes push and streams real-time SSE progress events |
+| `components/workspace/github-push-dialog.tsx` | Push dialog with connection states, repository/branch controls, and live step progress |
+| `db/schema.ts` | `github_connections` and `project_github_links` tables |
+
+---
+
+## 11. Authentication
 
 **What it does**: sign-up/sign-in/sign-out (including social login) for the builder
 app itself, delegated to CloudHike's own auth service rather than reimplemented here.
@@ -506,7 +590,7 @@ than each route re-implementing auth checks."
 
 ---
 
-## 10. Asset/file serving
+## 12. Asset/file serving
 
 **What it does**: images and other binary assets attached to a prompt, or generated/
 used by a project, are stored in S3-compatible storage and served back through the

@@ -1,7 +1,7 @@
 import "server-only"
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 
-// Encrypts secrets at rest (CloudHike access tokens, a backend's .env) with
+// Encrypts secrets at rest (CloudHike access tokens, GitHub access tokens, a backend's .env) with
 // AES-256-GCM, and signs small values (OAuth state) with HMAC-SHA256.
 // The key comes from CLOUDHIKE_ENCRYPTION_KEY: 32 random bytes, base64 or hex
 // (`openssl rand -base64 32`). Rotating it makes stored secrets unreadable, so

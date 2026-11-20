@@ -405,6 +405,134 @@ Stop the device lane (only if this project owns the currently running one).
 
 ---
 
+## Export
+
+### `GET /api/projects/[projectId]/export/zip`
+Download the full project as a standalone, runnable Expo project in a `.zip` archive.
+
+- **Auth**: required (401 if signed out, 404 if project not owned)
+- **Response 200**: Binary zip stream with headers:
+  - `Content-Type: application/zip`
+  - `Content-Disposition: attachment; filename="<project-slug>.zip"`
+  - `Cache-Control: no-store`
+
+---
+
+## GitHub Export
+
+### `GET /api/github/connect`
+Initiate GitHub OAuth flow with `repo` scope. Sets signed `gh_connect` state cookie and redirects to GitHub.
+
+- **Query**: `?projectId=<projectId>&reconnect=1`
+- **Response 303**: Redirects to `https://github.com/login/oauth/authorize?...`
+
+### `GET /api/github/callback`
+GitHub OAuth callback handler. Verifies state against `gh_connect` cookie, exchanges code for token, fetches user profile, and stores encrypted token in `github_connections`.
+
+- **Query**: `?code=<code>&state=<state>` (or `?error=access_denied&state=...`)
+- **Response 303**: Redirects to `/workspace/<projectId>?github=connected` (or `?github=error&reason=...`)
+
+### `GET /api/github/status`
+Check whether GitHub export is configured on the server and whether the current user has connected their account.
+
+- **Auth**: optional
+- **Response 200**
+```json
+{
+  "configured": true,
+  "connected": true,
+  "login": "octocat"
+}
+```
+
+### `GET /api/github/repos`
+List repositories accessible to the connected GitHub user for the repository picker.
+
+- **Auth**: required (401 if signed out or token revoked/expired)
+- **Response 200**
+```json
+{
+  "repos": [
+    {
+      "id": 123456,
+      "name": "my-mobile-app",
+      "full_name": "octocat/my-mobile-app",
+      "owner": { "login": "octocat" },
+      "private": true,
+      "default_branch": "main",
+      "html_url": "https://github.com/octocat/my-mobile-app"
+    }
+  ]
+}
+```
+- **Error 401**
+```json
+{ "error": "reconnect" }
+```
+
+### `GET /api/projects/[projectId]/github`
+Fetch current GitHub repository linkage and server-computed suggested commit message for a project.
+
+- **Auth**: required (401 if signed out, 404 if project not found)
+- **Response 200**
+```json
+{
+  "link": {
+    "projectId": "proj-123",
+    "userId": "usr_abc",
+    "repoOwner": "octocat",
+    "repoName": "my-mobile-app",
+    "lastBranch": "main",
+    "lastCommitSha": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+    "updatedAt": "2026-11-19T12:00:00.000Z"
+  },
+  "suggestedMessage": "Update my-mobile-app: 24 files"
+}
+```
+If unlinked: `"link": null`, `"suggestedMessage": "Export my-mobile-app: 24 files"`.
+
+### `POST /api/projects/[projectId]/github/push`
+Push full project to GitHub, streaming real-time SSE progress events.
+
+- **Auth**: required (401 if signed out, 404 if project not found, 409 if GitHub not connected)
+- **Headers**: `Content-Type: application/json`
+- **Request (Create New Repo)**
+```json
+{
+  "target": { "kind": "create", "name": "my-new-app", "private": true },
+  "branch": { "mode": "existing" },
+  "message": "Export my-new-app: 24 files"
+}
+```
+- **Request (Existing Linked Repo / New Branch)**
+```json
+{
+  "target": { "kind": "existing", "owner": "octocat", "name": "my-mobile-app" },
+  "branch": { "mode": "new", "name": "export-20261119-1400" },
+  "message": "Add authentication screen"
+}
+```
+- **Response 200**: `text/event-stream; charset=utf-8`
+  - Step progress: `data: {"type":"step","step":"resolving-repo"}\n\n`
+    (Steps: `resolving-repo` → `reading-branch` → `building-tree` → `committing` → `updating-branch`)
+  - Done:
+    ```json
+    data: {
+      "type": "done",
+      "owner": "octocat",
+      "name": "my-new-app",
+      "branch": "main",
+      "commitSha": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+      "htmlUrl": "https://github.com/octocat/my-new-app/commit/6dcb09b5b57875f334f61aebed695e2e4193db5e"
+    }
+    ```
+  - Error:
+    ```json
+    data: { "type": "error", "code": "name_conflict", "message": "Repository name already exists" }
+    ```
+
+---
+
 ## Auth
 
 ### `GET /api/auth/session`

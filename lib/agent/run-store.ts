@@ -5,6 +5,7 @@ import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
 import { agentEvents, agentRuns, db, type AgentRunRow, type AgentRunStatus } from "@/db"
 import { getJob } from "@/lib/jobs/cloudhike-jobs"
 import { foldSnapshot, type LiveRun } from "./registry"
+import { sseEvent, sseHeaders } from "@/lib/http/sse"
 import type { AgentEvent } from "./types"
 
 // Agent runs live in Postgres so they can execute in a Cloudhike Jobs worker
@@ -270,14 +271,8 @@ export const silentRun = (projectId: string, runId?: string): LiveRun => ({ proj
 // ---------------------------------------------------------------- streaming to the browser
 
 const encoder = new TextEncoder()
-const sse = (e: AgentEvent) => encoder.encode(`data: ${JSON.stringify(e)}\n\n`)
-
-const SSE_HEADERS = {
-  "content-type": "text/event-stream; charset=utf-8",
-  "cache-control": "no-store, no-transform",
-  connection: "keep-alive",
-  "x-accel-buffering": "no",
-}
+const sse = (e: AgentEvent) => sseEvent(e)
+const SSE_HEADERS = sseHeaders
 
 export function eventStreamResponse(events: AgentEvent[]) {
   return new Response(new Uint8Array(events.flatMap((e) => [...sse(e)])), { headers: SSE_HEADERS })

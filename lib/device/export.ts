@@ -16,6 +16,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 import { packageJson } from "@/lib/app-project/templates"
+import { scaffoldFiles } from "@/lib/app-project/scaffold"
 import type { FileMap } from "@/lib/verify/types"
 
 export const DEVICE_ROOT = path.join(process.cwd(), ".device")
@@ -28,25 +29,6 @@ export class DeviceDepsMissingError extends Error {
     super(`The shared Expo dependencies aren't installed yet. Run "npm run device:deps" once, then try again.`)
   }
 }
-
-const BABEL_CONFIG = `module.exports = function (api) {
-  api.cache(true)
-  return { presets: ["babel-preset-expo"] }
-}
-`
-
-// expo-router's route context file lives in the shared node_modules, so its
-// path and source are identical for every project, but its transform inlines
-// the path to *this* project's app/ folder. Metro's transform cache is global
-// and doesn't key on the project root, so without a per-project cacheVersion
-// one project's bundle would load another project's screens.
-const metroConfig = (projectId: string) => `const { getDefaultConfig } = require("expo/metro-config")
-const config = getDefaultConfig(__dirname)
-config.cacheVersion = ${JSON.stringify(projectId)}
-module.exports = config
-`
-
-const GITIGNORE = "node_modules/\n.expo/\ndist/\nweb-build/\n*.log\n"
 
 /** The shared node_modules every export links to; same dependency list a real export actually ships, so it's never short a package. */
 export function sharedDepsPackageJson(): string {
@@ -75,9 +57,8 @@ export function exportExpoProject(projectId: string, files: FileMap, deviceRoot 
   // A screen the AI has since deleted must not linger in a stale export.
   fs.rmSync(outDir, { force: true, recursive: true })
   for (const [p, content] of Object.entries(files)) writeFile(path.join(/*turbopackIgnore: true*/ outDir, p), content)
-  writeFile(path.join(outDir, "babel.config.js"), BABEL_CONFIG)
-  writeFile(path.join(outDir, "metro.config.js"), metroConfig(projectId))
-  writeFile(path.join(outDir, ".gitignore"), GITIGNORE)
+  const scaffold = scaffoldFiles(projectId)
+  for (const [p, content] of Object.entries(scaffold)) writeFile(path.join(outDir, p), content)
 
   const nodeModules = path.join(outDir, "node_modules")
   fs.rmSync(nodeModules, { force: true })

@@ -8,7 +8,9 @@ import { generateDataTypes, type DataModel } from "@/lib/app-runtime/data-model"
 import type { ThemePackage } from "@/lib/app-runtime/theme"
 import { screenHref, type ProjectFiles } from "./project"
 
-const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "my-app"
+import { slug } from "./scaffold"
+
+export { slug }
 
 const json = (v: unknown) => JSON.stringify(v, null, 2) + "\n"
 
