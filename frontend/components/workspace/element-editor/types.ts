@@ -17,8 +17,6 @@ export type TabId = "image" | "text" | "colors" | "spacing" | "layout" | "border
 
 export type PendingEdit = { text?: string; style?: Record<string, string>; imageSrc?: string }
 
-export type SaveResult = { ok: boolean; error?: string; resynced?: boolean; aborted?: boolean }
-
 export type SizeMode = "auto" | "fill" | "fixed"
 
 export interface ElementEditorProps {
@@ -28,8 +26,8 @@ export interface ElementEditorProps {
   onAdvancedChange: (advanced: boolean) => void
   onClose: () => void
   onSelectParent: () => void
-  onPreview: (edit: ElementEdit) => void
-  onSave: (edit: ElementEdit, signal?: AbortSignal) => Promise<SaveResult>
+  /** A change to show in the screen now; saved when Edit Mode is closed with Done. */
+  onChange: (edit: ElementEdit) => void
   onViewCode: () => void
   /** Sends an instruction about this element to the AI (through the chat). */
   onAskAI: (instruction: string) => void

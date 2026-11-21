@@ -42,8 +42,10 @@ export type InlineEditing = {
   onDeselect: () => void
   onSelectParent: () => void
   onRect: (eid: string, rect: SelectedElement["rect"]) => void
-  onPreview: (edit: ElementEdit) => void
-  onSave: (edit: ElementEdit, signal?: AbortSignal) => Promise<{ ok: boolean; error?: string; resynced?: boolean; aborted?: boolean }>
+  /** Shows an element change in the screen now and queues it to be saved on Done. */
+  onChange: (edit: ElementEdit) => void
+  /** The screen whose queued changes are being saved (after Done), if any. */
+  savingId: string | null
   onViewCode: () => void
   onAskAI: (instruction: string) => void
   aiDisabled: boolean
@@ -53,7 +55,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
 const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))
 
-function ScreenLabel({ screen, zoom, editing, canEdit, onToggleEdit }: { screen: ScreenNode; zoom: number; editing: boolean; canEdit: boolean; onToggleEdit: () => void }) {
+function ScreenLabel({ screen, zoom, editing, saving, canEdit, onToggleEdit }: { screen: ScreenNode; zoom: number; editing: boolean; saving: boolean; canEdit: boolean; onToggleEdit: () => void }) {
   return (
     // Rendered at a constant on-screen size, whatever the zoom.
     <div
@@ -82,14 +84,14 @@ function ScreenLabel({ screen, zoom, editing, canEdit, onToggleEdit }: { screen:
           disabled={!canEdit}
           aria-pressed={editing}
           aria-label={editing ? `Finish editing ${screen.name}` : `Edit ${screen.name}`}
-          title={editing ? "Done editing" : "Edit this screen: click any element to change it"}
+          title={editing ? "Done editing: save your changes" : saving ? "Saving your changes…" : "Edit this screen: click any element to change it"}
           onClick={onToggleEdit}
           className={cn(
             "ml-auto flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs transition-colors disabled:pointer-events-none disabled:opacity-40",
             editing ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-background hover:text-foreground"
           )}
         >
-          {editing ? <Check className="size-3.5" /> : <Pencil className="size-3.5" />}
+          {editing ? <Check className="size-3.5" /> : saving ? <Loader2 className="size-3.5 animate-spin" /> : <Pencil className="size-3.5" />}
           {editing && "Done"}
         </button>
       )}
@@ -139,8 +141,7 @@ function EditorPopover({ zoom, element, screenName, inline }: { zoom: number; el
         advanced={inline.advanced}
         onAdvancedChange={inline.onAdvancedChange}
         onClose={inline.onDeselect}
-        onPreview={inline.onPreview}
-        onSave={inline.onSave}
+        onChange={inline.onChange}
         onViewCode={inline.onViewCode}
         onAskAI={inline.onAskAI}
         disabledAI={inline.aiDisabled}
@@ -393,7 +394,7 @@ export function CanvasPanel({
                 {selected && !drag && !editing && (
                   <SelectionToolbar zoom={cam.zoom} disabled={busy || s.state !== "ready"} onEdit={() => onEdit(s)} />
                 )}
-                <ScreenLabel screen={s} zoom={cam.zoom} editing={editing} canEdit={!busy || editing} onToggleEdit={() => inline.onToggle(s)} />
+                <ScreenLabel screen={s} zoom={cam.zoom} editing={editing} saving={inline.savingId === s.id} canEdit={(!busy || editing) && !inline.savingId} onToggleEdit={() => inline.onToggle(s)} />
                 <div
                   className={cn(
                     "rounded-[48px] transition-shadow",

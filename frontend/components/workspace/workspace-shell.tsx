@@ -140,15 +140,68 @@ export function WorkspaceShell({
     setPreviewEdit(null)
     setDeselectKey((k) => k + 1)
   }, [])
+
+  // Element changes show in the screen right away but only reach the server
+  // when Edit Mode is closed with Done: one merged edit per element, all sent
+  // in one canvas-edit request.
+  const pendingEdits = React.useRef(new Map<string, ElementEdit>())
+  const [savingId, setSavingId] = React.useState<string | null>(null)
+  const changeElement = React.useCallback((edit: ElementEdit) => {
+    setPreviewEdit(edit)
+    const prev = pendingEdits.current.get(edit.eid)
+    // The first `from` is the text in the source; later ones are what the preview already shows.
+    const from = prev?.from ?? edit.from
+    const text = edit.text ?? prev?.text
+    pendingEdits.current.set(edit.eid, {
+      eid: edit.eid,
+      from,
+      text: text === from ? undefined : text,
+      style: { ...prev?.style, ...edit.style },
+      imageSrc: edit.imageSrc ?? prev?.imageSrc,
+    })
+  }, [])
+
+  const applyElementEdits = agent.applyElementEdits
+  const saveEdits = React.useCallback(
+    async (screenId: string | null) => {
+      const edits: ElementEdit[] = []
+      for (const { style, ...edit } of pendingEdits.current.values()) {
+        const hasStyle = !!style && Object.keys(style).length > 0
+        if (edit.text !== undefined || hasStyle || edit.imageSrc !== undefined) edits.push({ ...edit, style: hasStyle ? style : undefined })
+      }
+      pendingEdits.current.clear()
+      if (!edits.length) return
+      setSavingId(screenId)
+      const r = await applyElementEdits(edits)
+      setSavingId(null)
+      // A resync (e.g. an already-built project picking up a kit fix) can
+      // move elements, so what failed is asked for again rather than guessed.
+      const failed = r.error && (r.resynced ? "The preview updated behind the scenes, so make that change again." : r.error)
+      if (failed) setInlineNotice(`Some changes weren't saved. ${failed}`)
+    },
+    [applyElementEdits]
+  )
+
+  // Unsaved edits live only in this tab until Done.
+  React.useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (pendingEdits.current.size) e.preventDefault()
+    }
+    window.addEventListener("beforeunload", warn)
+    return () => window.removeEventListener("beforeunload", warn)
+  }, [])
+
   const toggleEdit = React.useCallback(
     (screen: ScreenNode) => {
       setInlineNotice(null)
       setElement(null)
       setPreviewEdit(null)
-      setEditingId((id) => (id === screen.id ? null : screen.id))
+      // Done on this screen, or Edit on another: either way the open edits are finished.
+      void saveEdits(editingId)
+      setEditingId(editingId === screen.id ? null : screen.id)
       select(screen.id)
     },
-    [select]
+    [editingId, saveEdits, select]
   )
   const selectElement = React.useCallback((_screenId: string, el: SelectedElement) => {
     setElement(el)
@@ -158,9 +211,11 @@ export function WorkspaceShell({
     (eid: string, rect: SelectedElement["rect"]) => setElement((el) => (el && el.eid === eid ? { ...el, rect } : el)),
     []
   )
-  // A screen that stops being ready (e.g. rebuilt) can't be edited in place.
+  // A screen that stops being ready (e.g. rebuilt) can't be edited in place,
+  // and its unsaved edits point at code that's being replaced.
   React.useEffect(() => {
     if (editingId && editingScreen?.state !== "ready") {
+      pendingEdits.current.clear()
       setEditingId(null)
       setElement(null)
     }
@@ -170,21 +225,6 @@ export function WorkspaceShell({
     const t = setTimeout(() => setInlineNotice(null), 5000)
     return () => clearTimeout(t)
   }, [inlineNotice])
-
-  // A resync (e.g. an already-built project picking up a kit fix) means the
-  // selected element's location may be stale: ask for a fresh tap rather than
-  // letting the user keep editing something that no longer means what they think.
-  const saveElementEdit = React.useCallback(
-    async (edit: ElementEdit, signal?: AbortSignal) => {
-      const r = await agent.applyElementEdit(edit, signal)
-      if (!r.ok && "resynced" in r && r.resynced) {
-        deselect()
-        setInlineNotice("The preview just updated behind the scenes — tap the element again.")
-      }
-      return r
-    },
-    [agent.applyElementEdit, deselect] // eslint-disable-line react-hooks/exhaustive-deps
-  )
 
   // The selected element rides along with the next chat message, so "make this button blue" is unambiguous.
   const attached = React.useMemo<ElementRef | null>(
@@ -202,10 +242,12 @@ export function WorkspaceShell({
     if (!isDesktop) setPane("preview")
   }
 
-  const askAboutElement = (instruction: string) => {
+  // The AI edits the saved code, so unsaved canvas edits are saved first.
+  const askAboutElement = async (instruction: string) => {
     if (!attached || !instruction) return
-    agent.sendMessage(instruction, attached.screenId, attached)
     deselect()
+    await saveEdits(editingId)
+    agent.sendMessage(instruction, attached.screenId, attached)
   }
 
   const inline: InlineEditing = {
@@ -221,17 +263,20 @@ export function WorkspaceShell({
     onDeselect: deselect,
     onSelectParent: () => setSelectParentKey((k) => k + 1),
     onRect: moveElement,
-    onPreview: setPreviewEdit,
-    onSave: saveElementEdit,
+    onChange: changeElement,
+    savingId,
     onViewCode: viewElementInCode,
-    onAskAI: askAboutElement,
+    onAskAI: (instruction) => void askAboutElement(instruction),
     aiDisabled: agent.busy,
   }
 
-  const send = (text: string) => {
-    agent.sendMessage(text, attached?.screenId ?? editTarget?.id, attached ?? undefined)
+  const send = async (text: string) => {
+    const screenId = attached?.screenId ?? editTarget?.id
+    const element = attached ?? undefined
     setEditTargetId(null)
     if (attached) deselect()
+    await saveEdits(editingId)
+    agent.sendMessage(text, screenId, element)
   }
 
   // On small screens, jump to the canvas when the build starts.
@@ -251,7 +296,7 @@ export function WorkspaceShell({
       phase={agent.phase}
       busy={agent.busy}
       error={agent.error}
-      onSend={send}
+      onSend={(text) => void send(text)}
       onApprove={agent.approve}
       onRetry={agent.retry}
       onDismissError={agent.dismissError}

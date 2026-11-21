@@ -305,7 +305,7 @@ flowchart TD
 | `preview-runtime/inspect.ts` | Hover/select/tap highlighting, optimistic local preview of an edit before it's committed |
 | `preview-runtime/shims/*.ts` | React Native / Expo API stand-ins (native, ui, theme, backend) that run inside the sandboxed iframe |
 | `scripts/build-preview.mjs` | esbuild-bundles all of `preview-runtime/` into the single `public/preview/runtime.js` every iframe loads (runs automatically before `dev`/`build`) |
-| `components/workspace/element-editor.tsx` | The inline-edit side panel (replaced the older `element-inspector.tsx`) for editing a selected element's properties |
+| `components/workspace/element-editor.tsx` | The inline-edit side panel (replaced the older `element-inspector.tsx`) for editing a selected element's properties. Changes show in the screen live; `workspace-shell.tsx` queues them (one merged edit per element) and calls `POST /canvas-edit` only when Edit Mode is closed with **Done** (or before a chat/AI message, so the AI sees them) |
 | `lib/verify/codemod.ts` | `applyElementEdit` / `parseEid` — turns a tap-to-edit change into an **AST-level text/style rewrite**, with **no AI model call**, then still runs it through the standard verify gates |
 
 **How to explain it to someone technical**: "Canvas and Preview are the same

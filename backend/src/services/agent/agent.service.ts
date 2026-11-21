@@ -3,7 +3,7 @@ import { db, projects } from "@/db"
 import { getLastMessageSender, getProjectForUser, updateProjectTheme as dbUpdateTheme } from "../projects/projects.service"
 import { executeRun } from "./execute"
 import { parseElementRef } from "@app/shared/agent/element-context"
-import { latestPlan, saveUserMessage, applyCanvasEdit as orchestratorCanvasEdit, repairFile } from "./orchestrator"
+import { latestPlan, saveUserMessage, applyCanvasEdits as orchestratorCanvasEdits, repairFile } from "./orchestrator"
 import {
   activeRun,
   eventStreamResponse,
@@ -170,10 +170,10 @@ export async function handleJobWorker(raw: string, headers: IncomingHeaders) {
   return { status: 200, body: { runId, ...result } }
 }
 
-export async function handleCanvasEdit(
+export async function handleCanvasEdits(
   userId: string,
   projectId: string,
-  edit: ElementEdit,
+  edits: ElementEdit[],
   signal?: AbortSignal
 ) {
   const [project] = await db
@@ -194,12 +194,12 @@ export async function handleCanvasEdit(
   const release = holdRun(lock.id)
   let ok = false
   try {
-    const result = await orchestratorCanvasEdit(projectId, edit, signal)
+    const result = await orchestratorCanvasEdits(projectId, edits, signal)
     ok = true
-    if ("error" in result) return { status: 422, body: { error: result.error, extraFiles: result.extraFiles } }
+    if ("error" in result) return { status: 422, body: result }
     return { status: 200, body: result }
   } catch (e) {
-    console.error("canvas edit failed", projectId, edit.eid, e)
+    console.error("canvas edit failed", projectId, edits.map((x) => x.eid), e)
     return { status: 500, body: { error: "Couldn't apply that edit." } }
   } finally {
     release()

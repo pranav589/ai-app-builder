@@ -28,7 +28,7 @@ export { onlyAddsScreens, runPlanning } from "./planning"
 
 export { repairFile, type RepairResult } from "./repair"
 
-export { applyCanvasEdit, type CanvasEditResult } from "./canvas-edit"
+export { applyCanvasEdits, type CanvasEditResult } from "./canvas-edit"
 
 export { runVerifiedEdit } from "./verified-edit"
 

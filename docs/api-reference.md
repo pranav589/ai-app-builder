@@ -281,29 +281,43 @@ runs inline in dev.
 ---
 
 ### `POST /api/projects/[projectId]/canvas-edit`
-Apply a tap-to-edit change from the Canvas/Preview — **no AI model call**, an AST
-codemod applied directly and run through the verify gates.
+Save the Canvas inline edits made in one Edit Mode session (sent when the user clicks
+**Done**) — **no AI model call**. Each edit is an AST codemod on the JSX element at its
+`eid`; everything that could be placed is verified once and committed as one version.
 
 - **Auth**: required + ownership
-- **Request body**: `{ eid, text?, style?, from?, fromAlt? }` — must include `text` or `style`
+- **Request body**: `{ edits: Array<{ eid, text?, from?, style?, imageSrc? }> }` — 1 to 100
+  edits, each with at least one of `text`, `style` (editable keys only) or `imageSrc`.
+  `from` is the element's text as it is in the source, so a text edit targets exactly that text.
 
-**Sample request — text edit**
+**Sample request**
 ```json
-{ "eid": "screens/home.tsx:42:Text", "text": "Welcome back!" }
+{
+  "edits": [
+    { "eid": "app/(tabs)/home.tsx:42:Text", "text": "Welcome back!", "from": "Welcome" },
+    { "eid": "app/(tabs)/home.tsx:50:View", "style": { "backgroundColor": "#f5f5f5", "padding": "16px" } }
+  ]
+}
 ```
 
-**Sample request — style edit**
+**Response 200** — the new code of every file that changed. `failed` lists edits the
+codemod couldn't place; they were skipped, the rest were saved.
 ```json
-{ "eid": "screens/home.tsx:50:View", "style": { "backgroundColor": "#f5f5f5", "padding": "16" } }
+{
+  "files": { "app/(tabs)/home.tsx": "export default function Home() { … }" },
+  "version": 12,
+  "failed": [{ "eid": "app/(tabs)/home.tsx:60:Text", "error": "That text comes from data or code, not a fixed string, so it can't be edited here. Ask in chat instead." }]
+}
 ```
+May also include `extraFiles` (`{ path: code }`): a platform file (the kit) the project's
+copy predates, for the preview to pick up.
 
-**Response 200**: the updated screen/file data (shape from `applyCanvasEdit`).
-
-**Error 422**
+**Error 422** — nothing was saved: no edit could be placed, or the combined change failed
+verification (all-or-nothing).
 ```json
-{ "error": "Couldn't apply that style change.", "extraFiles": ["screens/home.tsx"] }
+{ "error": "Nothing to change.", "failed": [], "extraFiles": { "kit/index.tsx": "…" } }
 ```
-Other cases: `400` bad request, `409` agent busy, `500` generic failure.
+Other cases: `400` malformed body, `409` agent busy, `500` generic failure.
 
 ---
 

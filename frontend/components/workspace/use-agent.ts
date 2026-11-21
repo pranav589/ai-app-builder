@@ -7,9 +7,16 @@ import type { AgentEvent, AgentPhase, BackendInfo, GeneratedScreen } from "@app/
 import { providerInfo, type BackendProviderId, type BackendProviderStatus } from "@app/shared/app-backend/providers"
 import type { DataModel } from "@app/shared/app-runtime/data-model"
 import type { ThemePackage } from "@app/shared/app-runtime/theme"
-import type { ElementRef } from "@app/shared/preview/protocol"
-import { apiClient, getApiErrorData, getApiErrorStatus, isApiCancelled } from "@/lib/api-client"
+import type { ElementEdit, ElementRef } from "@app/shared/preview/protocol"
+import { apiClient, getApiErrorData, getApiErrorStatus } from "@/lib/api-client"
 import type { ChatMessage } from "./types"
+
+type CanvasEditResponse = {
+  files?: Record<string, string>
+  error?: string
+  failed?: { eid: string; error: string }[]
+  extraFiles?: Record<string, string>
+}
 
 type Action = "start" | "resume" | "message" | "approve" | "backend"
 type Request = { action: Action; text?: string; screenId?: string; element?: ElementRef; provider?: BackendProviderId; services?: string[] }
@@ -418,51 +425,46 @@ export function useAgent({
   }, [error, send])
 
   const canvasEditMutation = useMutation({
-    mutationFn: async ({
-      edit,
-      signal,
-    }: {
-      edit: { eid: string; text?: string; from?: string; fromAlt?: string; style?: Record<string, string>; imageSrc?: string }
-      signal?: AbortSignal
-    }) => {
-      const res = await apiClient.post<{ path?: string; code?: string; error?: string; extraFiles?: Record<string, string> }>(
-        `/api/projects/${projectId}/canvas-edit`,
-        edit,
-        { signal }
-      )
+    mutationFn: async (edits: ElementEdit[]) => {
+      const res = await apiClient.post<CanvasEditResponse>(`/api/projects/${projectId}/canvas-edit`, { edits })
       return res.data
     },
   })
 
   /**
-   * A canvas inspector edit (Phase 8, item 3): no AI call, just the AST
-   * codemod and the usual gates. Applies the saved code to whichever of
-   * `screens`/`files` holds that path, same as a repair result.
+   * Canvas inspector edits (Phase 8, item 3), saved in one request: no AI
+   * call, just the AST codemod and the usual gates. Applies the saved code
+   * to whichever of `screens`/`files` holds each path, same as a repair
+   * result. `error` is the first reason anything wasn't saved.
    */
-  const applyElementEdit = React.useCallback(
-    async (edit: { eid: string; text?: string; from?: string; fromAlt?: string; style?: Record<string, string>; imageSrc?: string }, signal?: AbortSignal) => {
+  const applyElementEdits = React.useCallback(
+    async (edits: ElementEdit[]): Promise<{ error?: string; resynced: boolean }> => {
+      let data: CanvasEditResponse | undefined
       try {
-        const data = await canvasEditMutation.mutateAsync({ edit, signal })
-        // A platform file (e.g. a kit fix) that this project's stored copy
-        // predates: picked up right away, whether or not the edit itself
-        // succeeded. The server keeps sending it until an edit is saved, so
-        // only a copy that differs from what the preview already runs counts
-        // as a resync.
-        const extra = data?.extraFiles
-        const resynced = !!extra && Object.entries(extra).some(([p, c]) => filesRef.current[p] !== c)
-        if (extra && resynced) setFiles((prev) => ({ ...prev, ...extra }))
-        if (!data || data.error || !data.path || data.code === undefined) return { ok: false as const, error: data?.error ?? "Couldn't apply that edit.", resynced }
-        const { path, code } = data as { path: string; code: string }
-        setScreens((prev) => (prev.some((s) => s.path === path) ? prev.map((s) => (s.path === path ? { ...s, code } : s)) : prev))
-        setFiles((prev) => (prev[path] !== undefined ? { ...prev, [path]: code } : prev))
-        return { ok: true as const, resynced }
+        data = await canvasEditMutation.mutateAsync(edits)
       } catch (e) {
-        // Abandoned on purpose (a newer edit replaced it): not an error.
-        if (isApiCancelled(e) || signal?.aborted) {
-          return { ok: false as const, aborted: true as const }
-        }
-        return { ok: false as const, error: "Couldn't reach the server." }
+        // A refused batch (422) still carries the reason and any extraFiles.
+        data = getApiErrorData<CanvasEditResponse>(e)
+        if (!data) return { error: "Couldn't reach the server.", resynced: false }
       }
+      // A platform file (e.g. a kit fix) that this project's stored copy
+      // predates: picked up right away, whether or not the edits themselves
+      // succeeded. The server keeps sending it until an edit is saved, so
+      // only a copy that differs from what the preview already runs counts
+      // as a resync.
+      const extra = data.extraFiles
+      const resynced = !!extra && Object.entries(extra).some(([p, c]) => filesRef.current[p] !== c)
+      if (extra && resynced) setFiles((prev) => ({ ...prev, ...extra }))
+      const saved = data.files
+      if (saved) {
+        setScreens((prev) => prev.map((s) => (s.path && saved[s.path] !== undefined ? { ...s, code: saved[s.path] } : s)))
+        setFiles((prev) => {
+          const next = { ...prev }
+          for (const [p, c] of Object.entries(saved)) if (next[p] !== undefined) next[p] = c
+          return next
+        })
+      }
+      return { error: data.error ?? data.failed?.[0]?.error, resynced }
     },
     [canvasEditMutation]
   )
@@ -496,6 +498,6 @@ export function useAgent({
     refreshBackend,
     /** Sets up (or repairs) the app's backend on `provider`; progress streams into the chat. */
     setupBackend: (provider: BackendProviderId, services: string[]) => send({ action: "backend", provider, services }),
-    applyElementEdit,
+    applyElementEdits,
   }
 }

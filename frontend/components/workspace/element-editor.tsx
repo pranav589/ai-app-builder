@@ -3,9 +3,7 @@
 import * as React from "react"
 import {
   ArrowUp,
-  Check,
   Code2,
-  Loader2,
   RotateCcw,
   SlidersHorizontal,
   Sparkles,
@@ -50,8 +48,8 @@ import {
 /**
  * The inline editor's popover: Colors, Spacing, Layout, Border and Effects
  * (plus Text for text), one tab at a time, or every section in one list in
- * Advanced. Every change shows in the screen immediately (`onPreview`) and is
- * saved a moment later through the change gateway (`onSave`): no model call.
+ * Advanced. Every change shows in the screen immediately (`onChange`); the
+ * workspace saves them when Edit Mode is closed with Done.
  */
 export function ElementEditor({
   element,
@@ -60,8 +58,7 @@ export function ElementEditor({
   onAdvancedChange,
   onClose,
   onSelectParent,
-  onPreview,
-  onSave,
+  onChange,
   onViewCode,
   onAskAI,
   disabledAI,
@@ -89,143 +86,26 @@ export function ElementEditor({
   const [tab, setTab] = React.useState<TabId>(() => (isImage ? "image" : canEditText ? "text" : "colors"))
   const [aiOpen, setAiOpen] = React.useState(false)
   const [aiText, setAiText] = React.useState("")
-  const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved" | "error">("idle")
-  const [error, setError] = React.useState<string | null>(null)
   const [dirty, setDirty] = React.useState(false)
 
   // ImageKit states
   const [currentImage, setCurrentImage] = React.useState<string>(element.imageSrc ?? "")
   const imageTouched = React.useRef(false)
 
-  const onSaveRef = React.useRef(onSave)
-  onSaveRef.current = onSave
-  const onPreviewRef = React.useRef(onPreview)
-  onPreviewRef.current = onPreview
-
-  const isMounted = React.useRef(true)
-  React.useEffect(() => {
-    isMounted.current = true
-    return () => {
-      isMounted.current = false
-    }
-  }, [])
-
-  const pending = React.useRef<PendingEdit>({})
-  // The text as it is in the source right now: sent with a text edit so the
-  // server edits exactly that text (and refuses rather than guess).
-  const savedText = React.useRef<string | undefined>(element.text ?? undefined)
-  // Text carried by a save that was abandoned: it may have landed anyway, so the server may also see it as the current text.
-  const abandonedText = React.useRef<string | undefined>(undefined)
-  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** The save request in flight, with what it carries. At most one at a time. */
-  const inflight = React.useRef<{ ctrl: AbortController; edit: PendingEdit } | null>(null)
   const touched = React.useRef(new Set<string>())
   const textTouched = React.useRef(false)
 
-  /** Cancels the save in flight and puts what it carried back in front of what's pending, so one newer request covers both. */
-  const takeBackInflight = React.useCallback(() => {
-    const f = inflight.current
-    if (!f) return
-    inflight.current = null
-    f.ctrl.abort()
-    if (f.edit.text !== undefined) abandonedText.current = f.edit.text
-    pending.current = {
-      text: pending.current.text ?? f.edit.text,
-      style: { ...f.edit.style, ...pending.current.style },
-      imageSrc: pending.current.imageSrc ?? f.edit.imageSrc,
-    }
-  }, [])
+  // `from` is the text as the element showed it when picked, so the save
+  // (on Done) edits exactly that text in the source and refuses rather than guess.
+  const apply = (edit: PendingEdit) =>
+    onChange({ eid, ...edit, from: edit.text !== undefined ? (element.text ?? undefined) : undefined })
 
-  const flush = React.useCallback(() => {
-    if (timer.current) clearTimeout(timer.current)
-    timer.current = null
-    takeBackInflight()
-    const edit = pending.current
-    const hasStyle = !!edit.style && Object.keys(edit.style).length > 0
-    const hasImage = edit.imageSrc !== undefined
-    if (edit.text === undefined && !hasStyle && !hasImage) return
-    pending.current = {}
-    const ctrl = new AbortController()
-    const mine = { ctrl, edit }
-    inflight.current = mine
-    if (isMounted.current) {
-      setSaveState("saving")
-      setError(null)
-    }
-    const sentText = edit.text
-    void onSaveRef.current(
-      {
-        eid,
-        text: sentText,
-        from: sentText !== undefined ? savedText.current : undefined,
-        fromAlt: sentText !== undefined ? abandonedText.current : undefined,
-        style: hasStyle ? edit.style : undefined,
-        imageSrc: edit.imageSrc,
-      },
-      ctrl.signal
-    ).then((r) => {
-      // Replaced by a newer request: its result is the one that counts.
-      if (inflight.current !== mine) return
-      inflight.current = null
-      if (r.ok) {
-        if (sentText !== undefined) {
-          savedText.current = sentText
-          abandonedText.current = undefined
-        }
-        if (isMounted.current) setSaveState("saved")
-      } else if (!r.aborted) {
-        // Keep what failed, so the next change retries it together with its own.
-        pending.current = {
-          text: pending.current.text ?? edit.text,
-          style: { ...edit.style, ...pending.current.style },
-          imageSrc: pending.current.imageSrc ?? edit.imageSrc,
-        }
-        if (isMounted.current) {
-          setSaveState("error")
-          setError(r.error ?? "Couldn't save that change.")
-        }
-      }
-    })
-  }, [eid, takeBackInflight])
-
-  const apply = React.useCallback(
-    (edit: PendingEdit) => {
-      onPreviewRef.current({ eid, ...edit })
-      // A save still in flight is out of date the moment another change is made:
-      // cancel it now and send everything together shortly.
-      takeBackInflight()
-      pending.current = {
-        text: edit.text ?? pending.current.text,
-        style: { ...pending.current.style, ...edit.style },
-        imageSrc: edit.imageSrc ?? pending.current.imageSrc,
-      }
-      setSaveState("saving")
-      if (timer.current) clearTimeout(timer.current)
-      timer.current = setTimeout(flush, 400)
-    },
-    [eid, flush, takeBackInflight]
-  )
-
-  const flushRef = React.useRef(flush)
-  flushRef.current = flush
-
-  // Whatever is still waiting is saved when the editor closes or moves to another element.
-  React.useEffect(() => {
-    return () => {
-      flushRef.current()
-    }
-  }, [eid])
-
-  const applyImageSrc = React.useCallback(
-    (newUrl: string) => {
-      setCurrentImage(newUrl)
-      imageTouched.current = true
-      setDirty(true)
-      onPreview({ eid, imageSrc: newUrl })
-      apply({ imageSrc: newUrl })
-    },
-    [eid, onPreview, apply]
-  )
+  const applyImageSrc = (newUrl: string) => {
+    setCurrentImage(newUrl)
+    imageTouched.current = true
+    setDirty(true)
+    apply({ imageSrc: newUrl })
+  }
 
   /** Sets style properties: shown now, saved shortly. Values may be "theme:<token>:<hex>". */
   const set = (style: Record<string, string>) => {
@@ -416,8 +296,6 @@ export function ElementEditor({
           <p className="truncate text-sm font-semibold" title={element.text ?? title}>{title}</p>
           <p className="flex items-center gap-1 truncate text-xs text-muted-foreground" aria-live="polite">
             <span className="truncate">{screenName ?? "Screen"}</span>
-            {saveState === "saving" && <Loader2 className="size-3 shrink-0 animate-spin" aria-label="Saving" />}
-            {saveState === "saved" && <Check className="size-3 shrink-0 text-emerald-600" aria-label="Saved" />}
           </p>
         </div>
         <Button variant="ghost" size="icon-sm" aria-label="Select parent" title={element.parent ? `Select parent (${elementName(element.parent)})` : "No parent to select"} disabled={!element.parent} onClick={onSelectParent}>
@@ -484,7 +362,6 @@ export function ElementEditor({
         ) : (
           sectionBody[activeTab]
         )}
-        {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
       </div>
 
       {/* Footer */}

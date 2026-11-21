@@ -63,8 +63,6 @@ export type ElementEdit = {
   text?: string
   /** The text being replaced, as it currently is in the source: picks the right element/prop when a line has several. */
   from?: string
-  /** Set when an earlier save of this element was abandoned mid-flight: it may or may not have landed, so the text may already be this. */
-  fromAlt?: string
   style?: Record<string, string>
   /** The new image source URL to write into JSX (for Image / ExpoImage components) */
   imageSrc?: string

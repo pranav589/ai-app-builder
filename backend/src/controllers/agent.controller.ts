@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from "express"
 import { Readable } from "node:stream"
 import {
   handleAgentAction,
-  handleCanvasEdit,
+  handleCanvasEdits,
   handleJobWorker,
   handleRepairFile,
   handleThemeSwitch,
@@ -62,33 +62,44 @@ export async function postJobWorker(req: Request, res: Response, next: NextFunct
   }
 }
 
+const MAX_CANVAS_EDITS = 100
+
+/** One element's edit from the request body, or null when it's malformed or changes nothing. */
+function elementEditOf(v: unknown): ElementEdit | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null
+  const body = v as Record<string, unknown>
+  const eid = typeof body.eid === "string" ? body.eid : ""
+  if (!eid) return null
+  const text = typeof body.text === "string" ? body.text : undefined
+  const style = styleOf(body.style)
+  const imageSrc = typeof body.imageSrc === "string" && body.imageSrc.length <= 4096 ? body.imageSrc : undefined
+  if (text === undefined && !style && !imageSrc) return null
+  const from = typeof body.from === "string" ? body.from : undefined
+  return { eid, text, from, style, imageSrc }
+}
+
 export async function canvasEdit(req: Request, res: Response, next: NextFunction) {
   try {
-    const body = req.body || {}
-    const eid = String(body.eid || "")
-    if (!eid) {
+    const raw: unknown = req.body?.edits
+    if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_CANVAS_EDITS) {
       res.status(400).json({ error: "Bad request" })
       return
     }
-
-    const text = typeof body.text === "string" ? body.text : undefined
-    const style = styleOf(body.style)
-    const imageSrc =
-      typeof body.imageSrc === "string" && body.imageSrc.length <= 4096 ? body.imageSrc : undefined
-    if (text === undefined && !style && !imageSrc) {
-      res.status(400).json({ error: "Bad request" })
-      return
+    const edits: ElementEdit[] = []
+    for (const v of raw) {
+      const edit = elementEditOf(v)
+      if (!edit) {
+        res.status(400).json({ error: "Bad request" })
+        return
+      }
+      edits.push(edit)
     }
-
-    const from = typeof body.from === "string" ? body.from : undefined
-    const fromAlt = typeof body.fromAlt === "string" ? body.fromAlt : undefined
-    const edit: ElementEdit = { eid, text, from, fromAlt, style, imageSrc }
 
     const controller = new AbortController()
     req.on("close", () => controller.abort())
 
     const projectId = String(req.params.projectId || "")
-    const result = await handleCanvasEdit(req.user!.id, projectId, edit, controller.signal)
+    const result = await handleCanvasEdits(req.user!.id, projectId, edits, controller.signal)
     res.status(result.status).json(result.body)
   } catch (err) {
     next(err)
