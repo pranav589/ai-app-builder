@@ -9,6 +9,8 @@ import {
   retryBuild,
   saveExpoUserToken,
   startProjectBuild,
+  stopBuild,
+  stopWebDeployment,
   triggerWebDeployment,
 } from "../services/publish/publish.service"
 import { ExpoConnectError } from "../services/publish/expo-connect"
@@ -123,3 +125,19 @@ export async function webWebhook(req: Request, res: Response, next: NextFunction
   }
 }
 
+
+export async function stopProjectBuild(req: Request, res: Response, next: NextFunction) {
+  try {
+    res.json(await stopBuild(String(req.params.projectId || ""), String(req.params.buildId || "")))
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function stopWebDeploy(req: Request, res: Response, next: NextFunction) {
+  try {
+    res.json(await stopWebDeployment(String(req.params.projectId || "")))
+  } catch (err) {
+    next(err)
+  }
+}

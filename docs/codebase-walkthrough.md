@@ -291,6 +291,9 @@ flowchart TD
 |---|---|
 | `components/workspace/app-runtime.tsx` | `AppRuntimeProvider` — compiles every project file client-side with Sucrase, manages one sandboxed `<iframe>` per rendered screen |
 | `components/workspace/canvas-panel.tsx` | Canvas UI: draggable screen thumbnails, theme switcher, inline-edit overlay |
+| `hooks/use-stop-web-deploy.ts` | **Stop** mutation for an in-flight web deploy (used by the Publish dialog and the preview toolbar chip). Native builds and phone builds have their own stop buttons in the Publish dialog and QR dialog, backed by `POST .../builds/:id/stop` and `DELETE .../device-build`; each marks the stuck run `failed` ("Stopped by you.") so it stops blocking new ones, and a device build also kills its local `expo export` |
+| `hooks/use-project-status-stream.ts` | Shared (one per project) `EventSource` on `GET /api/projects/:id/status-stream`; invalidates the build / web-deploy / device-build queries when the backend reports a change |
+| `backend/src/services/http/project-events.ts`, `backend/src/controllers/project-events.controller.ts`, `backend/db/sql/status-notify.sql` | Postgres triggers `pg_notify`; one `LISTEN` connection fans out to per-project SSE streams |
 | `components/workspace/preview-panel.tsx` | Interactive single-screen preview, Inspect toggle, Expo QR dialog entry point |
 | `lib/preview/protocol.ts` | The host↔iframe `postMessage` protocol: module/theme/data pushes, element selection, edit requests, RPC |
 | `lib/preview/element-names.ts` | Human-readable naming for selected elements |
@@ -409,7 +412,7 @@ Expo Go only re-fetches the manifest on a fresh launch, not while already runnin
 | `lib/device/manifest.ts` | Builds the Expo Updates protocol manifest (presigned S3 URLs) a ready build serves to Expo Go |
 | `app/api/projects/[projectId]/device-build/route.ts` | `GET`/`POST` — authenticated status/start for a project's build |
 | `app/api/device/[projectId]/manifest/route.ts` | **Public, unauthenticated** — what Expo Go actually fetches |
-| `components/workspace/expo-qr.tsx` | The "Test on your phone" dialog: triggers a build, polls its status, renders the QR for the ready manifest URL |
+| `components/workspace/expo-qr.tsx` | The "Test on your phone" dialog: triggers a build, follows its status over SSE (`useProjectStatusStream`), renders the QR for the ready manifest URL |
 
 **Still around, not currently reachable from the dialog**: `lib/device/lane.ts` (a local
 Metro/`expo start` child process per project), `scripts/device-preview.ts` (its CLI entry
@@ -605,7 +608,7 @@ sequenceDiagram
     EAS-->>GH: Build finished / failed (artifactUrl, error)
     GH->>WH: POST /api/publish/webhook (HMAC-signed report-build.js)
     WH->>DB: markReady / markFailed
-    UI->>DB: Poll /api/projects/[id]/builds every 4s
+    DB-->>UI: NOTIFY -> SSE status-stream -> refetch /api/projects/[id]/builds
     UI->>U: Display Ready badge + direct Download link
     end
 
@@ -623,7 +626,7 @@ sequenceDiagram
     EAS-->>GH: Deployed (url)
     GH->>WH: POST /api/publish/web-webhook (status: "ready", url)
     WH->>DB: markWebReady (preserves URL across republishes)
-    UI->>DB: Poll /api/projects/[id]/publish/web every 3s
+    DB-->>UI: NOTIFY -> SSE status-stream -> refetch /api/projects/[id]/publish/web
     UI->>U: Show Live badge + Open / Copy Link buttons in Dialog & Preview toolbar
     end
 ```
@@ -649,7 +652,7 @@ sequenceDiagram
 | `lib/publish/run-publish.ts` | End-to-end native publish orchestration: assemble files → patch `app.json` → dispatch via `dispatchProjectWorkflow` |
 | `app/api/projects/[projectId]/publish/route.ts` | Endpoint to validate targets, insert queued build, and trigger native publish workflow |
 | `app/api/projects/[projectId]/publish/web/route.ts` | POST: triggers web deploy with atomic claim; GET: returns current project web deployment |
-| `app/api/projects/[projectId]/builds/route.ts` | Returns ordered list of builds for a project (polled by Publish dialog) |
+| `app/api/projects/[projectId]/builds/route.ts` | Returns ordered list of builds for a project (refetched by the Publish dialog whenever the status stream reports a change) |
 | `app/api/projects/[projectId]/builds/[buildId]/retry/route.ts` | Retries a failed build by dispatching a new build attempt row |
 | `app/api/publish/webhook/route.ts` | Unauthenticated, HMAC-verified webhook receiving native build results from GitHub Actions |
 | `app/api/publish/web-webhook/route.ts` | Unauthenticated, HMAC-verified webhook receiving web deploy stage pings and terminal results |

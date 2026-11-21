@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import {
   AlertCircle,
   Apple,
@@ -18,11 +18,14 @@ import {
   RefreshCw,
   Rocket,
   Smartphone,
+  Square,
   Terminal,
 } from "lucide-react"
 
 import type { BuildFormat, BuildPlatform, BuildRow, WebDeployRunRow, WebDeploymentRow } from "@app/shared/api-types"
 import { apiClient, getApiErrorMessage } from "@/lib/api-client"
+import { useProjectStatusStream } from "@/hooks/use-project-status-stream"
+import { useStopWebDeploy } from "@/hooks/use-stop-web-deploy"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -122,7 +125,6 @@ export function PublishDialog({
   onOpenGithubDialog?: () => void
   onOpenExpoDialog?: () => void
 }) {
-  const queryClient = useQueryClient()
   const [platform, setPlatform] = React.useState<BuildPlatform>("android")
   const [format, setFormat] = React.useState<BuildFormat>("apk")
   const [version, setVersion] = React.useState("1.0.0")
@@ -181,7 +183,7 @@ export function PublishDialog({
     enabled: open,
   })
 
-  // 3. Query all builds for this project with data-driven polling
+  // 3. Query all builds for this project; status changes arrive over SSE (useProjectStatusStream)
   const buildsQuery = useQuery({
     queryKey: ["project-builds", projectId],
     queryFn: async () => {
@@ -191,15 +193,8 @@ export function PublishDialog({
       return res.data.builds
     },
     enabled: open,
-    refetchInterval: (query) => {
-      const data = query.state.data
-      if (!data || data.length === 0) return false
-      const hasActive = data.some(
-        (b) => b.status === "queued" || b.status === "dispatching" || b.status === "building"
-      )
-      return hasActive ? 4000 : false
-    },
   })
+  useProjectStatusStream(projectId, open)
 
   const builds = buildsQuery.data || []
   const hasBuilds = builds.length > 0
@@ -219,10 +214,8 @@ export function PublishDialog({
       )
       return res.data
     },
-    onSuccess: () => {
-      setErrorMessage(null)
-      queryClient.invalidateQueries({ queryKey: ["project-builds", projectId] })
-    },
+    // No refetch in these three mutations: the status stream reports the change.
+    onSuccess: () => setErrorMessage(null),
     onError: (err) => {
       setErrorMessage(getApiErrorMessage(err, "Failed to start publish workflow."))
     },
@@ -236,14 +229,24 @@ export function PublishDialog({
       )
       return res.data
     },
-    onSuccess: () => {
-      setErrorMessage(null)
-      queryClient.invalidateQueries({ queryKey: ["project-builds", projectId] })
-    },
+    onSuccess: () => setErrorMessage(null),
     onError: (err) => {
       setErrorMessage(getApiErrorMessage(err, "Failed to retry build."))
     },
   })
+
+  // Stop: a workflow that never reports back leaves a build "in flight" forever, which blocks new ones.
+  const stopBuildMutation = useMutation({
+    mutationFn: async (buildId: string) => {
+      await apiClient.post(`/api/projects/${projectId}/builds/${buildId}/stop`, {})
+    },
+    // No refetch: the status stream reports the change.
+    onSuccess: () => setErrorMessage(null),
+    onError: (err) => {
+      setErrorMessage(getApiErrorMessage(err, "Failed to stop the build."))
+    },
+  })
+  const stopWebMutation = useStopWebDeploy(projectId, setErrorMessage)
 
   // Web deploy query & mutation
   const webDeployQuery = useQuery({
@@ -255,10 +258,6 @@ export function PublishDialog({
         )
       ).data,
     enabled: open,
-    refetchInterval: (q) => {
-      const s = q.state.data?.deployment?.status
-      return s && s !== "ready" && s !== "failed" ? 3000 : false
-    },
   })
 
   const webDeployMutation = useMutation({
@@ -269,10 +268,7 @@ export function PublishDialog({
       )
       return res.data
     },
-    onSuccess: () => {
-      setErrorMessage(null)
-      queryClient.invalidateQueries({ queryKey: ["project-web-deploy", projectId] })
-    },
+    onSuccess: () => setErrorMessage(null),
     onError: (err) => {
       setErrorMessage(getApiErrorMessage(err, "Failed to start web deployment."))
     },
@@ -625,6 +621,23 @@ export function PublishDialog({
                               </a>
                             )}
 
+                            {isInProgress && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2.5 text-xs"
+                                disabled={stopBuildMutation.isPending}
+                                onClick={() => stopBuildMutation.mutate(build.id)}
+                              >
+                                {stopBuildMutation.isPending && stopBuildMutation.variables === build.id ? (
+                                  <Spinner className="size-3 mr-1" />
+                                ) : (
+                                  <Square className="size-3 mr-1" />
+                                )}
+                                Stop
+                              </Button>
+                            )}
+
                             {isFailed && (
                               <Button
                                 size="sm"
@@ -898,16 +911,30 @@ export function PublishDialog({
                           : `Started: ${new Date(webDeployment.createdAt).toLocaleString()}`}
                       </span>
                     </div>
-                    {webDeployment.workflowRunUrl && (
-                      <a
-                        href={webDeployment.workflowRunUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                      >
-                        View deploy log <ExternalLink className="size-3" />
-                      </a>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {isWebInFlight && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2.5 text-xs"
+                          disabled={stopWebMutation.isPending}
+                          onClick={() => stopWebMutation.mutate()}
+                        >
+                          {stopWebMutation.isPending ? <Spinner className="size-3 mr-1" /> : <Square className="size-3 mr-1" />}
+                          Stop
+                        </Button>
+                      )}
+                      {webDeployment.workflowRunUrl && (
+                        <a
+                          href={webDeployment.workflowRunUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          View deploy log <ExternalLink className="size-3" />
+                        </a>
+                      )}
+                    </div>
                   </div>
                 </div>
               ) : (

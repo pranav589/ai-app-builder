@@ -2,6 +2,8 @@
 
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
+import { useProjectStatusStream } from "@/hooks/use-project-status-stream"
+import { useStopWebDeploy } from "@/hooks/use-stop-web-deploy"
 import {
   Check,
   ChevronLeft,
@@ -15,6 +17,7 @@ import {
   MoreVertical,
   QrCode,
   RotateCw,
+  Square,
 } from "lucide-react"
 import { cn } from "cn"
 
@@ -179,11 +182,10 @@ export function PreviewPanel({
           `/api/projects/${projectId}/publish/web`
         )
       ).data,
-    refetchInterval: (q) => {
-      const s = q.state.data?.deployment?.status
-      return s && s !== "ready" && s !== "failed" ? 3000 : false
-    },
   })
+  const stopWebDeploy = useStopWebDeploy(projectId)
+  const deployStatus = webDeployQuery.data?.deployment?.status
+  useProjectStatusStream(projectId, Boolean(deployStatus) && deployStatus !== "ready" && deployStatus !== "failed")
 
   const handleCopyUrl = (e: React.MouseEvent, url: string) => {
     e.preventDefault()
@@ -235,6 +237,16 @@ export function PreviewPanel({
                   <div className="flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-0.5 text-xs text-muted-foreground">
                     <Spinner className="size-3 text-primary" />
                     <span className="font-medium text-[11px]">{label}</span>
+                    <button
+                      type="button"
+                      title="Stop deployment"
+                      aria-label="Stop deployment"
+                      disabled={stopWebDeploy.isPending}
+                      onClick={() => stopWebDeploy.mutate()}
+                      className="rounded-full p-0.5 hover:bg-foreground/10 disabled:opacity-50"
+                    >
+                      <Square className="size-3" />
+                    </button>
                   </div>
                 )
               }

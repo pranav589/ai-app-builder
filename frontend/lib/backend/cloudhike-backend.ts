@@ -6,9 +6,9 @@
 // (/api/projects/[id]/backend/data), which holds the project's credentials;
 // nothing secret ever reaches the browser.
 //
-// Live sync: every write bumps a version counter in the app's database. This
-// client polls it while the page is visible and refreshes when another
-// device or tab changed something.
+// No live sync: data is fetched on load and again after this client's own writes
+// (subscribe() listeners are told). A change made from another device or tab shows
+// up on the next load.
 
 import type { DataModel } from "@app/shared/app-runtime/data-model"
 import { apiClient, getApiErrorData, isApiNetworkError } from "@/lib/api-client"
@@ -17,13 +17,9 @@ import { BackendError, type AppBackend, type AppRecord, type AppUser, type Backe
 
 export type CloudHikeConfig = { projectRef: string; region?: string }
 
-const POLL_MS = 3000
-
 export class CloudHikeBackend implements AppBackend {
   readonly provider = "cloudhike" as const
   private listeners = new Set<(c: BackendChange) => void>()
-  private version = -1
-  private timer: ReturnType<typeof setInterval> | null = null
   private sessionKey: string
 
   constructor(
@@ -72,12 +68,6 @@ export class CloudHikeBackend implements AppBackend {
     for (const l of this.listeners) l(change)
   }
 
-  /** After our own write: tell listeners now, and remember the counter isn't news. */
-  private wrote(change: BackendChange) {
-    this.version = -2
-    this.emit(change)
-  }
-
   async init(_model: DataModel) {
     await this.call("init")
   }
@@ -88,9 +78,7 @@ export class CloudHikeBackend implements AppBackend {
       collections: Record<string, AppRecord[]>
       settings: Record<string, unknown>
       user: AppUser | null
-      version: number
     }>("snapshot", { collections })
-    this.version = r.version
     return r
   }
 
@@ -99,17 +87,17 @@ export class CloudHikeBackend implements AppBackend {
     get: (collection: string, id: string) => this.call<AppRecord | null>("get", { collection, id }),
     insert: async (collection: string, values: Record<string, unknown>) => {
       const r = await this.call<AppRecord>("insert", { collection, values })
-      this.wrote({ type: "db", collection })
+      this.emit({ type: "db", collection })
       return r
     },
     update: async (collection: string, id: string, patch: Record<string, unknown>) => {
       const r = await this.call<AppRecord>("update", { collection, id, patch })
-      this.wrote({ type: "db", collection })
+      this.emit({ type: "db", collection })
       return r
     },
     remove: async (collection: string, id: string) => {
       await this.call("remove", { collection, id })
-      this.wrote({ type: "db", collection })
+      this.emit({ type: "db", collection })
     },
   }
 
@@ -117,7 +105,7 @@ export class CloudHikeBackend implements AppBackend {
     all: () => this.call<Record<string, unknown>>("settings"),
     set: async (key: string, value: unknown) => {
       await this.call("setSetting", { key, value })
-      this.wrote({ type: "kv" })
+      this.emit({ type: "kv" })
     },
   }
 
@@ -150,26 +138,10 @@ export class CloudHikeBackend implements AppBackend {
     },
   }
 
-  private poll = async () => {
-    if (typeof document !== "undefined" && document.visibilityState !== "visible") return
-    try {
-      const v = await this.call<number>("version")
-      if (this.version >= 0 && v !== this.version) this.emit({ type: "reset" })
-      this.version = v
-    } catch {
-      // A sleeping database or a blip: try again on the next tick.
-    }
-  }
-
   subscribe(listener: (c: BackendChange) => void) {
     this.listeners.add(listener)
-    this.timer ??= setInterval(this.poll, POLL_MS)
     return () => {
       this.listeners.delete(listener)
-      if (!this.listeners.size && this.timer) {
-        clearInterval(this.timer)
-        this.timer = null
-      }
     }
   }
 
@@ -179,8 +151,6 @@ export class CloudHikeBackend implements AppBackend {
   }
 
   dispose() {
-    if (this.timer) clearInterval(this.timer)
-    this.timer = null
     this.listeners.clear()
   }
 }

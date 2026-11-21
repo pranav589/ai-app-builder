@@ -586,6 +586,21 @@ Stop the device lane (only if this project owns the currently running one).
 needed: the phone downloads a prebuilt bundle from S3 via the public manifest route below,
 rather than connecting to a locally-running Metro.
 
+### `GET /api/projects/[projectId]/status-stream`
+Server-Sent Events (`text/event-stream`) that tells the client when a project's builds, web deployment or device build changed. It carries no row data: the client refetches the relevant `GET` above.
+
+- **Auth**: required (user must own project; browsers send the session cookie via `EventSource` with `withCredentials`)
+
+**Events** (`data:` lines; `: ping` comments every 15s keep proxies from closing the stream)
+```json
+{ "table": "builds" }
+```
+`table` is one of `builds`, `web_deployments`, `web_deploy_runs`, `device_builds`.
+```json
+{ "resync": true }
+```
+Sent when the backend's database listener reconnected, so changes may have been missed: refetch everything.
+
 ### `GET /api/projects/[projectId]/device-build`
 Current build status for this project (auth required, owner only).
 
@@ -602,10 +617,19 @@ Current build status for this project (auth required, owner only).
 `status` is `"ready"`. `stale` is true once `projects.current_version` has moved past the
 version this build was made from (a "Rebuild" prompt in the dialog, not an error).
 
+### `DELETE /api/projects/[projectId]/device-build`
+Stops a device build that is still `building`: kills its `expo export` if it runs in this backend process, and marks the row `failed` with `"Stopped by you."` (a build orphaned by a backend restart is released the same way).
+
+- **Auth**: required (user must own project)
+
+**Response 200**: the same shape as `GET` (`{"status": "failed", "error": "Stopped by you.", ...}`)
+
+**Errors**: `404` project not found, `409` (`not_running`) when no build is running.
+
 ### `POST /api/projects/[projectId]/device-build`
 Starts a build (`npx expo export` on the project's current files, uploaded to S3) if one
 isn't already running; no-ops otherwise. Returns immediately with the same shape as the `GET`
-above (usually `{"status": "building"}` on the first response) -- poll the `GET` for completion.
+above (usually `{"status": "building"}` on the first response) -- follow `GET` (kept fresh by `status-stream`) for completion.
 
 ### `GET /api/device/[projectId]/manifest`
 **Public, unauthenticated.** What the QR code / "Enter URL manually" link in Expo Go actually
@@ -876,7 +900,7 @@ Initiates a new native build (`.aab` / `.apk` / `.ipa`) for an Expo project. Pus
 ---
 
 ### `GET /api/projects/[projectId]/builds`
-Lists all build attempts for a project, ordered latest first. Polled by `PublishDialog` every ~4s while any build is non-terminal.
+Lists all build attempts for a project, ordered latest first. Refetched by `PublishDialog` whenever `GET /api/projects/[projectId]/status-stream` reports a change.
 
 - **Auth**: required (user must own project)
 
@@ -927,6 +951,18 @@ Retries a failed build by inserting a **new** build row (preserving historical f
 - `404 {"error": "not_found", "message": "Build not found."}`
 - `409 {"error": "conflict", "message": "Only failed builds can be retried."}`
 - `409 {"error": "not_linked" | "github_not_connected" | "expo_not_connected" | "build_in_progress"}`
+
+---
+
+### `POST /api/projects/[projectId]/builds/[buildId]/stop`
+Marks a build that is still `queued`, `dispatching` or `building` as `failed` with `"Stopped by you."`, which frees the platform/format slot so a new build (or **Retry**) can start. It does not cancel the GitHub Actions run, so a late report from that run is ignored once the build has finished.
+
+- **Auth**: required (user must own project)
+- **CSRF guard**: required (`isSameOriginJson`)
+
+**Response 200**: `{ "ok": true }`
+
+**Errors**: `404` build not found for this project, `409` (`not_running`) when the build already finished.
 
 ---
 
@@ -999,7 +1035,7 @@ Initiates a new web deployment to Expo EAS Hosting for an Expo project. Pushes t
 ---
 
 ### `GET /api/projects/[projectId]/publish/web`
-Returns the current web deployment record for a project. Polled by `PublishDialog` and `PreviewPanel` while status is non-terminal.
+Returns the current web deployment record for a project. Refetched by `PublishDialog` and `PreviewPanel` whenever `status-stream` reports a change.
 
 - **Auth**: required (user must own project)
 
@@ -1023,6 +1059,17 @@ Returns the current web deployment record for a project. Polled by `PublishDialo
   }
 }
 ```
+
+---
+
+### `DELETE /api/projects/[projectId]/publish/web`
+Marks the in-flight web deployment (status `queued`, `dispatching`, `building` or `deploying`) and its current run as `failed` with `"Stopped by you."`, so a stuck deployment stops blocking new ones. The last live `url` is kept. It does not cancel the GitHub Actions run; if that run later reports success, the deployment becomes `ready` again.
+
+- **Auth**: required (user must own project)
+
+**Response 200**: `{ "ok": true }`
+
+**Errors**: `409` (`not_running`) when no deployment is in flight.
 
 ---
 

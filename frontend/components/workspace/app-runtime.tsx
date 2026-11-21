@@ -123,7 +123,7 @@ export function AppRuntimeProvider({
   /** Every project file, screens included. */
   files: ProjectFiles
   planned: PlannedRoute[]
-  /** Whether canvas or preview is actually visible: live-sync only polls while it is. */
+  /** Whether canvas or preview is actually visible: the data is only loaded while it is. */
   active: boolean
   onThemeChange?: (id: string) => void
   children: React.ReactNode
@@ -183,7 +183,7 @@ export function AppRuntimeProvider({
   React.useEffect(() => () => (backend as { dispose?: () => void }).dispose?.(), [backend])
 
   // Seed (or reseed after a plan change) and load the data. Nobody's looking
-  // at canvas/preview while this is inactive, so skip the live-sync poll.
+  // at canvas/preview while this is inactive, so skip loading.
   React.useEffect(() => {
     if (!active) return
     let alive = true

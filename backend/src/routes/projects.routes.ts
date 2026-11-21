@@ -11,6 +11,7 @@ import * as deviceController from "../controllers/device.controller"
 import * as githubController from "../controllers/github.controller"
 import * as publishController from "../controllers/publish.controller"
 import * as exportController from "../controllers/export.controller"
+import * as projectEventsController from "../controllers/project-events.controller"
 
 const upload = multer({ limits: { fileSize: 12 * 1024 * 1024 } })
 
@@ -48,6 +49,10 @@ projectsRouter.post("/:projectId/device", requireUser, requireTrustedOrigin, dev
 projectsRouter.delete("/:projectId/device", requireUser, requireTrustedOrigin, deviceController.deleteMetroLane)
 projectsRouter.get("/:projectId/device-build", requireUser, deviceController.getDeviceBuild)
 projectsRouter.post("/:projectId/device-build", requireUser, requireTrustedOrigin, deviceController.postDeviceBuild)
+projectsRouter.delete("/:projectId/device-build", requireUser, requireTrustedOrigin, deviceController.deleteDeviceBuild)
+
+// Build / deploy status push (SSE)
+projectsRouter.get("/:projectId/status-stream", requireUser, requireProjectOwner, projectEventsController.streamProjectStatus)
 
 // GitHub
 projectsRouter.get("/:projectId/github", requireUser, githubController.getLink)
@@ -57,5 +62,7 @@ projectsRouter.post("/:projectId/github/push", requireUser, requireTrustedOrigin
 projectsRouter.post("/:projectId/publish", requireUser, requireTrustedOriginJson, publishController.publishNative)
 projectsRouter.get("/:projectId/builds", requireUser, publishController.listProjectBuilds)
 projectsRouter.post("/:projectId/builds/:buildId/retry", requireUser, requireTrustedOriginJson, publishController.retryProjectBuild)
+projectsRouter.post("/:projectId/builds/:buildId/stop", requireUser, requireTrustedOriginJson, requireProjectOwner, publishController.stopProjectBuild)
 projectsRouter.get("/:projectId/publish/web", requireUser, publishController.getWebDeploy)
 projectsRouter.post("/:projectId/publish/web", requireUser, requireTrustedOriginJson, publishController.triggerWebDeploy)
+projectsRouter.delete("/:projectId/publish/web", requireUser, requireTrustedOrigin, requireProjectOwner, publishController.stopWebDeploy)

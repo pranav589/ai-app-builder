@@ -148,3 +148,13 @@ export async function markFailed(
 
   await db.update(builds).set(values).where(eq(builds.id, buildId))
 }
+
+/** Fails the build only while it is still in flight, so a late "ready" is never overwritten. */
+export async function cancelActiveBuild(buildId: string, error: string): Promise<boolean> {
+  const stopped = await db
+    .update(builds)
+    .set({ status: "failed", error, finishedAt: new Date() })
+    .where(and(eq(builds.id, buildId), inArray(builds.status, ["queued", "dispatching", "building"])))
+    .returning({ id: builds.id })
+  return stopped.length > 0
+}

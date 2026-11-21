@@ -8,6 +8,13 @@ import {
   type WebDeploymentRow,
 } from "@/db"
 
+/**
+ * A deploy's run row and its pointer row always change together. Writing them in one
+ * transaction makes Postgres deliver their change notifications together at commit, so
+ * clients refetch once instead of once per row, however slow the database round trip is.
+ */
+type Db = Pick<typeof db, "insert" | "select" | "update">
+
 export async function claimWebDeployment(opts: {
   projectId: string
   userId: string
@@ -16,10 +23,18 @@ export async function claimWebDeployment(opts: {
 }): Promise<
   { ok: true; deployment: WebDeploymentRow; runId: string } | { ok: false; error: "deploy_in_progress" }
 > {
-  const { projectId, userId, repoOwner, repoName } = opts
   const runId = crypto.randomUUID()
+  return db.transaction((tx) => claim(tx, opts, runId))
+}
 
-  const [claimed] = await db
+async function claim(
+  tx: Db,
+  { projectId, userId, repoOwner, repoName }: Parameters<typeof claimWebDeployment>[0],
+  runId: string
+): Promise<
+  { ok: true; deployment: WebDeploymentRow; runId: string } | { ok: false; error: "deploy_in_progress" }
+> {
+  const [claimed] = await tx
     .update(webDeployments)
     .set({
       status: "queued",
@@ -41,7 +56,7 @@ export async function claimWebDeployment(opts: {
   let deployment: WebDeploymentRow | null = claimed || null
 
   if (!deployment) {
-    const [existing] = await db
+    const [existing] = await tx
       .select()
       .from(webDeployments)
       .where(eq(webDeployments.projectId, projectId))
@@ -51,7 +66,7 @@ export async function claimWebDeployment(opts: {
       return { ok: false, error: "deploy_in_progress" }
     }
 
-    const [inserted] = await db
+    const [inserted] = await tx
       .insert(webDeployments)
       .values({
         projectId,
@@ -65,7 +80,7 @@ export async function claimWebDeployment(opts: {
     deployment = inserted
   }
 
-  await db.insert(webDeployRuns).values({
+  await tx.insert(webDeployRuns).values({
     id: runId,
     projectId,
     userId,
@@ -97,11 +112,12 @@ export async function listWebDeployRuns(projectId: string, limit = 20): Promise<
 
 /** Only applies the pointer update if `runId` is still the run the pointer is tracking — guards against a late webhook from a superseded run. */
 async function updatePointerForRun(
+  tx: Db,
   projectId: string,
   runId: string,
   values: Partial<NewWebDeploymentRow>
 ): Promise<void> {
-  await db
+  await tx
     .update(webDeployments)
     .set(values)
     .where(and(eq(webDeployments.projectId, projectId), eq(webDeployments.currentRunId, runId)))
@@ -127,9 +143,6 @@ export async function markWebDispatched(
   }
   if (opts.workflowRunId !== undefined) runValues.workflowRunId = opts.workflowRunId
   if (opts.workflowRunUrl !== undefined) runValues.workflowRunUrl = opts.workflowRunUrl
-  if (Object.keys(runValues).length) {
-    await db.update(webDeployRuns).set(runValues).where(eq(webDeployRuns.id, runId))
-  }
 
   const pointerValues: Partial<NewWebDeploymentRow> = { updatedAt: new Date() }
   if (runRow.status === "queued") {
@@ -138,27 +151,34 @@ export async function markWebDispatched(
   }
   if (opts.workflowRunId !== undefined) pointerValues.workflowRunId = opts.workflowRunId
   if (opts.workflowRunUrl !== undefined) pointerValues.workflowRunUrl = opts.workflowRunUrl
-  await updatePointerForRun(projectId, runId, pointerValues)
+  await db.transaction(async (tx) => {
+    if (Object.keys(runValues).length) {
+      await tx.update(webDeployRuns).set(runValues).where(eq(webDeployRuns.id, runId))
+    }
+    await updatePointerForRun(tx, projectId, runId, pointerValues)
+  })
 }
 
 export async function markWebBuilding(projectId: string, runId: string): Promise<void> {
-  await db
-    .update(webDeployRuns)
-    .set({ status: "building" })
-    .where(and(eq(webDeployRuns.id, runId), inArray(webDeployRuns.status, ["dispatching", "building"])))
-
-  await updatePointerForRun(projectId, runId, { status: "building", updatedAt: new Date() })
+  await db.transaction(async (tx) => {
+    await tx
+      .update(webDeployRuns)
+      .set({ status: "building" })
+      .where(and(eq(webDeployRuns.id, runId), inArray(webDeployRuns.status, ["dispatching", "building"])))
+    await updatePointerForRun(tx, projectId, runId, { status: "building", updatedAt: new Date() })
+  })
 }
 
 export async function markWebDeploying(projectId: string, runId: string): Promise<void> {
-  await db
-    .update(webDeployRuns)
-    .set({ status: "deploying" })
-    .where(
-      and(eq(webDeployRuns.id, runId), inArray(webDeployRuns.status, ["dispatching", "building", "deploying"]))
-    )
-
-  await updatePointerForRun(projectId, runId, { status: "deploying", updatedAt: new Date() })
+  await db.transaction(async (tx) => {
+    await tx
+      .update(webDeployRuns)
+      .set({ status: "deploying" })
+      .where(
+        and(eq(webDeployRuns.id, runId), inArray(webDeployRuns.status, ["dispatching", "building", "deploying"]))
+      )
+    await updatePointerForRun(tx, projectId, runId, { status: "deploying", updatedAt: new Date() })
+  })
 }
 
 export async function markWebReady(
@@ -176,7 +196,6 @@ export async function markWebReady(
     finishedAt: new Date(),
   }
   if (opts.workflowRunUrl) runValues.workflowRunUrl = opts.workflowRunUrl
-  await db.update(webDeployRuns).set(runValues).where(eq(webDeployRuns.id, runId))
 
   const pointerValues: Partial<NewWebDeploymentRow> = {
     status: "ready",
@@ -186,7 +205,10 @@ export async function markWebReady(
     updatedAt: new Date(),
   }
   if (opts.workflowRunUrl) pointerValues.workflowRunUrl = opts.workflowRunUrl
-  await updatePointerForRun(projectId, runId, pointerValues)
+  await db.transaction(async (tx) => {
+    await tx.update(webDeployRuns).set(runValues).where(eq(webDeployRuns.id, runId))
+    await updatePointerForRun(tx, projectId, runId, pointerValues)
+  })
 }
 
 export async function markWebFailed(
@@ -203,7 +225,6 @@ export async function markWebFailed(
     finishedAt: new Date(),
   }
   if (opts.workflowRunUrl) runValues.workflowRunUrl = opts.workflowRunUrl
-  await db.update(webDeployRuns).set(runValues).where(eq(webDeployRuns.id, runId))
 
   // The pointer's `url` is intentionally left untouched on failure, so the last-known-good
   // live URL keeps showing even if a republish attempt fails.
@@ -213,5 +234,26 @@ export async function markWebFailed(
     updatedAt: new Date(),
   }
   if (opts.workflowRunUrl) pointerValues.workflowRunUrl = opts.workflowRunUrl
-  await updatePointerForRun(projectId, runId, pointerValues)
+  await db.transaction(async (tx) => {
+    await tx.update(webDeployRuns).set(runValues).where(eq(webDeployRuns.id, runId))
+    await updatePointerForRun(tx, projectId, runId, pointerValues)
+  })
+}
+
+/** Fails the deployment's current run only while it is still in flight. Returns false when there is nothing to stop. */
+export async function cancelWebDeployment(projectId: string, error: string): Promise<boolean> {
+  const [run] = await db
+    .select({ id: webDeployRuns.id })
+    .from(webDeployRuns)
+    .innerJoin(webDeployments, eq(webDeployments.currentRunId, webDeployRuns.id))
+    .where(
+      and(
+        eq(webDeployments.projectId, projectId),
+        inArray(webDeployments.status, ["queued", "dispatching", "building", "deploying"])
+      )
+    )
+    .limit(1)
+  if (!run) return false
+  await markWebFailed(projectId, run.id, error)
+  return true
 }

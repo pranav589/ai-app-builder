@@ -3,7 +3,7 @@ import { db, deviceBuilds, projects } from "@/db"
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
 import { DeviceDepsMissingError } from "./export"
 import { deviceLaneStatus, MetroPortBusyError, startDeviceLane, stopDeviceLane } from "./lane"
-import { startDeviceBuild } from "./build"
+import { cancelDeviceBuild, startDeviceBuild } from "./build"
 import { lanIPv4 } from "./lan"
 import { buildDeviceManifest, type DeviceManifestPlatform } from "./manifest"
 import { workspaceFromDoc } from "../verify/workspace"
@@ -128,3 +128,17 @@ export async function getPublicDeviceManifest(projectId: string, platform: Devic
   })
 }
 
+
+export async function stopDeviceBuild(userId: string, projectId: string, reqHost?: string) {
+  const [project] = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)))
+    .limit(1)
+  if (!project) return null
+
+  if (!(await cancelDeviceBuild(projectId))) {
+    throw Object.assign(new Error("No build is running."), { status: 409, code: "not_running" })
+  }
+  return await getDeviceBuildStatus(userId, projectId, reqHost)
+}

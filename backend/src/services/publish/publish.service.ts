@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm"
 import { db, projectGithubLinks, projects, webDeployRuns, type BuildFormat, type BuildPlatform } from "@/db"
 import { GithubApiError } from "../github/api"
 import { getAccess as getGithubAccess, markRevoked as markGithubRevoked } from "../github/connect"
-import { createQueuedBuild, getActiveBuildForTarget, getBuild, listBuildsForProject, markFailed, markReady } from "./builds"
+import { cancelActiveBuild, createQueuedBuild, getActiveBuildForTarget, getBuild, listBuildsForProject, markFailed, markReady } from "./builds"
 import {
   ExpoConnectError,
   forgetConnection,
@@ -13,7 +13,7 @@ import {
 } from "./expo-connect"
 import { publishBuild } from "./run-publish"
 import { runWebDeploy } from "./run-web-deploy"
-import { claimWebDeployment, getWebDeployment, listWebDeployRuns, markWebBuilding, markWebDeploying, markWebFailed, markWebReady } from "./web-deploy"
+import { cancelWebDeployment, claimWebDeployment, getWebDeployment, listWebDeployRuns, markWebBuilding, markWebDeploying, markWebFailed, markWebReady } from "./web-deploy"
 import { updateEasProject } from "./app-identity"
 import { verifyPublishWebhookSignature } from "./webhook-auth"
 
@@ -421,3 +421,23 @@ export async function handleWebWebhookEvent(rawBody: string, sigHeader: string |
   }
 }
 
+
+const STOPPED = "Stopped by you."
+
+export async function stopBuild(projectId: string, buildId: string) {
+  const build = await getBuild(buildId)
+  if (!build || build.projectId !== projectId) {
+    throw Object.assign(new Error("Build not found."), { status: 404, code: "not_found" })
+  }
+  if (!(await cancelActiveBuild(buildId, STOPPED))) {
+    throw Object.assign(new Error("This build is not running."), { status: 409, code: "not_running" })
+  }
+  return { ok: true }
+}
+
+export async function stopWebDeployment(projectId: string) {
+  if (!(await cancelWebDeployment(projectId, STOPPED))) {
+    throw Object.assign(new Error("No web deployment is running."), { status: 409, code: "not_running" })
+  }
+  return { ok: true }
+}

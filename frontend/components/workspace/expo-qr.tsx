@@ -3,10 +3,11 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import qrcode from "qrcode-generator"
-import { Check, Copy, Loader2, Play, QrCode, RotateCw, Smartphone } from "lucide-react"
+import { Check, Copy, Loader2, Play, QrCode, RotateCw, Smartphone, Square } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { apiClient, getApiErrorMessage } from "@/lib/api-client"
+import { useProjectStatusStream } from "@/hooks/use-project-status-stream"
 import {
   Dialog,
   DialogContent,
@@ -38,8 +39,8 @@ type BuildStatus = "none" | "building" | "ready" | "failed"
 type Build = { status: BuildStatus; error?: string | null; stale?: boolean; manifestUrl?: string | null }
 
 /**
- * Phase 10b's hosted device preview (app/api/projects/[projectId]/device-build): polls
- * build status while the dialog is open, and triggers a build (`expo export` + S3 upload,
+ * Phase 10b's hosted device preview (app/api/projects/[projectId]/device-build): follows
+ * build status (pushed over SSE) while the dialog is open, and triggers a build (`expo export` + S3 upload,
  * lib/device/build.ts). The QR encodes the public manifest route
  * (app/api/device/[projectId]/manifest), which Expo Go opens directly -- confirmed on a
  * real phone with no Metro process running (docs/verified-code-plan.md, Phase 10b).
@@ -53,8 +54,8 @@ function useDeviceBuild(projectId: string, active: boolean) {
     queryKey: ["device-build", projectId],
     queryFn: async () => (await apiClient.get<Build>(endpoint)).data,
     enabled: active,
-    refetchInterval: (query) => (query.state.data?.status === "building" ? 2000 : false),
   })
+  useProjectStatusStream(projectId, active)
 
   const startMutation = useMutation({
     mutationFn: async () => (await apiClient.post<Build>(endpoint)).data,
@@ -64,11 +65,24 @@ function useDeviceBuild(projectId: string, active: boolean) {
     onError: (err) => setCustomError(getApiErrorMessage(err)),
   })
 
+  const stopMutation = useMutation({
+    mutationFn: async () => (await apiClient.delete<Build>(endpoint)).data,
+    onSuccess: (data) => {
+      if (data) queryClient.setQueryData(["device-build", projectId], data)
+    },
+    onError: (err) => setCustomError(getApiErrorMessage(err, "Couldn't stop the build.")),
+  })
+
   const build = buildQuery.data ?? { status: "none" as const }
 
   return {
     build,
     busy: startMutation.isPending,
+    stopping: stopMutation.isPending,
+    stop: () => {
+      setCustomError(null)
+      stopMutation.mutate()
+    },
     error: customError,
     start: () => {
       setCustomError(null)
@@ -86,7 +100,7 @@ export function ExpoQrDialog({
   onOpenChange: (open: boolean) => void
   projectId: string
 }) {
-  const { build, busy, error, start } = useDeviceBuild(projectId, open)
+  const { build, busy, stopping, stop, error, start } = useDeviceBuild(projectId, open)
   const building = build.status === "building"
   const url = build.status === "ready" ? build.manifestUrl ?? null : null
   const [copied, setCopied] = React.useState(false)
@@ -181,6 +195,11 @@ export function ExpoQrDialog({
         <div className="flex min-w-0 w-full items-center justify-end gap-2">
           {build.stale && !building && (
             <span className="min-w-0 flex-1 text-xs text-muted-foreground">Rebuild to include your latest changes.</span>
+          )}
+          {building && (
+            <Button size="sm" variant="outline" className="shrink-0" disabled={stopping} onClick={stop}>
+              {stopping ? <Loader2 className="animate-spin" /> : <Square />} Stop
+            </Button>
           )}
           <Button size="sm" className="shrink-0" disabled={busy || building} onClick={start}>
             {busy || building ? <Loader2 className="animate-spin" /> : url ? <RotateCw /> : <Play />}{" "}

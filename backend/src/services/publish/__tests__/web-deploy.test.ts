@@ -21,6 +21,7 @@ vi.mock("@/db", () => ({
     update: mockUpdate,
     insert: mockInsert,
     select: mockSelect,
+    transaction: (fn: (tx: unknown) => unknown) => fn({ update: mockUpdate, insert: mockInsert, select: mockSelect }),
   },
   webDeployments: {
     projectId: "projectId",

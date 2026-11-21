@@ -333,9 +333,21 @@ flowchart TD
     GHA -->|"npx expo export -p web\n+ report-web-deploy.js --ping"| WebWebhook["Web Webhook\n/api/publish/web-webhook"]
     GHA -->|"eas deploy --prod --json\n+ report-web-deploy.js"| WebWebhook
     WebWebhook -->|"Update stage/ready (url) / failed"| WebDeployDB
-    User -->|"Polls builds query (4s interval)"| BuildsDB
-    User -->|"Polls web deploy query (3s interval)"| WebDeployDB
+    BuildsDB -->|"trigger: pg_notify('project_status')"| Listener["LISTEN connection
+(services/http/project-events.ts)"]
+    WebDeployDB -->|"trigger: pg_notify('project_status')"| Listener
+    Listener -->|"SSE: GET /api/projects/:id/status-stream"| User
+    User -->|"refetch invalidated query"| BuildsDB
 ```
+
+Build, web-deploy and device-build status is **pushed, not polled**. `db/sql/status-notify.sql`
+installs `AFTER INSERT OR UPDATE` triggers on `builds`, `web_deployments`, `web_deploy_runs`
+and `device_builds` that `pg_notify` the table and project id (never row data). One backend
+`LISTEN` connection fans these out to open `status-stream` SSE connections; the browser then
+invalidates the matching React Query key and refetches through the normal authenticated GET.
+`LISTEN` needs a session-pinned connection, so the listener uses `DIRECT_URL` (a
+transaction-mode pooler drops it). When the listener reconnects it sends a `resync` event,
+because notifications sent while it was down are lost.
 
 ### Key Architectural Components
 
@@ -374,7 +386,7 @@ flowchart TD
   `builds` / `project_app_identities` / `expo_connections` / `web_deployments` (Publish / EAS builds and web hosting subsystem,
   including partial unique index `builds_one_active_per_target`, live web deployment status, and encrypted Expo credentials).
 - **Hand-applied SQL** (`db/sql/*.sql`, applied via `npm run db:sql` →
-  `scripts/migrate-sql.mjs`, all idempotent): `users`, `projects` (holds `prompt`,
+  `scripts/migrate-sql.mjs`, all idempotent; includes `status-notify.sql`, the NOTIFY triggers for status SSE): `users`, `projects` (holds `prompt`,
   `preview_screens` as the whole `AppDoc` JSON, `current_version`, `assets`),
   `messages` (chat history + plan/pipeline data), `image_library` (curated seed image
   library with generated `tsvector` column and GIN index for full-text search),

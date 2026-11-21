@@ -91,6 +91,7 @@ jobs:
           packager: npm
 
       - name: Report building stage
+        continue-on-error: true
         env:
           PUBLISH_WEBHOOK_SECRET: \${{ secrets.PUBLISH_WEBHOOK_SECRET }}
           PROJECT_ID: \${{ inputs.project_id }}
@@ -126,6 +127,7 @@ jobs:
 
       - name: Report deploying stage
         if: steps.expo-export.outcome == 'success'
+        continue-on-error: true
         env:
           PUBLISH_WEBHOOK_SECRET: \${{ secrets.PUBLISH_WEBHOOK_SECRET }}
           PROJECT_ID: \${{ inputs.project_id }}
@@ -308,7 +310,10 @@ async function main() {
     if (match) url = match[0]
   }
 
-  if (exportOutcome && exportOutcome !== "success") {
+  if (exportOutcome === "skipped" || exportOutcome === "cancelled") {
+    status = "failed"
+    error = "The deploy stopped before the web bundle was exported because an earlier workflow step failed. Check the workflow run log for details."
+  } else if (exportOutcome && exportOutcome !== "success") {
     status = "failed"
     error = "Failed to export web bundle (npx expo export -p web failed). Check the workflow run log for details."
   } else if (deployOutcome && deployOutcome !== "success") {

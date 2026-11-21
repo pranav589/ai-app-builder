@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express"
 import {
   getDeviceBuildStatus,
+  stopDeviceBuild,
   getMetroLaneStatus,
   getPublicDeviceManifest,
   startMetroLane,
@@ -105,3 +106,17 @@ export async function getManifest(req: Request, res: Response, next: NextFunctio
   }
 }
 
+
+export async function deleteDeviceBuild(req: Request, res: Response, next: NextFunction) {
+  try {
+    const projectId = String(req.params.projectId || "")
+    const result = await stopDeviceBuild(req.user!.id, projectId, req.headers.host)
+    if (!result) {
+      res.status(404).json({ error: "Project not found." })
+      return
+    }
+    res.json(result)
+  } catch (err) {
+    next(err)
+  }
+}

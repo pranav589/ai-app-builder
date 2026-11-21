@@ -14,8 +14,8 @@
 import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
-import { spawn } from "node:child_process"
-import { eq } from "drizzle-orm"
+import { spawn, type ChildProcess } from "node:child_process"
+import { and, eq } from "drizzle-orm"
 
 import { db, deviceBuilds } from "@/db"
 import { withBackend } from "@/lib/app-project/with-backend"
@@ -55,7 +55,21 @@ function listFilesRecursive(dir: string, base = dir): string[] {
   return out
 }
 
-function runExportCli(cwd: string, outDir: string): Promise<void> {
+/**
+ * The builds running in this process. A run that is no longer the one registered for its
+ * project was stopped, so it must not write its outcome over the row (which may by now
+ * belong to a newer build).
+ */
+type Run = { child?: ChildProcess }
+const runs = new Map<string, Run>()
+
+function killTree(child: ChildProcess) {
+  // `shell: true` on Windows makes child.kill() end only the shell, leaving `expo export` running.
+  if (process.platform === "win32" && child.pid) spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true })
+  else child.kill()
+}
+
+function runExportCli(cwd: string, outDir: string, run: Run): Promise<void> {
   return new Promise((resolve, reject) => {
     const env = { ...process.env }
     delete env.CI
@@ -75,6 +89,7 @@ function runExportCli(cwd: string, outDir: string): Promise<void> {
       shell: win32,
       windowsHide: true,
     })
+    run.child = child
     let log = ""
     child.stdout?.on("data", (d) => (log += d))
     child.stderr?.on("data", (d) => (log += d))
@@ -108,12 +123,14 @@ export async function startDeviceBuild(opts: {
     .values({ projectId, userId, status: "building" })
     .onConflictDoUpdate({ target: deviceBuilds.projectId, set: { status: "building", error: null, updatedAt: new Date() } })
 
-  runBuild(projectId, files, currentVersion).catch(() => {
+  const run: Run = {}
+  runs.set(projectId, run)
+  runBuild(projectId, files, currentVersion, run).catch(() => {
     // Failures are already recorded on the row inside runBuild; nothing more to do here.
   })
 }
 
-async function runBuild(projectId: string, files: FileMap, currentVersion: number): Promise<void> {
+async function runBuild(projectId: string, files: FileMap, currentVersion: number, run: Run): Promise<void> {
   const buildId = `${Date.now()}-${randomBytes(4).toString("hex")}`
   const outDir = path.join(EXPORT_ROOT, projectId, buildId)
 
@@ -121,7 +138,7 @@ async function runBuild(projectId: string, files: FileMap, currentVersion: numbe
     const projectDir = exportExpoProject(projectId, (await withBackend(projectId, files)).files)
     fs.rmSync(outDir, { force: true, recursive: true })
 
-    await runExportCli(projectDir, outDir)
+    await runExportCli(projectDir, outDir, run)
 
     const s3Prefix = `device/${projectId}/${buildId}/`
     // app.json isn't part of `expo export`'s own output (only the bundle/assets/metadata are),
@@ -143,14 +160,35 @@ async function runBuild(projectId: string, files: FileMap, currentVersion: numbe
     }
     await putObject(s3Prefix + "hashes.json", Buffer.from(JSON.stringify(hashes)), "application/json")
 
+    if (runs.get(projectId) !== run) return
+    runs.delete(projectId)
     await db
       .update(deviceBuilds)
       .set({ status: "ready", s3Prefix, builtVersion: currentVersion, error: null, updatedAt: new Date(), finishedAt: new Date() })
       .where(eq(deviceBuilds.projectId, projectId))
   } catch (e) {
+    if (runs.get(projectId) !== run) return
+    runs.delete(projectId)
     const error = e instanceof Error ? e.message : String(e)
     await db.update(deviceBuilds).set({ status: "failed", error, updatedAt: new Date(), finishedAt: new Date() }).where(eq(deviceBuilds.projectId, projectId))
   } finally {
     fs.rmSync(outDir, { force: true, recursive: true })
   }
+}
+
+/**
+ * Stops a build that is still marked "building": kills its `expo export` if it runs in this
+ * process, and marks the row failed either way, since a build orphaned by a restart has no
+ * process left to ever finish it. Returns false when there was nothing to stop.
+ */
+export async function cancelDeviceBuild(projectId: string): Promise<boolean> {
+  const run = runs.get(projectId)
+  runs.delete(projectId)
+  if (run?.child) killTree(run.child)
+  const stopped = await db
+    .update(deviceBuilds)
+    .set({ status: "failed", error: "Stopped by you.", updatedAt: new Date(), finishedAt: new Date() })
+    .where(and(eq(deviceBuilds.projectId, projectId), eq(deviceBuilds.status, "building")))
+    .returning({ projectId: deviceBuilds.projectId })
+  return stopped.length > 0
 }
