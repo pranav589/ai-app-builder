@@ -24,7 +24,6 @@ import {
 
 import type { BuildFormat, BuildPlatform, BuildRow, WebDeployRunRow, WebDeploymentRow } from "@app/shared/api-types"
 import { apiClient, getApiErrorMessage } from "@/lib/api-client"
-import { useProjectStatusStream } from "@/hooks/use-project-status-stream"
 import { useStopWebDeploy } from "@/hooks/use-stop-web-deploy"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -169,6 +168,7 @@ export function PublishDialog({
       return res.data
     },
     enabled: open,
+    staleTime: Infinity,
   })
 
   // 2. Check Expo account connection status
@@ -181,9 +181,15 @@ export function PublishDialog({
       return res.data
     },
     enabled: open,
+    staleTime: Infinity,
   })
 
-  // 3. Query all builds for this project; status changes arrive over SSE (useProjectStatusStream)
+  // These four queries are never stale on their own (staleTime: Infinity), so reopening the
+  // dialog doesn't refetch them. Builds and the web deploy are refreshed by the workspace's
+  // status stream (useProjectStatusStream); the GitHub link and Expo status by the dialogs
+  // that change them.
+
+  // 3. Query all builds for this project
   const buildsQuery = useQuery({
     queryKey: ["project-builds", projectId],
     queryFn: async () => {
@@ -193,8 +199,8 @@ export function PublishDialog({
       return res.data.builds
     },
     enabled: open,
+    staleTime: Infinity,
   })
-  useProjectStatusStream(projectId, open)
 
   const builds = buildsQuery.data || []
   const hasBuilds = builds.length > 0
@@ -258,6 +264,7 @@ export function PublishDialog({
         )
       ).data,
     enabled: open,
+    staleTime: Infinity,
   })
 
   const webDeployMutation = useMutation({

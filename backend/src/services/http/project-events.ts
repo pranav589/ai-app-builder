@@ -32,15 +32,17 @@ function start() {
   const url = process.env.DIRECT_URL || process.env.DATABASE_URL
   if (!url) throw new Error("Set DIRECT_URL or DATABASE_URL")
   const listener = postgres(url, { max: 1, prepare: false, onnotice: () => {} })
-  // `onlisten` fires on the first connect and after every automatic reconnect; anything
-  // notified while the connection was down is gone, so tell clients to resync.
-  started = listener.listen(
-    CHANNEL,
-    handleNotification,
-    () => {
-      for (const id of subscribers.keys()) dispatch(id, { resync: true })
+  // `onlisten` fires on the first connect and after every automatic reconnect. Only a
+  // reconnect can have lost notifications (sent while the connection was down), so only
+  // then are clients told to resync; the first connect has nothing they could have missed.
+  let connected = false
+  started = listener.listen(CHANNEL, handleNotification, () => {
+    if (!connected) {
+      connected = true
+      return
     }
-  )
+    for (const id of subscribers.keys()) dispatch(id, { resync: true })
+  })
   started.catch((e) => {
     console.error("listening for project status changes failed", e)
     started = null

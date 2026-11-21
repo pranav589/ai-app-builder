@@ -50,9 +50,11 @@ describe("subscribeToProject", () => {
     off()
   })
 
-  it("tells every subscriber to resync after the listener reconnects", () => {
+  it("tells every subscriber to resync after the listener reconnects, but not on its first connect", () => {
     const a = vi.fn()
     const off = subscribeToProject("p1", a)
+    reconnect() // first connect: nothing can have been missed
+    expect(a).not.toHaveBeenCalled()
     reconnect()
     expect(a).toHaveBeenCalledWith({ resync: true })
     off()

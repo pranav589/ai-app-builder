@@ -14,6 +14,7 @@ import { SCREEN_GAP, SCREEN_WIDTH } from "./dummy-data"
 import { PreviewPanel } from "./preview-panel"
 import type { ChatMessage, ScreenNode, WorkspaceProject } from "./types"
 import { useAgent } from "./use-agent"
+import { useProjectStatusStream } from "@/hooks/use-project-status-stream"
 import { WorkspaceHeader } from "./workspace-header"
 import type { ElementEdit, ElementRef, SelectedElement } from "@app/shared/preview/protocol"
 
@@ -51,6 +52,7 @@ export function WorkspaceShell({
     initialBackend: project.backendInfo,
     initialCloudhike: project.cloudhike,
   })
+  useProjectStatusStream(project.id)
 
   const [pane, setPane] = React.useState<Pane>(project.phase === "draft" || project.phase === "planning" ? "chat" : "canvas")
   // On desktop canvas and preview are both always on screen; on mobile only the active pane is.

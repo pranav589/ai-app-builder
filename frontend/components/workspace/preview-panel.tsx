@@ -2,7 +2,6 @@
 
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { useProjectStatusStream } from "@/hooks/use-project-status-stream"
 import { useStopWebDeploy } from "@/hooks/use-stop-web-deploy"
 import {
   Check,
@@ -182,10 +181,11 @@ export function PreviewPanel({
           `/api/projects/${projectId}/publish/web`
         )
       ).data,
+    // Kept current by the workspace's status stream, so it never needs a refetch of its own.
+    staleTime: Infinity,
   })
   const stopWebDeploy = useStopWebDeploy(projectId)
   const deployStatus = webDeployQuery.data?.deployment?.status
-  useProjectStatusStream(projectId, Boolean(deployStatus) && deployStatus !== "ready" && deployStatus !== "failed")
 
   const handleCopyUrl = (e: React.MouseEvent, url: string) => {
     e.preventDefault()

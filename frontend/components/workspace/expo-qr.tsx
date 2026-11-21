@@ -7,7 +7,6 @@ import { Check, Copy, Loader2, Play, QrCode, RotateCw, Smartphone, Square } from
 
 import { Button } from "@/components/ui/button"
 import { apiClient, getApiErrorMessage } from "@/lib/api-client"
-import { useProjectStatusStream } from "@/hooks/use-project-status-stream"
 import {
   Dialog,
   DialogContent,
@@ -55,7 +54,6 @@ function useDeviceBuild(projectId: string, active: boolean) {
     queryFn: async () => (await apiClient.get<Build>(endpoint)).data,
     enabled: active,
   })
-  useProjectStatusStream(projectId, active)
 
   const startMutation = useMutation({
     mutationFn: async () => (await apiClient.post<Build>(endpoint)).data,
