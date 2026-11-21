@@ -396,3 +396,30 @@ export const webDeployRuns = pgTable(
 export type WebDeployRunRow = typeof webDeployRuns.$inferSelect;
 export type NewWebDeployRunRow = typeof webDeployRuns.$inferInsert;
 
+// ---------------------------------------------------------------- Hosted device preview (Phase 10b)
+//
+// Current-state pointer, one row per project (like webDeployments): "build once, serve forever"
+// -- a build runs in-process (lib/device/build.ts, `expo export`) and uploads its output to S3;
+// the public manifest route (app/api/device/[projectId]/manifest) reads this row to serve the
+// newest ready build to Expo Go. No per-run history table: an in-progress build overwrites this
+// row's prior "ready" state only once it finishes, so the old build keeps serving until then.
+
+export type DeviceBuildStatus = "building" | "ready" | "failed";
+
+export const deviceBuilds = pgTable("device_builds", {
+  projectId: text("project_id").primaryKey().references(() => projects.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  status: text("status").$type<DeviceBuildStatus>().notNull(),
+  /** projects.currentVersion this build was made from; set once ready, compared against the live value to show a "rebuild" badge. */
+  builtVersion: integer("built_version"),
+  /** S3 key prefix (e.g. "device/<projectId>/<buildId>/") holding this build's `expo export` output, including metadata.json. Set once ready. */
+  s3Prefix: text("s3_prefix"),
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
+export type DeviceBuildRow = typeof deviceBuilds.$inferSelect;
+export type NewDeviceBuildRow = typeof deviceBuilds.$inferInsert;
+

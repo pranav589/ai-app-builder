@@ -23,6 +23,11 @@ export async function putObject(key: string, body: Buffer, contentType: string) 
   await s3.send(new PutObjectCommand({ Bucket, Key: key, Body: body, ContentType: contentType }));
 }
 
+export async function getObjectText(key: string): Promise<string> {
+  const res = await s3.send(new GetObjectCommand({ Bucket, Key: key }));
+  return res.Body!.transformToString();
+}
+
 export async function deleteObjects(keys: string[]) {
   if (!keys.length) return;
   await s3.send(

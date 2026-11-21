@@ -1,9 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import qrcode from "qrcode-generator"
-import { Check, Copy, Loader2, Play, QrCode, RotateCw, Smartphone, Square } from "lucide-react"
+import { Check, Copy, Loader2, Play, QrCode, RotateCw, Smartphone } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { apiClient, getApiErrorMessage } from "@/lib/api-client"
@@ -34,58 +34,47 @@ export function QrPattern({ text, className }: { text: string; className?: strin
   )
 }
 
-type LaneStatus = "stopped" | "starting" | "running" | "failed" | "external"
-type Lane = { url: string | null; status: LaneStatus; error?: string }
+type BuildStatus = "none" | "building" | "ready" | "failed"
+type Build = { status: BuildStatus; error?: string | null; stale?: boolean; manifestUrl?: string | null }
 
 /**
- * The dev-only device lane (app/api/projects/[projectId]/device): polls its
- * status while the dialog is open, and starts/stops Metro on this machine,
- * so the QR appears without the user touching a terminal.
+ * Phase 10b's hosted device preview (app/api/projects/[projectId]/device-build): polls
+ * build status while the dialog is open, and triggers a build (`expo export` + S3 upload,
+ * lib/device/build.ts). The QR encodes the public manifest route
+ * (app/api/device/[projectId]/manifest), which Expo Go opens directly -- confirmed on a
+ * real phone with no Metro process running (docs/verified-code-plan.md, Phase 10b).
  */
-function useDeviceLane(projectId: string, active: boolean) {
-  const [overrideLane, setOverrideLane] = React.useState<Lane | null>(null)
+function useDeviceBuild(projectId: string, active: boolean) {
+  const endpoint = `/api/projects/${projectId}/device-build`
+  const queryClient = useQueryClient()
   const [customError, setCustomError] = React.useState<string | null>(null)
-  const endpoint = `/api/projects/${projectId}/device`
 
-  const laneQuery = useQuery({
-    queryKey: ["device-lane", projectId],
-    queryFn: async () => {
-      const res = await apiClient.get<Lane>(endpoint)
-      return res.data
-    },
+  const buildQuery = useQuery({
+    queryKey: ["device-build", projectId],
+    queryFn: async () => (await apiClient.get<Build>(endpoint)).data,
     enabled: active,
-    refetchInterval: (query) => (query.state.data?.status === "starting" ? 1500 : 3000),
+    refetchInterval: (query) => (query.state.data?.status === "building" ? 2000 : false),
   })
 
-  const laneMutation = useMutation({
-    mutationFn: async (method: "POST" | "DELETE") => {
-      const res =
-        method === "POST"
-          ? await apiClient.post<Lane>(endpoint)
-          : await apiClient.delete<Lane>(endpoint)
-      return res.data
-    },
+  const startMutation = useMutation({
+    mutationFn: async () => (await apiClient.post<Build>(endpoint)).data,
     onSuccess: (data) => {
-      if (data) setOverrideLane(data)
+      if (data) queryClient.setQueryData(["device-build", projectId], data)
     },
-    onError: (err) => {
-      setCustomError(getApiErrorMessage(err))
-    },
+    onError: (err) => setCustomError(getApiErrorMessage(err)),
   })
 
-  const lane = overrideLane ?? laneQuery.data ?? { url: null, status: "stopped" }
-  const busy = laneMutation.isPending
-  const error = customError
+  const build = buildQuery.data ?? { status: "none" as const }
 
-  const send = React.useCallback(
-    (method: "POST" | "DELETE") => {
+  return {
+    build,
+    busy: startMutation.isPending,
+    error: customError,
+    start: () => {
       setCustomError(null)
-      laneMutation.mutate(method)
+      startMutation.mutate()
     },
-    [laneMutation]
-  )
-
-  return { lane, busy, error, start: () => send("POST"), stop: () => send("DELETE") }
+  }
 }
 
 export function ExpoQrDialog({
@@ -97,10 +86,9 @@ export function ExpoQrDialog({
   onOpenChange: (open: boolean) => void
   projectId: string
 }) {
-  const { lane, busy, error, start, stop } = useDeviceLane(projectId, open)
-  const ready = lane.status === "running" || lane.status === "external"
-  const url = ready ? lane.url : null
-  const running = lane.status === "running" || lane.status === "starting"
+  const { build, busy, error, start } = useDeviceBuild(projectId, open)
+  const building = build.status === "building"
+  const url = build.status === "ready" ? build.manifestUrl ?? null : null
   const [copied, setCopied] = React.useState(false)
 
   React.useEffect(() => {
@@ -112,32 +100,32 @@ export function ExpoQrDialog({
   const steps = url
     ? [
         "Install Expo Go from the App Store or Google Play.",
-        "Open your phone's camera (iOS) or Expo Go (Android) and scan the code.",
-        "Made more changes? Press Restart to load the latest version.",
+        'Open Expo Go, tap "Enter URL manually", and paste the link below.',
+        "Made more changes? Press Rebuild, then force-close and reopen the app on your phone.",
       ]
     : [
-        "Keep your phone on the same Wi-Fi network as this computer.",
-        "Press Start. The first start takes a little while.",
-        "Scan the QR code with Expo Go when it appears.",
+        "Press Build for phone. The first build takes a little while.",
+        "Install Expo Go from the App Store or Google Play.",
+        'Open Expo Go, tap "Enter URL manually", and paste the link once it\'s ready.',
       ]
-  const overlay = lane.status === "starting" ? "Starting Metro..." : lane.status === "failed" ? "Couldn't start" : "Not running"
-  const problem = error ?? (lane.status === "failed" ? lane.error : null)
+  const overlay = building ? "Building..." : build.status === "failed" ? "Couldn't build" : "Not built yet"
+  const problem = error ?? (build.status === "failed" ? build.error : null)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-5 p-5 sm:max-w-md">
+      <DialogContent className="gap-5 p-5 sm:max-w-lg min-w-0 overflow-hidden">
         <DialogHeader>
           <DialogTitle>Test on your phone</DialogTitle>
-          <DialogDescription>Scan with Expo Go to run this app on a real device.</DialogDescription>
+          <DialogDescription>Build this app and open it in Expo Go on a real device.</DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
+        <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start min-w-0">
           <div className="relative shrink-0 rounded-(--r-md) border border-border bg-white p-2">
             {url ? (
               <QrPattern text={url} className="size-40" />
             ) : (
               <>
-                <QrPattern text={`exp://device-preview-not-running/${projectId}`} className="size-40 opacity-25 blur-[1.5px]" />
+                <QrPattern text={`exp://device-preview-not-built/${projectId}`} className="size-40 opacity-25 blur-[1.5px]" />
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center">
                   <span className="flex size-9 items-center justify-center rounded-full bg-background shadow-sm">
                     <QrCode className="size-4" />
@@ -147,7 +135,7 @@ export function ExpoQrDialog({
               </>
             )}
           </div>
-          <ol className="space-y-3 text-sm">
+          <ol className="min-w-0 flex-1 space-y-3 text-sm">
             {steps.map((s, i) => (
               <li key={s} className="flex gap-2.5">
                 <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium">
@@ -159,12 +147,18 @@ export function ExpoQrDialog({
           </ol>
         </div>
 
-        <div className="flex items-center gap-2 rounded-(--r-md) border border-border bg-muted/50 p-1 pl-3">
+        <div className="flex min-w-0 w-full items-center gap-2 rounded-(--r-md) border border-border bg-muted/50 p-1 pl-3">
           <Smartphone className="size-4 shrink-0 text-muted-foreground" />
-          <code className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">{url ?? "Not running"}</code>
+          <code
+            className="block min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
+            title={url ?? undefined}
+          >
+            {url ?? "Not built yet"}
+          </code>
           <Button
             variant="ghost"
             size="sm"
+            className="shrink-0"
             disabled={!url}
             onClick={() => {
               if (!url) return
@@ -179,26 +173,19 @@ export function ExpoQrDialog({
         </div>
 
         {problem && (
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-(--r-md) border border-destructive/40 bg-destructive/5 p-2 font-mono text-xs text-destructive">
+          <pre className="max-h-40 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-(--r-md) border border-destructive/40 bg-destructive/5 p-2 font-mono text-xs text-destructive">
             {problem}
           </pre>
         )}
 
-        <div className="flex justify-end gap-2">
-          {lane.status === "external" ? (
-            <span className="text-xs text-muted-foreground">Started from a terminal. Stop it there with Ctrl-C.</span>
-          ) : (
-            <>
-              {running && (
-                <Button variant="outline" size="sm" disabled={busy} onClick={stop}>
-                  <Square /> Stop
-                </Button>
-              )}
-              <Button size="sm" disabled={busy} onClick={start}>
-                {busy ? <Loader2 className="animate-spin" /> : running ? <RotateCw /> : <Play />} {running ? "Restart" : "Start"}
-              </Button>
-            </>
+        <div className="flex min-w-0 w-full items-center justify-end gap-2">
+          {build.stale && !building && (
+            <span className="min-w-0 flex-1 text-xs text-muted-foreground">Rebuild to include your latest changes.</span>
           )}
+          <Button size="sm" className="shrink-0" disabled={busy || building} onClick={start}>
+            {busy || building ? <Loader2 className="animate-spin" /> : url ? <RotateCw /> : <Play />}{" "}
+            {url ? "Rebuild" : "Build for phone"}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

@@ -21,6 +21,7 @@
     "typebundle:install": "npm --prefix vendor/type-bundle ci --ignore-scripts --legacy-peer-deps",
     "device:deps": "tsx scripts/device-deps.ts",
     "device": "tsx --env-file=.env scripts/device-preview.ts",
+    "poc:hosted-manifest": "tsx --env-file=.env scripts/hosted-manifest-poc.ts",
     "migrate-to-verified": "tsx --env-file=.env scripts/migrate-to-verified.ts",
     "seed:images": "tsx --env-file=.env scripts/seed-image-library.ts",
     "seed:curate": "tsx --env-file=.env scripts/curate-and-seed.ts"
@@ -42,6 +43,7 @@
     "date-fns": "^4.4.0",
     "drizzle-orm": "^0.45.2",
     "embla-carousel-react": "^8.6.0",
+    "form-data": "^4.0.6",
     "input-otp": "^1.5.0",
     "jszip": "^3.10.2",
     "libsodium-wrappers": "^0.8.4",

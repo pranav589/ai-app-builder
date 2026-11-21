@@ -511,6 +511,44 @@ Stop the device lane (only if this project owns the currently running one).
 
 ---
 
+## Hosted device preview (Phase 10b)
+
+"Test on your phone" currently always uses this flow (not just production) -- see
+`docs/verified-code-plan.md` Phase 10b. Unlike the dev-only lane above, no shared Wi-Fi is
+needed: the phone downloads a prebuilt bundle from S3 via the public manifest route below,
+rather than connecting to a locally-running Metro.
+
+### `GET /api/projects/[projectId]/device-build`
+Current build status for this project (auth required, owner only).
+
+**Response 200**
+```json
+{
+  "status": "ready",
+  "error": null,
+  "stale": false,
+  "manifestUrl": "exp://192.168.1.50:3000/api/device/proj-abc123/manifest"
+}
+```
+`status` is `"none" | "building" | "ready" | "failed"`. `manifestUrl` is only present when
+`status` is `"ready"`. `stale` is true once `projects.current_version` has moved past the
+version this build was made from (a "Rebuild" prompt in the dialog, not an error).
+
+### `POST /api/projects/[projectId]/device-build`
+Starts a build (`npx expo export` on the project's current files, uploaded to S3) if one
+isn't already running; no-ops otherwise. Returns immediately with the same shape as the `GET`
+above (usually `{"status": "building"}` on the first response) -- poll the `GET` for completion.
+
+### `GET /api/device/[projectId]/manifest`
+**Public, unauthenticated.** What the QR code / "Enter URL manually" link in Expo Go actually
+opens (`exp://<host>/api/device/[projectId]/manifest`). Reads the `expo-platform` request header
+(`ios` or `android`, defaulting to `android`) and returns an Expo Updates protocol manifest
+(`multipart/mixed`, a `manifest` JSON part and an empty `extensions` part) pointing at presigned
+S3 URLs for that platform's bundle and assets. 404s (plain text, not a manifest) when the
+project has no ready build yet, or no export for the requested platform.
+
+---
+
 ## Export
 
 ### `GET /api/projects/[projectId]/export/zip`

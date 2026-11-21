@@ -917,26 +917,137 @@ machine and hands out a LAN `exp://` address.
 user; the phone downloads a prebuilt bundle from a public URL.
 
 **Work.**
-1. Build step: for a project version, run `npx expo export` (iOS and Android) on the exported
+1. ~~Build step: for a project version, run `npx expo export` (iOS and Android) on the exported
    project in a build worker (a queue job, not the request handler), reusing Phase 10's
-   `exportExpoProject` and shared SDK deps.
-2. Upload the output (bundles and assets) to S3 under `device/<projectId>/<versionId>/`
-   (`@aws-sdk/client-s3` is already a dependency).
-3. Manifest route: a public `GET /api/device/<projectId>/manifest` that serves the newest built
-   version in the expo-updates protocol format (platform from the `expo-platform` header),
-   pointing at the S3 asset URLs. The QR encodes `exp://<public-host>/api/device/<projectId>/manifest`.
-   **Check first** that Expo Go for SDK 58 opens a self-hosted manifest URL; if it doesn't,
-   fall back to the alternative below.
-4. Bundle gate moves here: a failed `expo export` is the `bundle` diagnostic (same shape as
-   `lib/verify/gates/bundle.ts`), run before publish/preview and not on every edit.
-5. Dialog: in production, "Start" becomes "Build for phone" (shows build progress, then the QR);
-   each new version needs a rebuild, and the phone reloads to pick it up (no hot reload).
-   Development keeps Phase 10's local Metro lane.
+   `exportExpoProject` and shared SDK deps.~~ **Done, as in-process, not a queue** (the user's
+   call, 2026-11-21: this app already runs as a persistent server, same assumption Phase 10's
+   Metro lane depends on, so a build left running after the triggering request returns completes
+   normally without a separate worker). `lib/device/build.ts`'s `startDeviceBuild` upserts a
+   `device_builds` row to `"building"`, then runs `npx expo export --platform all` in the
+   background.
+2. ~~Upload the output (bundles and assets) to S3 under `device/<projectId>/<versionId>/`~~
+   **Done**, keyed by a random build id instead of the version number (`device/<projectId>/<buildId>/`):
+   `lib/device/build.ts` uploads every exported file plus the exported project's own `app.json`
+   (not part of `expo export`'s output, needed for the manifest's `extra.expoClient`).
+3. ~~Manifest route~~ **Done**: `app/api/device/[projectId]/manifest` (public, unauthenticated --
+   Expo Go can't send an auth header) reads the project's `device_builds` row, fetches that
+   build's `metadata.json` from S3, and returns a hand-built Expo Updates manifest
+   (`lib/device/manifest.ts`) with presigned S3 URLs for the bundle and every asset. The
+   "check first" passed (POC below); production-manifest format settled by reading Expo's own
+   reference server (`expo/custom-expo-updates-server`) rather than guessing, since that answered
+   one question the POC didn't cover (response encoding -- see below).
+4. Bundle gate moving here is **not yet done** -- `expo export` failing is currently just a
+   `"failed"` `device_builds` row with the CLI's last 20 log lines as `error`, surfaced in the
+   dialog; it isn't yet wired as a `bundle` diagnostic before publish.
+5. ~~Dialog~~ **Done, but simplified further than planned**: per the user's call (2026-11-21),
+   the hosted flow replaced the dev Metro lane in the UI entirely for now, rather than gating by
+   environment -- `components/workspace/expo-qr.tsx`'s dialog always shows "Build for phone" /
+   "Rebuild" (with a "stale" hint when `projects.current_version` has moved since the last ready
+   build), polling `app/api/projects/[projectId]/device-build` for status. Phase 10's Metro lane
+   code (`lib/device/lane.ts`, its route, `scripts/device-preview.ts`) is untouched and still
+   used by that script -- just no longer reachable from this dialog. Re-introducing an
+   environment gate (dev keeps live-reload Metro, hosted/prod gets this) is still the
+   longer-term intent once this is confirmed solid; revisit before shipping.
 
-**Alternatives considered.** Expo Snack (`snack-sdk`): fastest to ship and needs no
-infrastructure, but depends on Expo's service and Snack's supported SDKs, and isn't Metro. Use
-it only as a stopgap. Per-session cloud sandbox running Metro behind a public URL: keeps live
-reload, but it's the most expensive option and has the most moving parts.
+**POC result (2026-11-20): the "check first" passes — Expo Go 58 opens a manifest and bundle
+served as static files, with no Metro running.** `scripts/hosted-manifest-poc.ts`
+(`npm run poc:hosted-manifest -- <projectId>`) proxies a real phone's Expo Go session to Metro
+while recording every response, then kills Metro and replays only the recorded responses. On a
+Samsung S23 (Android 16), StepDown opened from replay: manifest, `/status` and the bundle were
+all served from the recording. Expo Go's manifest is just JSON pointing at a bundle URL
+(`@expo/cli` `ExpoGoManifestHandlerMiddleware`); nothing requires Metro to be the server.
+Constraints the real manifest route must follow:
+- `launchAsset.url` (and `hostUri`/`debuggerHost`) must use the public host and port. Metro
+  writes its own port into them, so a bundle URL pointing at an internal port fails.
+- Every manifest response needs a fresh `id` and `createdAt`. Expo Go stores manifests in
+  SQLite with `UNIQUE(scope_key, commit_time)` and crashes
+  (`SQLiteConstraintException ... updates.scope_key, updates.commit_time`) when it sees the
+  same manifest twice.
+- A dev bundle (`dev=true`) keeps retrying live connections to `/message`, `/hot` and
+  `/inspector/*`. They fail harmlessly, but a production bundle (`dev=false`, no
+  `extra.expoGo` developer section) should avoid them. That variant is **not yet tested**.
+**Follow-up POC (same day): a production bundle (`expo start --no-dev --minify`) with a real
+image/font asset also replays correctly with Metro dead.** Pantry Pal (has real images and
+`@expo-google-fonts`) opened from replay with its font asset served statically
+(`GET /assets/?unstable_path=...&hash=...`, matched verbatim by the recorder). The earlier
+`/message`/`/hot`/`/inspector/*` retries are gone with `--no-dev`: they turned out to come from
+dev-only client code bundled into the JS itself (HMR client, dev menu), not from the manifest's
+`hostUri`/`expoGo` fields as first guessed -- a `--no-dev` bundle simply doesn't include that
+code, so there's nothing left to retry. Still not covered: a project exercised across more than
+one screen/asset in one recording (only one asset request happened to fire in this run) --
+worth a wider pass before building the queue and S3 parts, but nothing so far suggests a
+different outcome.
+
+An earlier check from web sources ("self-hosted manifests don't work in Expo Go") was wrong.
+Those sources described OTA updates inside built apps, not Expo Go opening a URL. Snack was also
+ruled out as a fallback: its source (`expo/snack` `snack-content/src/sdks/types.ts`) supports
+SDKs 50–56 only.
+
+**Alternatives considered and ruled out (2026-11-21), before settling on the above as free and
+multi-tenant-safe.** A paid per-session cloud sandbox running Metro (Fly.io/Modal/E2B-style)
+keeps live reload but bills per active previewer and was ruled out as unnecessary cost. Tunneling
+Phase 10's existing single shared Metro lane (Cloudflare Tunnel/ngrok instead of a LAN address)
+is free but serializes on "one Metro at a time" -- ruled out because two users previewing two
+different projects at once must both work. Downgrading the generated app's own SDK to one Snack
+supports (≤56) was considered and rejected: the App Store's Expo Go only runs the single latest
+SDK (58), so a downgraded project would hit the same "can't open in the plain store app" wall
+Snack was meant to solve, while losing every SDK-58-only piece already in the templates
+(`expo-glass-effect`, `expo-symbols`, RN 0.88, React 19.3).
+
+**Real implementation, verified end-to-end before any UI testing (2026-11-21).** A standalone
+script ran `startDeviceBuild` directly against a real project (Pantry Pal, has real images/fonts),
+waited for `"ready"`, then called `buildDeviceManifest` for both platforms and fetched the
+resulting presigned S3 URLs: the exported `.hbc` bundle (3 MB) and a real font asset (975 KB) both
+downloaded successfully. One bug caught and fixed in the process: `expo export`'s `--output-dir`
+argument needs manual quoting on Windows when `spawn` is run with `shell: true`, since this
+repo's own path (`...AI App Builder Copy...`) contains a space that `shell: true` doesn't quote
+for you.
+
+**Real phone testing (2026-11-21) found three more bugs, all fixed, two confirmed without
+needing another phone round-trip:**
+1. **`org.json.JSONException: No value for sdkVersion`.** Metro computes `sdkVersion` into a dev
+   manifest via `@expo/config`'s full resolution; a hand-written manifest built from the
+   project's raw `app.json` doesn't have it. Fixed in `lib/device/manifest.ts` by setting it from
+   a new `SDK_VERSION` constant (`lib/device/export.ts`). Since the manifest route reads
+   `app.json` fresh from S3 on every request, this fix applied to an *already-built* project
+   without a rebuild -- confirmed by re-generating its manifest directly and checking the field.
+2. **Icons/fonts silently missing, no error.** The Expo Updates protocol's `assets[]` (and
+   `launchAsset`) entries need a base64url SHA-256 `hash` for integrity verification -- marked
+   optional in the spec text, but Expo Go's real client evidently drops an asset it can't verify
+   rather than erroring, which read as "the app works, icons just don't show." Fixed: `build.ts`
+   now hashes every file at build time (the bytes are already in hand for upload) into a small
+   `hashes.json` uploaded alongside; `manifest.ts` attaches each one. This one *does* need a
+   rebuild (the hash has to be computed from the actual stored bytes) -- not yet re-confirmed on
+   a real device.
+3. **`This project was published with a precompiled Hermes bytecode bundle. Expo Go runs plain
+   JavaScript bundles, so it can't load this update.`** `expo export` defaults to Hermes
+   bytecode (`.hbc`) output, which is what a real compiled app wants but Expo Go's update loader
+   refuses outright. Fixed by adding `--no-bytecode` to the export command. Also needs a rebuild.
+   Confirmed directly: rebuilt StepDown, fetched the new bundle, and checked it's plain JS text
+   (`var __BUNDLE_START_TIME__...`) rather than a binary `.hbc` file, with both hashes present.
+
+4. **"Scanned StepDown, saw StepDown's name, then Pantry Pal's UI"**, and later **the bytecode
+   error persisting after the `--no-bytecode` rebuild**, had one cause: the manifest's
+   `launchAsset.key` was Metro's fixed `"bundle"`. Expo Go caches downloaded assets by key and
+   skips the download when it already has that key, so it kept running the first bundle it had
+   fetched under `"bundle"` (Pantry Pal's old bytecode build) for every project. The stored
+   bundles were always correct (checked by fetching both from S3). Fixed: the key is now the
+   bundle's content-hashed filename stem (`entry-<hash>`), so a new build or another project
+   always gets a new key.
+
+5. **Icons still blank after the hash fix.** Compared field by field with Expo's reference server
+   (`common/helpers.ts` `getAssetMetadataAsync`): keys already matched (MD5 of the file bytes,
+   which is also `expo export`'s asset filename), but each asset was missing `fileExtension`
+   (`.ttf`, `.png`). Added. Probable mechanism: the client saves the download as key +
+   extension, and a font file without `.ttf` doesn't load. Since keys didn't change, a phone that
+   already cached the extension-less files may keep them until Expo Go's storage is cleared.
+
+**Confirmed on a real device (2026-11-21):** after clearing Expo Go's storage, StepDown opened
+from the hosted build with icons showing, no Metro running.
+
+Not yet confirmed on a real device: Pantry Pal with the same fixes (both projects rebuilt with them and
+checked directly: plain-JS bundles, distinct keys, every asset hashed), and asset/screen coverage
+wider than what these two projects' screens exercised.
 
 **Done when.** From the deployed app, a user on mobile data scans the QR and the app opens;
 a deliberately broken project shows a readable bundle error instead of a QR.

@@ -23,6 +23,9 @@ export const DEVICE_ROOT = path.join(process.cwd(), ".device")
 export const SDK_DEPS_DIR = path.join(DEVICE_ROOT, "_deps", "sdk-58")
 /** scripts/device-preview.ts always starts Metro on this port, so the bundle gate and the QR dialog can both assume it without asking the running process. */
 export const METRO_PORT = 8081
+/** Matches templates.ts's pinned `expo: "~58.0.25"`. Metro computes both of these for a dev manifest via @expo/config's full resolution; a hosted build's hand-written manifest (lib/device/manifest.ts) has to set them itself since it only has the project's raw app.json. */
+export const SDK_VERSION = "58.0.0"
+export const SDK_RUNTIME_VERSION = `exposdk:${SDK_VERSION}`
 
 export class DeviceDepsMissingError extends Error {
   constructor() {

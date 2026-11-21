@@ -360,46 +360,56 @@ you can restore forward again later."
 ## 7. Real-device preview (QR to Expo Go)
 
 **What it does**: instead of only viewing the app in the browser preview, you can
-scan a QR code with Expo Go on a real phone and see the actual app running via a
-real Metro bundler process.
+scan a QR code (or paste a link into Expo Go's "Enter URL manually") and see the
+actual app running on a real phone — built once on the server and served as plain
+files, not a locally-running Metro process the phone has to be on the same Wi-Fi to
+reach.
 
 **The flow**:
 
 ```mermaid
 flowchart TD
-    A["You click 'Preview on phone'"] --> B["Server writes your project's\nfiles out as a REAL Expo project\non disk"]
-    B --> C["Starts a real Expo/Metro\nserver process for it"]
-    C --> D["Generates a QR code\nfrom the server's network address"]
-    D --> E["You scan it with\nExpo Go on your phone"]
-    E --> F["Your phone downloads and\nruns the actual app —\nnot a simulation"]
+    A["You click 'Build for phone'"] --> B["Server writes your project's\nfiles out as a REAL Expo project\non disk"]
+    B --> C["Runs 'expo export':\na real production bundle,\nnot a dev server"]
+    C --> D["Uploads the bundle + assets\nto S3"]
+    D --> E["QR encodes a link to this\nproject's public manifest route"]
+    E --> F["You scan it (or paste it) in\nExpo Go on your phone"]
+    F --> G["Expo Go downloads the manifest,\nthen the bundle/assets from S3,\nand runs the actual app"]
 ```
 
 **Step by step, in plain English**:
 
-1. You ask to preview on a real device.
+1. You ask to build the app for your phone.
 2. The server takes your project's files (the same ones used in the browser preview) and writes them out as a genuine, real Expo project on disk.
-3. It starts an actual Expo/Metro bundler process for that project — the same tool a real Expo developer would run locally.
-4. A QR code is generated, built from the server's own network address.
-5. You scan that QR code with the Expo Go app on your phone (you both need to be on the same Wi-Fi network right now).
-6. Your phone connects to that Metro server and runs your actual app for real — not a browser simulation.
+3. It runs `expo export` for that project — the same command a real Expo developer would run to produce a shippable bundle — and uploads every file it produces (plus the project's `app.json`) to S3.
+4. The QR / link doesn't point at a Metro server at all; it points at this project's own manifest endpoint on this app's own server.
+5. You open that link in Expo Go (same Wi-Fi isn't required once this is actually deployed — only while testing against a local dev server).
+6. Expo Go fetches the manifest, which hands back pre-signed S3 links for the bundle and every asset; it downloads those and runs your actual app, same as it would for any published app.
+
+Each project builds independently (its own S3 prefix, its own manifest route), so two people
+can build and preview two different projects at the same time — unlike the Metro lane below,
+which can only run one project's bundler at once. The tradeoff: no hot reload. After an edit,
+you press "Rebuild", then have to force-close and reopen the app on the phone to pick it up —
+Expo Go only re-fetches the manifest on a fresh launch, not while already running.
 
 **Files involved**:
 
 | File | Role |
 |---|---|
 | `lib/device/export.ts` | `exportExpoProject` — writes a project's files out as a real Expo project under `.device/<id>/` |
-| `lib/device/lane.ts` | Manages a local Metro/`expo start` child process per project, start/stop/restart, status polling |
-| `scripts/device-preview.ts` | CLI entry point for the local Metro lane |
-| `scripts/device-deps.ts` | Installs shared Expo SDK deps needed to run a lane |
-| `app/api/projects/[projectId]/device/route.ts` | `GET`/`POST`/`DELETE` — dev-only status/start/stop for a project's device lane |
-| `components/workspace/expo-qr.tsx` | Renders the QR code (built from the server's LAN IP) that Expo Go scans |
+| `lib/device/build.ts` | Runs `expo export` and uploads its output to S3; tracks status in the `device_builds` table |
+| `lib/device/manifest.ts` | Builds the Expo Updates protocol manifest (presigned S3 URLs) a ready build serves to Expo Go |
+| `app/api/projects/[projectId]/device-build/route.ts` | `GET`/`POST` — authenticated status/start for a project's build |
+| `app/api/device/[projectId]/manifest/route.ts` | **Public, unauthenticated** — what Expo Go actually fetches |
+| `components/workspace/expo-qr.tsx` | The "Test on your phone" dialog: triggers a build, polls its status, renders the QR for the ready manifest URL |
 
-**How to explain it to someone technical**: "This is the same project files as the
-browser preview, just exported to disk and run through a real Expo/Metro process
-instead of the sandboxed iframe runtime, so you get a QR code you can scan with the
-actual Expo Go app. It currently requires being on the same Wi-Fi as the dev machine;
-a hosted, no-shared-network version is planned but not built yet (would use
-`expo export` + S3 + a self-hosted updates manifest)."
+**Still around, not currently reachable from the dialog**: `lib/device/lane.ts` (a local
+Metro/`expo start` child process per project), `scripts/device-preview.ts` (its CLI entry
+point), and `app/api/projects/[projectId]/device/route.ts` (dev-only status/start/stop for it).
+This was the original mechanism — same Wi-Fi, live Metro, instant reload — and is the intended
+fast dev-loop path long-term; the hosted flow above currently stands in for it everywhere while
+it's being proven out. See `docs/verified-code-plan.md` Phase 10b for the full history
+(including why Snack and a shared-Metro tunnel were ruled out) and what's still open.
 
 ---
 
