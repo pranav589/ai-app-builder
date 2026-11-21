@@ -1,27 +1,56 @@
 # API Reference
 
-Every route under `app/api/**`, with sample request/response payloads taken from
-the actual handler code. Keep this doc in sync with the code — see the "Keeping
-docs in sync" section in [`CLAUDE.md`](../CLAUDE.md).
+All REST endpoints hosted by the Express 5 backend under `/api/**` (at `http://localhost:4000` locally). The URL paths and contracts are identical to the original routes, ensuring client compatibility while preparing for future mobile clients. Keep this doc in sync with the code — see the "Keeping docs in sync" section in [`CLAUDE.md`](../CLAUDE.md).
 
 An interactive version of this doc was also published as a Claude Artifact.
 
 ## Cross-cutting conventions
 
-- **Auth**: almost every route calls `getCurrentUser()` (or `requireOwnedProject`,
-  which also checks the project's `userId`) → `401` if signed out, `404` if the
-  project doesn't exist or isn't owned by the caller, `503` if the auth/DB backend
-  is unreachable (`ServiceUnavailableError`).
-- **CSRF guard**: most mutating routes call `isSameOriginJson` / `isSameOrigin`
-  first → `400 {"error":"Bad request"}` or `403 {"error":"Forbidden."}` if not.
-- **Error shape**: JSON error responses are `{"error": string}`, occasionally with
-  extra fields (`fieldErrors`, `extraFiles`, `reconnect`).
-- **Project-scoped routes** (`/api/projects/[projectId]/**`) all repeat the same
-  ownership check boilerplate against the `projects` table before doing anything else.
+- **Base URL**: `http://localhost:4000` (or `process.env.NEXT_PUBLIC_API_URL` on the frontend).
+- **Auth**: Authenticated routes require user session via `ch_session` cookie or `Authorization: Bearer <token>` (supported for future mobile clients). Handled by `backend/src/middleware/auth.ts`. Returns `401` if signed out, `404` if project doesn't exist or isn't owned by the user, and `503` if database is unreachable.
+- **CSRF guard**: Mutating routes validate request origin / content type headers.
+- **Error shape**: JSON error responses are `{"error": string}`, optionally with extra fields (`fieldErrors`, `extraFiles`, `reconnect`).
+- **Layered Architecture**: Express Router (`backend/src/routes/*`) -> Controller (`backend/src/controllers/*`) -> Domain Services (`backend/src/services/*`) -> Database (`backend/db/*`). Controllers never touch the DB directly.
 
 ---
 
 ## Projects
+
+### `GET /api/projects/:projectId/workspace`
+Assembles all project data required for workspace SSR loading and initial hydration (project details, initial message history, signed asset URLs, backend info, feature flags).
+
+- **Auth**: required (401 if signed out, 404 if not found/unauthorized)
+- **Request**: none
+
+**Response 200**
+```json
+{
+  "project": {
+    "id": "proj-1700000000000-a1b2c3",
+    "name": "Recipe Tracker",
+    "prompt": "Build a recipe tracker app",
+    "status": "ready",
+    "createdAt": "2026-11-10T12:00:00.000Z",
+    "themeColor": "#8b5cf6",
+    "previewScreens": { "v": 2, "screens": ["..."] },
+    "isPublic": false,
+    "publicSlug": null
+  },
+  "initialMessages": [],
+  "signedAssetUrls": {},
+  "hasCloudhike": true,
+  "hasBackend": false,
+  "backendInfo": null,
+  "hasGitHub": false,
+  "hasExpo": false,
+  "flags": {
+    "enableCustomDomain": false,
+    "enableCustomCode": true
+  }
+}
+```
+
+---
 
 ### `GET /api/projects`
 List the current user's projects.

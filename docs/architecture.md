@@ -21,15 +21,21 @@ as a Claude Artifact.
 
 ```mermaid
 flowchart LR
-    subgraph Browser
+    subgraph Frontend["Frontend (frontend/ :3000)"]
         UI["Workspace UI\n(components/workspace/**)"]
         Runtime["AppRuntimeProvider\n(Sucrase compile + iframes)"]
+        ServerAPI["SSR Server Fetch\n(lib/server-api.ts)"]
     end
 
-    subgraph Server["Next.js server (app/**)"]
-        API["API routes\napp/api/**"]
-        Agent["Agent orchestrator\nlib/agent/**"]
-        Verify["Verified-code gateway\nlib/verify/**"]
+    subgraph Backend["Backend Express Service (backend/ :4000)"]
+        Router["Express Routers\n(src/routes/**)"]
+        Controller["Controllers\n(src/controllers/**)"]
+        Services["Domain Services\n(src/services/**)"]
+        Verify["Verified-code gateway\n(src/services/verify/**)"]
+    end
+
+    subgraph Shared["Shared Pure TS (@app/shared)"]
+        Types["API & App Types\n(shared/api-types.ts, manifest, verify)"]
     end
 
     subgraph External
@@ -37,16 +43,17 @@ flowchart LR
         CloudHike["CloudHike\n(Auth, Jobs queue, Storage, hosted Postgres)"]
     end
 
-    DB[("Postgres\ndb/schema.ts")]
+    DB[("Postgres\nbackend/db/schema.ts")]
 
-    UI -- "HTTP / SSE" --> API
-    API --> Agent
-    Agent -- "ChangeSet" --> Verify
+    UI -- "HTTP / SSE" --> Router
+    ServerAPI -- "HTTP (forwarding cookies)" --> Router
+    Router --> Controller
+    Controller --> Services
+    Services --> Verify
     Verify -- "parse/policy/typecheck/render gates" --> Verify
-    Agent <--> AIModel
-    Agent <--> CloudHike
-    API <--> DB
-    Agent --> DB
+    Services <--> AIModel
+    Services <--> CloudHike
+    Services <--> DB
     UI --> Runtime
     Runtime -- "postMessage" --> Frames["Sandboxed iframes\nrunning preview-runtime/"]
 ```
@@ -55,8 +62,12 @@ The core idea: **the AI never writes code directly into the project.** Every cha
 whether from a chat message, a plan approval, or a tap-to-edit on the canvas — is
 expressed as a `ChangeSet` and pushed through a verification pipeline (parse → policy
 → typecheck → render) with bounded automatic repair before it is committed as a new
-version. This is the "verified code engine," the active focus of current development
-(see §5).
+version.
+
+The architecture is cleanly separated into three npm workspaces:
+- `frontend`: Pure Next.js UI layer (App Router), zero direct DB access. Client components communicate via `apiClient` (`NEXT_PUBLIC_API_URL`), and SSR pages fetch via `lib/server-api.ts`. `frontend/next.config.ts` also rewrites same-origin `/api/*` to the backend (`BACKEND_INTERNAL_URL`), so OAuth callbacks, webhooks, app-files URLs and the ZIP download keep working at the frontend's address.
+- `backend`: Standalone Express 5 REST API running on port 4000 with a strict layered structure: `routes` → `controllers` → `services` → `db`.
+- `shared`: Pure TypeScript code shared between frontend and backend without Node, React, or database dependencies.
 
 ---
 
@@ -64,19 +75,20 @@ version. This is the "verified code engine," the active focus of current develop
 
 | Subsystem | Location | Responsibility |
 |---|---|---|
-| Workspace UI | `components/workspace/**` | Chat, Canvas, Preview, Code, Changes, Versions panes |
-| Client API & Query Layer | `lib/api-client.ts`, `components/query-provider.tsx` | React Query + Axios client for all client component data queries and mutations |
-| Agent orchestrator | `lib/agent/**` | Planning, screen/theme/data generation, run lifecycle, SSE streaming |
-| Verified-code gateway | `lib/verify/**` | `ChangeSet` application, gates, bounded repair, commit |
-| App manifest | `lib/manifest/**` | Zod-validated structural model (screens/nav/collections) compiled deterministically into layout/nav/type files |
-| Platform kit | `lib/app-project/kit.ts` | Typed component vocabulary (`@/kit`) the AI is restricted to |
-| Preview runtime | `preview-runtime/` + `lib/preview/**` | Sandboxed iframe runtime: file-based router, RN/Expo shims, element inspector |
-| Device preview | `lib/device/**` | Exports a project as a real Expo project, runs a local Metro lane, QR-to-Expo-Go |
-| Project Export (ZIP & GitHub) | `lib/github/**`, `lib/app-project/zip-export.ts` | Exports runnable Expo project as ZIP or pushes directly to GitHub with real-time SSE progress |
-| Backend integration | `lib/cloudhike/**`, `lib/backend/**` | Connects a project to a real CloudHike-hosted Postgres/Auth/Storage backend |
-| Versioning | `lib/versions/**` | Snapshot store, diffing, restore |
-| Jobs | `lib/jobs/**` | Cloudhike Jobs HTTP queue client; routes agent runs to a worker or runs inline in dev |
-| Persistence | `db/**` | Drizzle schema + hand-applied SQL for non-drizzle-managed tables |
+| Workspace UI | `frontend/components/workspace/**` | Chat, Canvas, Preview, Code, Changes, Versions panes |
+| Client API & Query Layer | `frontend/lib/api-client.ts`, `frontend/components/query-provider.tsx` | React Query + Axios client for all client component data queries and mutations |
+| Express API & Routing | `backend/src/routes/**`, `backend/src/controllers/**` | REST endpoints, authentication middleware, request validation, error formatting |
+| Agent orchestrator | `backend/src/services/agent/**` | Planning, screen/theme/data generation, run lifecycle, SSE streaming |
+| Verified-code gateway | `backend/src/services/verify/**` | `ChangeSet` application, gates, bounded repair, commit |
+| App manifest | `shared/manifest/**` | Zod-validated structural model (screens/nav/collections) compiled deterministically into layout/nav/type files |
+| Platform kit | `backend/src/services/app-project/kit.ts` | Typed component vocabulary (`@/kit`) the AI is restricted to |
+| Preview runtime | `frontend/preview-runtime/` + `shared/preview/**` | Sandboxed iframe runtime: file-based router, RN/Expo shims, element inspector |
+| Device preview | `backend/src/services/device/**` | Exports a project as a real Expo project, runs a local Metro lane, QR-to-Expo-Go |
+| Project Export (ZIP & GitHub) | `backend/src/services/github/**`, `backend/src/services/app-project/zip-export.ts` | Exports runnable Expo project as ZIP or pushes directly to GitHub with real-time SSE progress |
+| Backend integration | `backend/src/services/cloudhike/**`, `frontend/lib/backend/**` | Connects a project to a real CloudHike-hosted Postgres/Auth/Storage backend |
+| Versioning | `backend/src/services/versions/**` | Snapshot store, diffing, restore |
+| Jobs | `backend/src/services/jobs/**` | Cloudhike Jobs HTTP queue client; routes agent runs to a worker or runs inline in dev |
+| Persistence | `backend/db/**` | Drizzle schema + hand-applied SQL for non-drizzle-managed tables |
 
 ---
 

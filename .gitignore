@@ -1,5 +1,5 @@
 # dependencies
-/node_modules
+node_modules/
 /.pnp
 .pnp.js
 
@@ -7,11 +7,12 @@
 /coverage
 
 # next.js
-/.next/
+.next/
 /out/
 
 # production
 /build
+backend/dist/
 
 # debug
 npm-debug.log*
@@ -25,6 +26,8 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+backend/.env
+frontend/.env.local
 
 # vercel
 .vercel
@@ -34,7 +37,8 @@ yarn-error.log*
 next-env.d.ts
 
 # built by scripts/build-preview.mjs
-/public/preview/
+public/preview/
+frontend/public/preview/
 
 # junction into .agents/skills/ (same files; avoid a duplicate copy in git)
 /.claude/skills/
@@ -45,14 +49,17 @@ next-env.d.ts
 /streams.txt
 
 # full eval logs (scripts/eval.ts); eval/fixtures/ is committed
-/eval/runs/*
-!/eval/runs/.gitkeep
+/backend/eval/runs/*
+!/backend/eval/runs/.gitkeep
 
 # vendored type packages (npm run typebundle:install); package.json + lock are committed
-/vendor/type-bundle/node_modules
+/backend/vendor/type-bundle/node_modules
 
 # local device-preview exports and the shared Expo SDK deps they link to (npm run device:deps / device)
 /.device
 
 image-library.csv
 scripts/data
+
+# local Claude Code settings
+/.claude/settings.local.json

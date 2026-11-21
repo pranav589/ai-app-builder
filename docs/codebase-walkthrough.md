@@ -7,6 +7,14 @@ go deeper) the exact files involved and their roles. Read
 [`architecture.md`](./architecture.md) first for the big-picture subsystem map; this
 doc is the "zoom in on each piece, in plain language" version.
 
+> **Note on Monorepo Workspace Layout**:
+> The codebase is split into three npm workspaces:
+> - `frontend/`: Next.js 16 UI layer (`frontend/app/**`, `frontend/components/**`, `frontend/hooks/**`).
+> - `backend/`: Express 5 REST API (`backend/src/routes/**`, `backend/src/controllers/**`, `backend/src/services/**`, `backend/db/**`).
+> - `shared/`: Pure TypeScript logic and types (`@app/shared`).
+>
+> All HTTP routes previously under `app/api/**` are now hosted on the Express backend (`backend/src/routes/**` and `backend/src/controllers/**`) with the same `/api/...` URL paths.
+
 An interactive version with the same structure (diagrams, step-by-step, collapsible
 file lists per feature) was also published as a Claude Artifact.
 

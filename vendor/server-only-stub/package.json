@@ -1,6 +1,0 @@
-{
-  "name": "server-only",
-  "version": "0.0.1",
-  "description": "No-op override of the real `server-only` package, for scripts run with tsx outside Next.js (see package.json \"overrides\"). Next.js ignores an installed package's content for this import anyway: its webpack config substitutes its own compiled version based on the bundling layer, so this has no effect on `next dev`/`next build`.",
-  "main": "index.js"
-}
