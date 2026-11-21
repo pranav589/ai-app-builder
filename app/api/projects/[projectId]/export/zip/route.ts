@@ -13,7 +13,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ project
 
   const doc = readAppDoc(owned.project.previewScreens)
   const { files } = workspaceFromDoc(doc)
-  const exportFiles = buildExportFileMap(owned.project.name, files)
+  const exportFiles = await buildExportFileMap(projectId, owned.project.name, files, { selfHost: true })
   const zip = await zipFileMap(exportFiles)
 
   const filename = `${slug(owned.project.name)}.zip`

@@ -24,7 +24,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ project
 
   const doc = readAppDoc(owned.project.previewScreens)
   const { files } = workspaceFromDoc(doc)
-  const exportFiles = buildExportFileMap(owned.project.name, files)
+  const exportFiles = await buildExportFileMap(projectId, owned.project.name, files, { selfHost: true })
   const fileCount = Object.keys(exportFiles).length
   const isFirstPush = !link
   const suggestedMessage = defaultCommitMessage(fileCount, owned.project.name, isFirstPush)

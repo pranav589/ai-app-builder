@@ -422,7 +422,9 @@ Disconnect the backend (keeps the actual CloudHike project/data intact).
 ---
 
 ### `POST /api/projects/[projectId]/backend/data`
-Generic data-access endpoint the *generated app* calls at runtime (op-based RPC).
+Generic data-access endpoint the *builder's own preview* calls at runtime (op-based RPC).
+Requires the creator's session (same-origin JSON). Built apps (APK, Expo Go, web deploy,
+exports) use `POST /api/app-runtime/[projectId]/data` below instead.
 End-user auth for the generated app travels via the `x-app-session` header.
 
 - **Request body**: `{ op, collection?, id?, ...op-specific fields }`
@@ -457,7 +459,44 @@ End-user auth for the generated app travels via the `x-app-session` header.
 Other cases: `400` unknown op, `409` app not connected to CloudHike.
 
 **Notes**: `snapshot` op batches multiple reads (`collections[]`, `settings`,
-`auth.current`, `version`) into one response.
+`auth.current`, `version`) into one response. `init` (creator only) creates/updates the
+database tables for the app's data model. Every other op is run by the dispatcher in
+`lib/cloudhike/app-ops.ts`, shared with the public route below.
+
+---
+
+### `POST /api/app-runtime/[projectId]/data`
+The data, auth and storage calls of a **built app** (APK, Expo Go preview, web deploy,
+ZIP/GitHub export). Same op-based RPC as the route above, but it's public and cross-origin
+(`Access-Control-Allow-Origin: *`, `OPTIONS` preflight answered with 204): nothing is
+authorized by cookies. The caller proves itself with the project's app key.
+
+- **Auth**: header `x-app-key` must equal the key stored for the project (`app_backends.app_key`,
+  minted the first time a connected project is built or exported). End users add
+  `x-app-session` (their CloudHike Auth token) as usual.
+- **Ops**: same as above except `init` (rejected as an unknown operation; schema setup stays
+  creator-only).
+- **Limits**: only collections the app's data model declares (`404 Unknown collection.` on
+  others; a `snapshot` returns `[]` for them); 240 requests/minute per project and caller IP (`429`).
+
+**Sample request**
+```http
+POST /api/app-runtime/p_123/data
+x-app-key: <app key>
+x-app-session: <end-user token, optional>
+content-type: application/json
+
+{ "op": "snapshot", "collections": ["recipes"] }
+```
+
+**Response 200**
+```json
+{ "result": { "collections": { "recipes": [] }, "settings": {}, "user": null, "version": 12 } }
+```
+
+**Errors**: `403` missing/wrong key or app not connected (disconnecting the backend deletes the
+row, which revokes the key), `404` unknown collection, `429` rate limited, `503` database waking
+up. Responses never include internal error details.
 
 ---
 
@@ -559,6 +598,12 @@ Download the full project as a standalone, runnable Expo project in a `.zip` arc
   - `Content-Type: application/zip`
   - `Content-Disposition: attachment; filename="<project-slug>.zip"`
   - `Cache-Control: no-store`
+- **Connected apps**: if the project's CloudHike backend is connected, `lib/backend/index.ts` is the
+  one that calls `/api/app-runtime/[projectId]/data` (with `lib/backend/config.ts` holding the endpoint
+  and app key), and the zip also contains `server/` (a self-host server), `server/.env.example`,
+  `.env.example` and a README section with step-by-step instructions for running either way.
+  Not connected: unchanged (on-device storage). `GET/POST /api/projects/[projectId]/github*` export the
+  same file set.
 
 ---
 

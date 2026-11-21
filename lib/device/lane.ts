@@ -13,10 +13,11 @@
 import "server-only"
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
 import fs from "node:fs"
-import os from "node:os"
 import path from "node:path"
 
+import { withBackend } from "@/lib/app-project/with-backend"
 import { DEVICE_ROOT, exportExpoProject, METRO_PORT, readDeviceLaneState } from "@/lib/device/export"
+import { lanIPv4Stable } from "@/lib/device/lan"
 import type { FileMap } from "@/lib/verify/types"
 
 export type DeviceLaneStatus = {
@@ -32,14 +33,6 @@ const g = globalThis as unknown as {
   __deviceLane?: Lane | null
   __deviceLaneFailure?: { projectId: string; message: string } | null
   __deviceLaneExitHook?: boolean
-}
-
-/** The machine's own LAN address, not Metro's idea of one: a phone on the same Wi-Fi reaches the computer at this address, whatever host Metro thinks it's bound to. */
-export function lanIPv4(): string | null {
-  for (const ifaces of Object.values(os.networkInterfaces())) {
-    for (const i of ifaces ?? []) if (i.family === "IPv4" && !i.internal) return i.address
-  }
-  return null
 }
 
 export class MetroPortBusyError extends Error {
@@ -127,7 +120,8 @@ export async function startDeviceLane(projectId: string, files: FileMap): Promis
   if (await portIsTaken()) throw new MetroPortBusyError()
   g.__deviceLaneFailure = null
 
-  const outDir = exportExpoProject(projectId, files)
+  const { files: appFiles } = await withBackend(projectId, files)
+  const outDir = exportExpoProject(projectId, appFiles)
 
   // Outside the export dir (so Metro's file watcher never sees it), and
   // truncated only here, while nothing is writing to it (POC lesson: never
@@ -148,7 +142,7 @@ export async function startDeviceLane(projectId: string, files: FileMap): Promis
   })
   fs.closeSync(logFd) // the child holds its own handle
 
-  const url = `exp://${lanIPv4() ?? "localhost"}:${METRO_PORT}`
+  const url = `exp://${(await lanIPv4Stable()) ?? "localhost"}:${METRO_PORT}`
   const lane: Lane = { projectId, url, child, logPath }
   g.__deviceLane = lane
 

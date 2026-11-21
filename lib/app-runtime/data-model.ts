@@ -5,34 +5,9 @@
 
 import { isImageLibraryCategory } from "@/lib/image-library/categories"
 
-export type FieldType = "string" | "text" | "number" | "boolean" | "date" | "image" | "enum"
+import type { DataCollection, DataField, DataModel, FieldType } from "./data-model-types"
 
-export type DataField = {
-  name: string
-  type: FieldType
-  label?: string
-  options?: string[]
-}
-
-export type DataCollection = {
-  /** camelCase or kebab identifier used in data-list="..." etc. */
-  name: string
-  label: string
-  fields: DataField[]
-  seed: Record<string, unknown>[]
-  /** Closest match from IMAGE_LIBRARY_CATEGORIES, when this collection has an "image" field; hard-filters its seed image lookup. Omitted when nothing fits. */
-  category?: string
-}
-
-export type DataModel = {
-  collections: DataCollection[]
-  /** Initial values for data-setting="..." toggles and inputs. */
-  settings: Record<string, unknown>
-  /** The signed-in person shown on profile screens before real auth exists. */
-  user: { name: string; email: string; avatar?: string }
-  /** Hash of the plan parts the model was made from. A change reseeds local data. */
-  hash: string
-}
+export type { DataCollection, DataField, DataModel, FieldType }
 
 const FIELD_TYPES: FieldType[] = ["string", "text", "number", "boolean", "date", "image", "enum"]
 const ident = (s: unknown) =>

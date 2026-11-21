@@ -45,7 +45,7 @@ export async function runWebDeploy(opts: RunWebDeployOptions): Promise<void> {
 
     const identity = await ensureAppIdentity(projectId, appJsonText)
 
-    const exportFiles = buildExportFileMap(projectName, files)
+    const exportFiles = await buildExportFileMap(projectId, projectName, files)
     exportFiles["app.json"] = patchAppJsonForWebDeploy(
       exportFiles["app.json"] || appJsonText,
       identity

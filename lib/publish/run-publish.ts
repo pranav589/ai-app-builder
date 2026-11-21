@@ -57,7 +57,7 @@ export async function publishBuild(opts: PublishBuildOptions): Promise<void> {
 
     const identity = await ensureAppIdentity(projectId, appJsonText)
 
-    const exportFiles = buildExportFileMap(projectName, files)
+    const exportFiles = await buildExportFileMap(projectId, projectName, files)
     exportFiles["app.json"] = patchAppJsonForPublish(
       exportFiles["app.json"] || appJsonText,
       identity,

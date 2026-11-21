@@ -36,6 +36,13 @@
       "when": 1795199975546,
       "tag": "0004_zippy_vanisher",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795244108712,
+      "tag": "0005_red_the_captain",
+      "breakpoints": true
     }
   ]
 }

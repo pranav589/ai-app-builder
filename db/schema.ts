@@ -180,6 +180,8 @@ export const appBackends = pgTable("app_backends", {
   services: jsonb("services").$type<string[]>().notNull().default([]),
   /** The CloudHike project's environment (.env), encrypted. Server only. */
   envEnc: text("env_enc"),
+  /** Public key built apps send to /api/app-runtime/[projectId]/data. Not a secret (it ships in the app); disconnecting the backend deletes the row, which revokes it. */
+  appKey: text("app_key"),
   /** Data model hash the database tables were last synced to. */
   schemaHash: text("schema_hash"),
   error: text("error"),

@@ -450,7 +450,15 @@ flowchart TD
 | `lib/cloudhike/config.ts` | Parses which CloudHike services are available/configured |
 | `lib/cloudhike/mcp.ts` | Client for CloudHike's MCP server (the protocol used to actually provision resources) |
 | `lib/cloudhike/provision.ts` | A dedicated "backend engineer" AI agent — runs its own tagged-reply loop calling CloudHike MCP tools to create a project and deploy services |
-| `lib/cloudhike/app-backend.ts` | Reads/syncs the provisioned backend's schema and env vars back into the app project |
+| `lib/cloudhike/app-backend.ts` | The `app_backends` row: `getBackend`, decrypting the env (`readEnv`/`sealEnv`), and minting the public app key (`ensureAppKey`) |
+| `lib/cloudhike/app-data.ts` | The data plane: Postgres tables/queries, S3 uploads, CloudHike Auth calls, schema sync. No builder-only imports (a copy ships in exports) |
+| `lib/cloudhike/app-ops.ts` | The one `{ op }` dispatcher (list/insert/auth.*/upload/...) shared by the preview route, the public route and the self-host server |
+| `lib/cloudhike/rate-limit.ts` | In-memory per-key rate limiter for the public route |
+| `app/api/app-runtime/[projectId]/data/route.ts` | Public, CORS-enabled route built apps call with their app key |
+| `lib/app-project/with-backend.ts` | At output time (APK, QR preview, web deploy, ZIP, GitHub), swaps the on-device `lib/backend` for the remote one when CloudHike is connected |
+| `lib/app-project/backend-remote.ts` | The generated remote `lib/backend` module (same hooks as the local one, over HTTP) and its `config.ts` |
+| `lib/app-project/self-host.ts` | The `server/` folder shipped in ZIP/GitHub exports (copies `app-data.ts`/`app-ops.ts`) plus `.env.example` files |
+| `lib/app-project/backend-readme.ts` | README section with the step-by-step hosted / self-host instructions |
 | `lib/cloudhike/owner.ts` | Ownership check helper used by backend-related routes |
 | `lib/crypto/secret-box.ts` | Symmetric encryption for stored tokens/secrets |
 | `lib/backend/types.ts` | `AppBackend` — the interface generated app code calls (db/kv/storage/auth) |
@@ -458,7 +466,13 @@ flowchart TD
 | `lib/backend/cloudhike-backend.ts` | Real implementation that talks to a provisioned CloudHike project |
 | `lib/backend/index.ts` | `createBackend` — factory that picks an implementation based on project config |
 | `app/api/projects/[projectId]/backend/route.ts` | Backend status/setup endpoint |
-| `app/api/projects/[projectId]/backend/data/route.ts` | Lets the workspace browse the connected backend's actual data |
+| `app/api/projects/[projectId]/backend/data/route.ts` | The creator-session route the builder's own preview uses for data, auth and storage |
+
+**What a built app does**: the preview talks to the creator-session route. An installed APK, Expo Go preview,
+web deploy or exported project can't hold the database password, so once the backend is connected they get a
+remote `lib/backend` whose calls go to `/api/app-runtime/[id]/data` with a public per-project app key (not
+connected: they keep using on-device storage). A ZIP/GitHub export additionally ships a `server/` the owner can
+run with their own `.env` (see the README the export generates). The key stops working when the backend is disconnected.
 
 **How to explain it to someone technical**: "Generated apps are written against one
 small interface (`AppBackend`), never against CloudHike directly — so the same
@@ -481,7 +495,7 @@ flowchart TD
     A["User clicks 'Download as ZIP' in Export menu"] --> B["Client sends GET /api/projects/[id]/export/zip via apiClient"]
     B --> C["Server validates project ownership"]
     C --> D["workspaceFromDoc extracts project files from AppDoc"]
-    D --> E["buildExportFileMap adds scaffoldFiles(null) + README.md"]
+    D --> E["buildExportFileMap: withBackend swap (if CloudHike connected) + scaffoldFiles(null) + README.md\n(+ server/ and .env.example for a connected app)"]
     E --> F["zipFileMap packages files into Buffer using JSZip"]
     F --> G["Server streams application/zip with attachment header"]
     G --> H["Client receives blob, creates object URL, triggers download"]
@@ -492,7 +506,7 @@ flowchart TD
 | File | Role |
 |---|---|
 | `lib/app-project/scaffold.ts` | Shared scaffold files (`babel.config.js`, generic `metro.config.js`, `.gitignore`, `README.md`) |
-| `lib/app-project/zip-export.ts` | `buildExportFileMap` & `zipFileMap` (JSZip in-memory bundling) |
+| `lib/app-project/zip-export.ts` | `buildExportFileMap` (async: applies `withBackend`; `selfHost` adds the server) & `zipFileMap` (JSZip in-memory bundling) |
 | `app/api/projects/[projectId]/export/zip/route.ts` | GET route returning the generated zip buffer as an attachment |
 | `components/workspace/workspace-header.tsx` | Export dropdown menu item with loading spinner and error handling |
 

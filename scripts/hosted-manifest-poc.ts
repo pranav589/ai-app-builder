@@ -36,7 +36,7 @@ import { eq } from "drizzle-orm"
 import { db, projects } from "@/db"
 import { readAppDoc } from "@/lib/app-runtime/app-doc"
 import { exportExpoProject } from "@/lib/device/export"
-import { lanIPv4 } from "@/lib/device/lane"
+import { lanIPv4 } from "@/lib/device/lan"
 import { workspaceFromDoc } from "@/lib/verify/workspace"
 
 const PUBLIC_PORT = 8081 // what the phone connects to; matches the real device lane's port

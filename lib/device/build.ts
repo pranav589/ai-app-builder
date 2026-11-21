@@ -19,6 +19,7 @@ import { spawn } from "node:child_process"
 import { eq } from "drizzle-orm"
 
 import { db, deviceBuilds } from "@/db"
+import { withBackend } from "@/lib/app-project/with-backend"
 import { exportExpoProject } from "@/lib/device/export"
 import { putObject } from "@/lib/storage"
 import type { FileMap } from "@/lib/verify/types"
@@ -118,7 +119,7 @@ async function runBuild(projectId: string, files: FileMap, currentVersion: numbe
   const outDir = path.join(EXPORT_ROOT, projectId, buildId)
 
   try {
-    const projectDir = exportExpoProject(projectId, files)
+    const projectDir = exportExpoProject(projectId, (await withBackend(projectId, files)).files)
     fs.rmSync(outDir, { force: true, recursive: true })
 
     await runExportCli(projectDir, outDir)

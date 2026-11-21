@@ -242,6 +242,30 @@ Provisioning itself is agentic: `lib/cloudhike/provision.ts` runs a "backend eng
 AI loop that calls CloudHike's MCP tools (create project, deploy services) in a
 tagged-reply protocol similar to the main orchestrator's.
 
+**Built apps (APK, Expo Go preview, web deploy, ZIP/GitHub export) use the same backend.**
+The stored project files always carry the on-device `lib/backend` (local storage). At output
+time `lib/app-project/with-backend.ts` checks whether the project's CloudHike backend is ready
+and, if so, swaps in `lib/app-project/backend-remote.ts`'s version (same hooks, HTTP calls) plus a
+`lib/backend/config.ts` holding the endpoint and a per-project public app key. The swap is applied
+to the output, not stored, because the stored files are regenerated on every plan change and a
+disconnect must be able to revoke the key. A device bundle can't hold database credentials, so
+those calls go to a server that does:
+
+```mermaid
+flowchart LR
+    App["Built app\n(lib/backend, remote variant)"] -->|"POST { op } + x-app-key"| Hosted["/api/app-runtime/[id]/data\n(builder, public + CORS)"]
+    App -.->|"EXPO_PUBLIC_API_URL override"| Self["server/ (self-host, shipped in ZIP/GitHub export)"]
+    Hosted --> Ops["lib/cloudhike/app-ops.ts\n(shared op dispatcher)"]
+    Self --> Ops
+    Preview["Builder preview\n/api/projects/[id]/backend/data"] --> Ops
+    Ops --> Data["lib/cloudhike/app-data.ts\n(Postgres, S3, CloudHike Auth)"]
+```
+
+`app-data.ts`, `app-ops.ts` and `lib/app-runtime/data-model-types.ts` have no builder-only imports on
+purpose: `lib/app-project/self-host.ts` copies them verbatim into a ZIP/GitHub export's `server/`,
+so the self-hosted server runs the exact logic the preview does. Credentials stay encrypted in
+`app_backends.env_enc` on the builder, or in the user's own `server/.env` when self-hosted.
+
 ---
 
 ## 7. Project Export (Download as ZIP + Push to GitHub)
@@ -250,6 +274,7 @@ The workspace allows creators to export the complete generated Expo project outs
 
 1. **Download as ZIP** (`lib/app-project/zip-export.ts`, `/api/projects/[projectId]/export/zip`):
    - Merges workspace files (`workspaceFromDoc`), generic scaffold files (`scaffoldFiles(null)`: `babel.config.js`, generic `metro.config.js`, `.gitignore`), and a generated `README.md` (`readmeFile(projectName)`).
+   - If the project's CloudHike backend is connected, `lib/backend` is the remote variant (above), and the export also gets `server/`, `server/.env.example`, `.env.example` and a README section with step-by-step instructions (keep using the hosted backend, or run your own server and deploy it). GitHub push exports the same file set.
    - Bundles files into an in-memory ZIP buffer with JSZip (DEFLATE compression) and streams with `content-disposition: attachment; filename="<slug>.zip"`.
    - Client triggers download via Axios blob mutation and hidden anchor tag.
 

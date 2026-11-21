@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
-import { AppBackendError, getBackend, readEnv, readFile } from "@/lib/cloudhike/app-backend"
+import { getBackend, readEnv } from "@/lib/cloudhike/app-backend"
+import { AppBackendError, readFile } from "@/lib/cloudhike/app-data"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"

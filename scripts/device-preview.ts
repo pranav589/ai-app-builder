@@ -17,9 +17,10 @@ import { spawn } from "node:child_process"
 import { eq } from "drizzle-orm"
 
 import { db, projects } from "@/db"
+import { withBackend } from "@/lib/app-project/with-backend"
 import { readAppDoc } from "@/lib/app-runtime/app-doc"
 import { clearDeviceLaneState, exportExpoProject, METRO_PORT, writeDeviceLaneState } from "@/lib/device/export"
-import { lanIPv4 } from "@/lib/device/lane"
+import { lanIPv4Stable } from "@/lib/device/lan"
 import { workspaceFromDoc } from "@/lib/verify/workspace"
 
 async function main() {
@@ -34,10 +35,10 @@ async function main() {
 
   const doc = readAppDoc(project.previewScreens)
   const files = workspaceFromDoc(doc).files
-  const outDir = exportExpoProject(projectId, files)
+  const outDir = exportExpoProject(projectId, (await withBackend(projectId, files)).files)
   console.log(`Exported "${project.name}" (${Object.keys(files).length} files) to ${outDir}`)
 
-  const ip = lanIPv4()
+  const ip = await lanIPv4Stable()
   if (!ip) console.warn("Couldn't find a LAN IPv4 address on this machine; the URL below may not be reachable from a phone.")
   const url = `exp://${ip ?? "localhost"}:${METRO_PORT}`
   console.log(`\nOpen in Expo Go: ${url}\n`)

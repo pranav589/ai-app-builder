@@ -69,7 +69,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
 
   const doc = readAppDoc(owned.project.previewScreens)
   const { files } = workspaceFromDoc(doc)
-  const exportFiles = buildExportFileMap(owned.project.name, files)
+  const exportFiles = await buildExportFileMap(projectId, owned.project.name, files, { selfHost: true })
 
   const [linked] = await db
     .select()
