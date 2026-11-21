@@ -2,16 +2,17 @@ import { randomBytes } from "node:crypto"
 import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
 
 import { agentEvents, agentRuns, db, type AgentRunRow, type AgentRunStatus } from "@/db"
-import { getJob } from "@/lib/jobs/cloudhike-jobs"
+import { jobQueue } from "@/lib/jobs"
 import { foldSnapshot, type LiveRun } from "./registry"
 import { sseEvent, sseHeaders } from "@/lib/http/sse"
 import type { AgentEvent } from "@app/shared/agent/types"
+import type { BackendProviderId } from "@app/shared/app-backend/providers"
 
-// Agent runs live in Postgres so they can execute in a Cloudhike Jobs worker
+// Agent runs live in Postgres so they can execute in a job-queue worker
 // (or any server instance) while the browser streams them from here:
 //
-//   browser ── POST /agent ──> open run row ── enqueue ──> Cloudhike Jobs
-//      ^                                                      │ calls
+//   browser ── POST /agent ──> open run row ── enqueue ──> job queue (lib/jobs)
+//      ^                                                         │ calls
 //      └── SSE: follow agent_events by seq <── append ── /api/jobs/agent (worker)
 //
 // The worker holds the run with a heartbeat; a run whose heartbeat stops is
@@ -20,7 +21,7 @@ import type { AgentEvent } from "@app/shared/agent/types"
 export const HEARTBEAT_MS = 15_000
 /** A running run without a heartbeat for this long is dead. */
 const STALE_RUNNING_S = 90
-/** A run Cloudhike never started (busy workers, bad URL) gives up after this long. */
+/** A run the queue never started (busy workers, bad URL) gives up after this long. */
 const STALE_QUEUED_S = 15 * 60
 /** Finished runs (and their events) are kept this long. */
 const KEEP_FINISHED_S = 2 * 24 * 3600
@@ -31,7 +32,8 @@ const FINISHED: AgentRunStatus[] = ["succeeded", "failed", "cancelled"]
 export type RunInput = {
   task: "plan" | "generate" | "backend"
   action: "start" | "resume" | "message" | "approve" | "backend"
-  /** For "backend": the CloudHike services to deploy, and whose account to use. */
+  /** For "backend": which provider, the services to deploy, and whose account to use. */
+  provider?: BackendProviderId
   services?: string[]
   userId?: string
 }
@@ -405,10 +407,10 @@ async function follow(runId: string, join: boolean, send: (e: AgentEvent) => voi
           toldQueued = true
           send({ type: "status", text: "Waiting for a free worker" })
         }
-        // A run Cloudhike gave up on (unreachable URL, refused signature) never reports in.
+        // A run the job queue gave up on (unreachable URL, refused signature) never reports in.
         if (run.jobId && now - lastJobCheck > 6000) {
           lastJobCheck = now
-          await checkJob(run).catch((e) => console.error("checking Cloudhike job failed", run.jobId, e))
+          await checkJob(run).catch((e) => console.error("checking queued job failed", run.jobId, e))
         }
       }
     }
@@ -424,9 +426,9 @@ async function expireIfStale(run: AgentRunRow) {
 }
 
 async function checkJob(run: AgentRunRow) {
-  const job = await getJob(run.jobId!)
+  const job = await jobQueue.get(run.jobId!)
   if (job.status === "failed" || job.status === "cancelled" || job.status === "succeeded") {
     // Succeeded while our row is still queued means the worker skipped it.
-    await failQueuedRun(run.id, `cloudhike job ${job.status}: ${job.error ?? ""}`, "The agent couldn't start. Please try again.")
+    await failQueuedRun(run.id, `queued job ${job.status}: ${job.error ?? ""}`, "The agent couldn't start. Please try again.")
   }
 }

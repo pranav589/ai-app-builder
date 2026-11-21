@@ -85,9 +85,10 @@ The architecture is cleanly separated into three npm workspaces:
 | Preview runtime | `frontend/preview-runtime/` + `shared/preview/**` | Sandboxed iframe runtime: file-based router, RN/Expo shims, element inspector |
 | Device preview | `backend/src/services/device/**` | Exports a project as a real Expo project, runs a local Metro lane, QR-to-Expo-Go |
 | Project Export (ZIP & GitHub) | `backend/src/services/github/**`, `backend/src/services/app-project/zip-export.ts` | Exports runnable Expo project as ZIP or pushes directly to GitHub with real-time SSE progress |
-| Backend integration | `backend/src/services/cloudhike/**`, `frontend/lib/backend/**` | Connects a project to a real CloudHike-hosted Postgres/Auth/Storage backend |
+| Backend integration | `backend/src/services/app-backend/**` (neutral core + one folder per provider), `shared/app-backend/providers.ts`, `frontend/lib/backend/**` | Connects a project to a real Postgres/Auth/Storage backend on a pluggable provider (CloudHike today) |
+| Platform identity | `backend/src/services/identity/**` | The builder's own sign-in behind an `IdentityProvider` interface (CloudHike Auth today) |
 | Versioning | `backend/src/services/versions/**` | Snapshot store, diffing, restore |
-| Jobs | `backend/src/services/jobs/**` | Cloudhike Jobs HTTP queue client; routes agent runs to a worker or runs inline in dev |
+| Jobs | `backend/src/services/jobs/**` | `JobQueue` interface (Cloudhike Jobs today); routes agent runs to a worker or runs inline in dev |
 | Persistence | `backend/db/**` | Drizzle schema + hand-applied SQL for non-drizzle-managed tables |
 
 ---
@@ -138,9 +139,9 @@ Key properties of this flow:
 
 - **One run per project at a time.** `lib/agent/run-store.ts` enforces this with a
   DB-level partial unique index, not just in-memory state — so it is safe across
-  Cloudhike Jobs workers and server restarts.
-- **Dev vs. prod dispatch is transparent to the orchestrator.** `lib/jobs/cloudhike-jobs.ts`
-  picks between enqueueing to the Cloudhike Jobs HTTP queue and calling `executeRun`
+  job-queue workers and server restarts.
+- **Dev vs. prod dispatch is transparent to the orchestrator.** `agentRunner()` in `lib/jobs/index.ts`
+  picks between enqueueing to the job queue (`jobQueue`, Cloudhike Jobs today) and calling `executeRun`
   in-process for local development; `app/api/jobs/agent/route.ts` is the webhook the
   queue worker calls back into.
 - **Progress streams over SSE**, backed by an `agent_events` table rather than a raw
@@ -235,28 +236,29 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    UI["backend-connect.tsx"] --> Connect["lib/cloudhike/connect.ts\n(OAuth-like connect, encrypted token)"]
-    Connect --> MCP["lib/cloudhike/mcp.ts\n(CloudHike MCP client)"]
-    MCP --> Prov["lib/cloudhike/provision.ts\n(\"backend engineer\" agent)"]
+    UI["backend-connect.tsx\n(providers from shared/app-backend/providers.ts)"] --> Routes["/api/backend-providers/:provider/*\n(connect + callback)"]
+    Routes --> Registry["lib/app-backend/registry.ts\n(getProvider / providerFor)"]
+    Registry --> Adapter["lib/app-backend/cloudhike/\n(BackendProvider adapter)"]
+    Adapter --> Prov["provision: \"backend engineer\" agent\non CloudHike MCP"]
     Prov --> CH["CloudHike platform\n(real Postgres / Auth / Storage project)"]
-    CH --> Sync["lib/cloudhike/app-backend.ts\n(syncs schema/env back)"]
-    Sync --> Generated["Generated app code calls\nlib/backend (AppBackend interface)"]
+    CH --> Row["lib/app-backend/app-backend.ts\n(app_backends row: provider, encrypted env)"]
+    Row --> Generated["Generated app code calls\nlib/backend (AppBackend interface)"]
 ```
 
-Generated apps never call CloudHike directly. They call a small `AppBackend`
+Generated apps never call a provider directly. They call a small `AppBackend`
 interface (`lib/backend/types.ts`) with implementations for local/in-device storage
-(`local-backend.ts`) and a real provisioned CloudHike project (`cloudhike-backend.ts`),
+(`local-backend.ts`) and a connected provider reached through our server (`server-backend.ts`),
 selected by `createBackend()` (`lib/backend/index.ts`). This keeps generated app code
 backend-agnostic and makes "preview without a backend" vs. "connected to a real
 backend" a configuration switch rather than two codepaths.
 
-Provisioning itself is agentic: `lib/cloudhike/provision.ts` runs a "backend engineer"
-AI loop that calls CloudHike's MCP tools (create project, deploy services) in a
+Provisioning is the provider's job. For CloudHike, `lib/app-backend/cloudhike/provision.ts` runs a
+"backend engineer" AI loop that calls CloudHike's MCP tools (create project, deploy services) in a
 tagged-reply protocol similar to the main orchestrator's.
 
 **Built apps (APK, Expo Go preview, web deploy, ZIP/GitHub export) use the same backend.**
 The stored project files always carry the on-device `lib/backend` (local storage). At output
-time `lib/app-project/with-backend.ts` checks whether the project's CloudHike backend is ready
+time `lib/app-project/with-backend.ts` checks whether the project's backend is ready
 and, if so, swaps in `lib/app-project/backend-remote.ts`'s version (same hooks, HTTP calls) plus a
 `lib/backend/config.ts` holding the endpoint and a per-project public app key. The swap is applied
 to the output, not stored, because the stored files are regenerated on every plan change and a
@@ -267,16 +269,48 @@ those calls go to a server that does:
 flowchart LR
     App["Built app\n(lib/backend, remote variant)"] -->|"POST { op } + x-app-key"| Hosted["/api/app-runtime/[id]/data\n(builder, public + CORS)"]
     App -.->|"EXPO_PUBLIC_API_URL override"| Self["server/ (self-host, shipped in ZIP/GitHub export)"]
-    Hosted --> Ops["lib/cloudhike/app-ops.ts\n(shared op dispatcher)"]
+    Hosted --> Ops["lib/app-backend/app-ops.ts\n(shared op dispatcher, provider-neutral)"]
     Self --> Ops
     Preview["Builder preview\n/api/projects/[id]/backend/data"] --> Ops
-    Ops --> Data["lib/cloudhike/app-data.ts\n(Postgres, S3, CloudHike Auth)"]
+    Ops --> Data["provider AppServices\n(CloudHike: lib/app-backend/cloudhike/app-data.ts:\nPostgres, S3, CloudHike Auth)"]
 ```
 
-`app-data.ts`, `app-ops.ts` and `lib/app-runtime/data-model-types.ts` have no builder-only imports on
-purpose: `lib/app-project/self-host.ts` copies them verbatim into a ZIP/GitHub export's `server/`,
+`app-ops.ts`, `contract.ts`, the provider's data plane (CloudHike: `cloudhike/app-data.ts`) and
+`shared/app-runtime/data-model-types.ts` have no builder-only imports on purpose: the provider's
+`selfHost()` (CloudHike: `cloudhike/self-host.ts`) copies them verbatim into a ZIP/GitHub export's `server/`,
 so the self-hosted server runs the exact logic the preview does. Credentials stay encrypted in
 `app_backends.env_enc` on the builder, or in the user's own `server/.env` when self-hosted.
+
+### Pluggable providers
+
+Every external service the platform depends on sits behind an interface with one adapter today,
+so moving to another vendor (or our own system) means a new adapter, not edits across callers:
+
+| Seam | Interface | Picked in | Today |
+|---|---|---|---|
+| Builder sign-in | `IdentityProvider` (`lib/identity/types.ts`): `signUp`, `signIn`, `getSessionUser`, `signOut` | `lib/identity/index.ts` (`identity`) | CloudHike Auth (`identity/cloudhike.ts`) |
+| Agent job queue | `JobQueue` (`lib/jobs/queue.ts`): `enqueue`, `get`, `verifySignature` | `lib/jobs/index.ts` (`jobQueue`) | Cloudhike Jobs (`jobs/cloudhike-jobs.ts`) |
+| Creators' app backends | `BackendProvider` (`lib/app-backend/types.ts`): `connect`, `provision`, `syncSchema`, `runtime` → `AppServices`, `readFile`, `selfHost` | `lib/app-backend/registry.ts`, per app via `app_backends.provider` | CloudHike (`app-backend/cloudhike/`) |
+
+Notes on each:
+
+- **Identity.** `users.id` is the identity provider's user id and the `ch_session` cookie holds its
+  token, so a replacement must keep existing ids (or ship a migration mapping them). Hosted social
+  sign-in is configured by `NEXT_PUBLIC_AUTH_URL` on the frontend.
+- **Job queue.** Without a configured queue (or with `AGENT_RUNNER=inline`) runs execute in-process.
+- **App backends.** Several can coexist: each app's `app_backends.provider` names its adapter, and the
+  op protocol (`app-ops.ts`) only ever sees `AppServices` (`contract.ts`), so generated app code and
+  exports never change per provider.
+
+**Adding a backend provider (e.g. Supabase):**
+1. Add an entry to `BACKEND_PROVIDERS` in `shared/app-backend/providers.ts` (label, tagline, dashboard
+   URL, billing note, offered/required services). The Connect dialog renders it from there.
+2. Add `backend/src/services/app-backend/<id>/` with an `index.ts` exporting a `BackendProvider`:
+   account link (authorize URL + code exchange; its callback is `/api/backend-providers/<id>/callback`),
+   provisioning (save the row with `saveBackend(projectId, "<id>", …)` and `setDocBackend`),
+   `runtime()` implementing `AppServices`, `readFile`, `syncSchema` and `selfHost()`.
+3. Add one line to `PROVIDERS` in `lib/app-backend/registry.ts` (the registry test fails until
+   every catalogue entry has an adapter).
 
 ---
 
@@ -286,14 +320,14 @@ The workspace allows creators to export the complete generated Expo project outs
 
 1. **Download as ZIP** (`lib/app-project/zip-export.ts`, `/api/projects/[projectId]/export/zip`):
    - Merges workspace files (`workspaceFromDoc`), generic scaffold files (`scaffoldFiles(null)`: `babel.config.js`, generic `metro.config.js`, `.gitignore`), and a generated `README.md` (`readmeFile(projectName)`).
-   - If the project's CloudHike backend is connected, `lib/backend` is the remote variant (above), and the export also gets `server/`, `server/.env.example`, `.env.example` and a README section with step-by-step instructions (keep using the hosted backend, or run your own server and deploy it). GitHub push exports the same file set.
+   - If the project's backend is connected, `lib/backend` is the remote variant (above), and the export also gets the provider's self-host files: `server/`, `server/.env.example`, `.env.example` and a README section with step-by-step instructions (keep using the hosted backend, or run your own server and deploy it). GitHub push exports the same file set.
    - Bundles files into an in-memory ZIP buffer with JSZip (DEFLATE compression) and streams with `content-disposition: attachment; filename="<slug>.zip"`.
    - Client triggers download via Axios blob mutation and hidden anchor tag.
 
 2. **Push to GitHub** (`lib/github/**`, `components/workspace/github-push-dialog.tsx`):
    - **OAuth Connect** (`/api/github/connect`, `/api/github/callback`):
      - Pinned with signed HMAC state cookie (`gh_connect`), requests `repo` scope.
-     - Tokens encrypted at rest using AES-256-GCM (`lib/crypto/secret-box.ts`) with `CLOUDHIKE_ENCRYPTION_KEY`.
+     - Tokens encrypted at rest using AES-256-GCM (`lib/crypto/secret-box.ts`) with `SECRETS_ENCRYPTION_KEY` (the old name `CLOUDHIKE_ENCRYPTION_KEY` is still read).
      - Stored in `github_connections` table (`userId`, `accessTokenEnc`, `githubLogin`, `githubUserId`, `scope`, `status`).
    - **Repository Link Tracking**:
      - `project_github_links` table records the linked repository (`repoOwner`, `repoName`, `lastBranch`, `lastCommitSha`) per project.

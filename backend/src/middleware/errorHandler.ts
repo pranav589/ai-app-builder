@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express"
 import { ServiceUnavailableError } from "../services/current-user"
-import { AppBackendError } from "../services/cloudhike/app-data"
+import { AppBackendError } from "../services/app-backend/contract"
 
 export function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
   if (res.headersSent) {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // Mounts the generated remote backend (the one an app gets once its creator
-// connected CloudHike) under a real React root with a fake server behind
+// connected a backend provider) under a real React root with a fake server behind
 // fetch, the same way backend-device.test.ts does for the local one: hooks
 // must show server data, reflect writes at once, and carry the app key and the
 // signed-in user's session on every call.

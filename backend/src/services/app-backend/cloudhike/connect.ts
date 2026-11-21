@@ -1,53 +1,23 @@
-import { randomBytes } from "node:crypto"
 import { eq, sql } from "drizzle-orm"
 
 import { cloudhikeConnections, db } from "@/db"
-import { decryptSecret, encryptSecret, safeEqual, sign, verifySigned } from "@/lib/crypto/secret-box"
-import { CLOUDHIKE_ORIGIN, connectConfig, trustedCloudHikeUrl, type BackendService } from "./config"
+import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-box"
+import { ConnectError } from "../types"
+import { CLOUDHIKE_ORIGIN, connectConfig, trustedCloudHikeUrl } from "./config"
 
 // CloudHike Connect: authorize URL, code exchange, and the stored token.
+// The signed state that pins a flow to one user and app is ../connect-state.ts.
 // There is no refresh token: when CloudHike answers 401 the person has
 // disconnected the app (or the token was replaced), and they connect again.
 
-export const STATE_COOKIE = "ch_connect"
-const STATE_TTL_MS = 10 * 60 * 1000
-
-type StatePayload = { n: string; u: string; p: string; s: BackendService[]; e: number }
-
-/** Starts Connect: the URL to send the browser to, and the signed cookie that pins the flow to this user and app. */
-export function beginConnect(userId: string, projectId: string, services: BackendService[]) {
+/** Where Connect starts; CloudHike sends the browser back to our callback with `state` and a one-time code. */
+export function authorizeUrl(state: string) {
   const { clientId, redirectUri } = connectConfig()
-  const nonce = randomBytes(24).toString("base64url")
-  const payload: StatePayload = { n: nonce, u: userId, p: projectId, s: services, e: Date.now() + STATE_TTL_MS }
-  const cookie = sign(Buffer.from(JSON.stringify(payload)).toString("base64url"))
   const url = new URL("/connect", CLOUDHIKE_ORIGIN)
   url.searchParams.set("client_id", clientId)
   url.searchParams.set("redirect_uri", redirectUri)
-  url.searchParams.set("state", nonce)
-  return { url: url.toString(), cookie, maxAge: STATE_TTL_MS / 1000 }
-}
-
-/** Checks the callback's `state` against the cookie set when the flow began. */
-export function readConnectState(cookie: string | undefined, state: string | null, userId: string): StatePayload | null {
-  if (!cookie || !state) return null
-  const raw = verifySigned(cookie)
-  if (!raw) return null
-  try {
-    const p = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as StatePayload
-    if (p.e < Date.now() || p.u !== userId || !safeEqual(p.n, state)) return null
-    return p
-  } catch {
-    return null
-  }
-}
-
-export class ConnectError extends Error {
-  constructor(
-    message: string,
-    readonly code: string
-  ) {
-    super(message)
-  }
+  url.searchParams.set("state", state)
+  return url.toString()
 }
 
 /** Exchanges the one-time code (valid 5 minutes) for the user's access token and stores it encrypted. */

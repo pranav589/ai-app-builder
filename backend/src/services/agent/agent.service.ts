@@ -17,10 +17,10 @@ import {
   type RunInput,
 } from "./run-store"
 import type { AgentPhase } from "@app/shared/agent/types"
-import { agentRunner, enqueueJob, jobTimeoutSeconds, JobsError, verifyJobSignature } from "../jobs/cloudhike-jobs"
+import { agentRunner, jobQueue, jobTimeoutSeconds, JobsError, type IncomingHeaders } from "../jobs"
 import { MAX_PROMPT_LENGTH } from "@app/shared/project-rules"
-import { hasConnection } from "../cloudhike/connect"
-import { parseServices } from "../cloudhike/config"
+import { DEFAULT_BACKEND_PROVIDER, parseServices, providerInfo } from "@app/shared/app-backend/providers"
+import { getProvider } from "../app-backend/registry"
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
 import { claimRepairAttempt } from "./repair-cap"
 import { AgentConfigError } from "./config"
@@ -32,6 +32,7 @@ export type AgentActionInput = {
   screenId?: string
   element?: unknown
   services?: unknown
+  provider?: unknown
 }
 
 export type AgentActionResult =
@@ -79,11 +80,12 @@ export async function handleAgentAction(
   let task: RunInput["task"] | null = null
   let extra: Partial<RunInput> = {}
   if (action === "backend") {
-    if (!(await hasConnection(userId))) {
-      return { type: "json", status: 409, body: { error: "Connect your CloudHike account first.", reconnect: true } }
+    const provider = getProvider(body.provider ?? DEFAULT_BACKEND_PROVIDER)
+    if (!(await provider.connect.hasConnection(userId))) {
+      return { type: "json", status: 409, body: { error: `Connect your ${providerInfo(provider.id).label} account first.`, reconnect: true } }
     }
     task = "backend"
-    extra = { services: parseServices(body.services), userId }
+    extra = { provider: provider.id, services: parseServices(provider.id, body.services), userId }
   } else if (action === "start" || action === "resume") {
     if (status === "draft" || status === "planning") task = "plan"
     else if (status === "generating") task = "generate"
@@ -118,7 +120,7 @@ export async function handleAgentAction(
     throw e
   }
 
-  let runner: "cloudhike" | "inline"
+  let runner: "queue" | "inline"
   try {
     runner = agentRunner()
   } catch (e) {
@@ -128,9 +130,9 @@ export async function handleAgentAction(
     return { type: "stream", response: resp }
   }
 
-  if (runner === "cloudhike") {
+  if (runner === "queue") {
     try {
-      const job = await enqueueJob({
+      const job = await jobQueue.enqueue({
         path: "/api/jobs/agent",
         body: { runId: run.id },
         timeoutSeconds: jobTimeoutSeconds(),
@@ -140,7 +142,7 @@ export async function handleAgentAction(
     } catch (e) {
       const message =
         e instanceof JobsError && e.status === 402
-          ? "The server ran out of Cloudhike compute minutes. Top up your workspace to keep generating."
+          ? "The server ran out of job-queue compute minutes. Top up the queue's account to keep generating."
           : "Could not start the agent."
       await failQueuedRun(run.id, String(e), message)
       if (!(e instanceof JobsError)) console.error("enqueue agent job failed", run.id, e)
@@ -153,8 +155,8 @@ export async function handleAgentAction(
   return { type: "stream", response: resp }
 }
 
-export async function handleJobWorker(raw: string, signature: string | null) {
-  if (!verifyJobSignature(raw, signature)) {
+export async function handleJobWorker(raw: string, headers: IncomingHeaders) {
+  if (!jobQueue.verifySignature(raw, headers)) {
     return { status: 401, body: { error: "Bad signature" } }
   }
 

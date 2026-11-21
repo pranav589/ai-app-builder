@@ -1,8 +1,8 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 
-// Encrypts secrets at rest (CloudHike access tokens, GitHub access tokens, a backend's .env) with
+// Encrypts secrets at rest (provider access tokens, GitHub access tokens, a backend's .env) with
 // AES-256-GCM, and signs small values (OAuth state) with HMAC-SHA256.
-// The key comes from CLOUDHIKE_ENCRYPTION_KEY: 32 random bytes, base64 or hex
+// The key comes from SECRETS_ENCRYPTION_KEY: 32 random bytes, base64 or hex
 // (`openssl rand -base64 32`). Rotating it makes stored secrets unreadable, so
 // users would have to connect again.
 
@@ -10,10 +10,16 @@ export class SecretKeyError extends Error {}
 
 let cached: Buffer | null = null
 
+// CLOUDHIKE_ENCRYPTION_KEY is the variable's name from before providers were
+// pluggable; deployments that still set it must keep decrypting what's stored.
+const rawKey = () => (process.env.SECRETS_ENCRYPTION_KEY || process.env.CLOUDHIKE_ENCRYPTION_KEY)?.trim()
+
+export const hasSecretKey = () => !!rawKey()
+
 function key(): Buffer {
   if (cached) return cached
-  const raw = process.env.CLOUDHIKE_ENCRYPTION_KEY?.trim()
-  if (!raw) throw new SecretKeyError("CLOUDHIKE_ENCRYPTION_KEY is not set.")
+  const raw = rawKey()
+  if (!raw) throw new SecretKeyError("SECRETS_ENCRYPTION_KEY is not set.")
   let bytes: Buffer | null = null
   if (/^[0-9a-f]{64}$/i.test(raw)) bytes = Buffer.from(raw, "hex")
   else {
@@ -21,7 +27,7 @@ function key(): Buffer {
     if (b.length === 32) bytes = b
   }
   if (!bytes) {
-    if (raw.length < 32) throw new SecretKeyError("CLOUDHIKE_ENCRYPTION_KEY must be 32 random bytes (base64 or hex).")
+    if (raw.length < 32) throw new SecretKeyError("SECRETS_ENCRYPTION_KEY must be 32 random bytes (base64 or hex).")
     // A long passphrase: derive a key from it.
     bytes = createHash("sha256").update(raw).digest()
   }

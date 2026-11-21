@@ -173,9 +173,9 @@ export function useThemeSwitcher() {
  */
 export function backendDevice(appSlug = "app"): string {
   return String.raw`// Platform module: the app's data, auth and file storage.
-// Runs on the device's local storage until the app is connected to
-// CloudHike; then the same functions call CloudHike Database, Storage and
-// Auth, and no screen has to change.
+// Runs on the device's local storage until the app is connected to a
+// backend; then the same functions call that backend's database, storage and
+// auth, and no screen has to change.
 import * as React from "react"
 import AsyncStorage from "@react-native-async-storage/async-storage"
 import seed from "@/data/seed.json"
@@ -436,7 +436,7 @@ export const PLATFORM_API_DOCS = `@/theme (platform module; import, never rewrit
   t.colors: primary, onPrimary, primarySoft, accent, onAccent, background, surface, surfaceAlt, text, textMuted, border, success, warning, danger, overlay
   t.radius: { sm, md, lg, xl, pill }
 
-@/lib/backend (platform module: local storage now, CloudHike later; import, never rewrite):
+@/lib/backend (platform module: local storage now, a connected backend later; import, never rewrite):
   useCollection(name, { where?: {field: value} | (record) => boolean, sort?: "field" | "-field", limit?: number })
      -> { data: Record[], loading, insert(values), update(id, patch), remove(id) }   // records have id, createdAt, updatedAt + their fields
   useRecord(name, id) -> { data: Record | null, loading, update(patch), remove() }

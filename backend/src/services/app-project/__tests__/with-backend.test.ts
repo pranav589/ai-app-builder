@@ -5,14 +5,14 @@ const getBackend = vi.fn()
 
 vi.mock("server-only", () => ({}))
 vi.mock("@/lib/device/lan", () => ({ lanIPv4Stable: () => lanIPv4Stable() }))
-vi.mock("@/lib/cloudhike/app-backend", () => ({
+vi.mock("@/lib/app-backend/app-backend", () => ({
   getBackend: (id: string) => getBackend(id),
   ensureAppKey: async () => "key-1",
 }))
 
 import { withBackend } from "../with-backend"
 
-const ready = { projectId: "p1", status: "ready", envEnc: "enc", appKey: "key-1" }
+const ready = { projectId: "p1", provider: "cloudhike", status: "ready", envEnc: "enc", appKey: "key-1" }
 const configOf = (files: Record<string, string>) => files["lib/backend/config.ts"] ?? ""
 
 let savedUrl: string | undefined
@@ -51,10 +51,10 @@ describe("withBackend", () => {
     expect(warn).toHaveBeenCalled()
   })
 
-  it("keeps the on-device backend when CloudHike isn't connected", async () => {
+  it("keeps the on-device backend when no provider is connected", async () => {
     getBackend.mockResolvedValue({ ...ready, status: "provisioning" })
     const files = { "lib/backend/index.ts": "local" }
     const r = await withBackend("p1", files)
-    expect(r).toEqual({ files, connected: false })
+    expect(r).toEqual({ files, provider: null })
   })
 })

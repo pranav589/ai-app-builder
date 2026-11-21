@@ -1,23 +1,19 @@
-import { AppBackendError, authApi, dataApi, uploadFile, type AppEnv } from "./app-data"
+import { AppBackendError, type AppServices } from "./contract"
 import type { DataModel } from "@app/shared/app-runtime/data-model-types"
 
 // The operations an app can run against its backend ({ op, ...args } in, a
 // result out). One dispatcher shared by the builder's preview route, the
 // public route exported apps call, and the self-host server shipped in a ZIP
-// export (lib/app-project/self-host.ts copies this file), so all three behave
-// identically. Imports here stay limited to ./app-data and the types-only
-// data-model file for that reason.
+// export (a provider's self-host files copy this file), so all three behave
+// identically. It never knows which provider answers: the caller hands it that
+// provider's AppServices. Imports stay limited to ./contract and the
+// types-only data-model file for that reason.
 
 export type OpContext = {
-  projectId: string
-  env: AppEnv
+  services: AppServices
   model?: DataModel | null
-  /** The app end-user's CloudHike Auth session token ("" when signed out). */
+  /** The app end-user's session token from the provider's auth ("" when signed out). */
   session: string
-  /** Maps a stored file's key to the URL this server serves it from. */
-  fileUrl: (key: string) => string
-  /** Where the emailed password-reset link lands. */
-  resetRedirect: string
   /** Callers outside the builder may only touch collections the data model declares, so a leaked key can't create arbitrary tables. */
   declaredOnly: boolean
 }
@@ -34,10 +30,7 @@ export async function runAppOp(ctx: OpContext, body: Record<string, unknown> | n
     if (!declared(name)) throw new AppBackendError("Unknown collection.", 404)
   }
 
-  // The project's current data model: writes for a collection it declares
-  // land in that collection's real columns, not a generic blob.
-  const data = dataApi(ctx.projectId, ctx.env, ctx.model)
-  const auth = authApi(ctx.env, ctx.resetRedirect)
+  const { data, auth } = ctx.services
 
   switch (op) {
     case "snapshot": {
@@ -74,7 +67,7 @@ export async function runAppOp(ctx: OpContext, body: Record<string, unknown> | n
       await data.setSetting(str(body?.key), body?.value)
       return null
     case "upload":
-      return uploadFile(ctx.env, str(body?.dataUrl), ctx.fileUrl)
+      return ctx.services.upload(str(body?.dataUrl))
     case "auth.current":
       return auth.current(ctx.session)
     case "auth.signUp":
@@ -97,7 +90,7 @@ export function appOpFailure(e: unknown, what: string): { error: string; status:
   if (e instanceof AppBackendError) return { error: e.message, status: e.status }
   console.error("app backend call failed", what, e)
   const msg = e instanceof Error ? e.message : ""
-  // A free CloudHike database sleeps when idle; the first call wakes it.
+  // Free hosted databases (CloudHike's, among others) sleep when idle; the first call wakes them.
   if (/ECONNREFUSED|ETIMEDOUT|terminating connection|connect_timeout|sleep/i.test(msg))
     return { error: "The app's database is waking up. Try again in a moment.", status: 503 }
   return { error: "Something went wrong. Please try again.", status: 500 }

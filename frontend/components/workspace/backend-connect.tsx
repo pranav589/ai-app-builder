@@ -21,6 +21,16 @@ import {
 import { cn } from "cn"
 
 import type { BackendInfo } from "@app/shared/agent/types"
+import {
+  BACKEND_PROVIDER_IDS,
+  BACKEND_SERVICE_INFO,
+  DEFAULT_BACKEND_PROVIDER,
+  isBackendProviderId,
+  providerInfo,
+  type BackendProviderId,
+  type BackendProviderStatus,
+  type BackendService,
+} from "@app/shared/app-backend/providers"
 import { apiClient, getApiErrorMessage } from "@/lib/api-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -40,36 +50,42 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Spinner } from "@/components/ui/spinner"
 
-type ServiceId = "postgres" | "auth" | "storage" | "email" | "jobs"
-
-const SERVICES: { id: ServiceId; label: string; body: string; icon: LucideIcon; required?: boolean }[] = [
-  { id: "postgres", label: "Database", body: "Postgres for the app's records, synced live.", icon: Database, required: true },
-  { id: "auth", label: "Authentication", body: "Sign up, sign in and password reset for your users.", icon: KeyRound, required: true },
-  { id: "storage", label: "File storage", body: "Photos and files your users upload.", icon: HardDrive, required: true },
-  { id: "email", label: "Email", body: "Transactional email from your app.", icon: Mail },
-  { id: "jobs", label: "Background jobs", body: "Scheduled and long-running tasks.", icon: Timer },
-]
-const LABEL = Object.fromEntries(SERVICES.map((s) => [s.id, s.label])) as Record<string, string>
-
-const ERRORS: Record<string, string> = {
-  denied: "You cancelled the CloudHike authorization. Connect again whenever you're ready.",
-  expired: "The CloudHike authorization expired before it finished. Please try again.",
-  not_configured: "CloudHike Connect isn't configured on this server yet. Ask an administrator to set the CloudHike client credentials.",
-  failed: "We couldn't complete the CloudHike authorization. Please try again.",
+const SERVICE_ICONS: Record<BackendService, LucideIcon> = {
+  postgres: Database,
+  auth: KeyRound,
+  storage: HardDrive,
+  email: Mail,
+  jobs: Timer,
 }
+const SERVICE_IDS = Object.keys(BACKEND_SERVICE_INFO) as BackendService[]
 
-type Cloudhike = { configured: boolean; accountConnected: boolean }
+/** Why a provider's authorization round trip didn't finish (the callback's `reason`). */
+function connectError(reason: string, label: string) {
+  switch (reason) {
+    case "denied":
+      return `You cancelled the ${label} authorization. Connect again whenever you're ready.`
+    case "expired":
+      return `The ${label} authorization expired before it finished. Please try again.`
+    case "not_configured":
+      return `${label} isn't configured on this server yet. Ask an administrator to set its client credentials.`
+    default:
+      return `We couldn't complete the ${label} authorization. Please try again.`
+  }
+}
 
 function ServiceList({ services, compact }: { services: string[]; compact?: boolean }) {
   return (
     <ul className={cn("grid gap-1.5", compact ? "text-xs" : "text-sm")}>
-      {SERVICES.filter((s) => services.includes(s.id)).map((s) => (
-        <li key={s.id} className="flex items-center gap-2">
-          <s.icon className="size-3.5 text-muted-foreground" />
-          <span className="flex-1">{s.label}</span>
-          <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" />
-        </li>
-      ))}
+      {SERVICE_IDS.filter((id) => services.includes(id)).map((id) => {
+        const Icon = SERVICE_ICONS[id]
+        return (
+          <li key={id} className="flex items-center gap-2">
+            <Icon className="size-3.5 text-muted-foreground" />
+            <span className="flex-1">{BACKEND_SERVICE_INFO[id].label}</span>
+            <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -86,7 +102,9 @@ function ConnectDialog({
   open,
   onOpenChange,
   projectId,
-  cloudhike,
+  providers,
+  provider,
+  onProviderChange,
   backend,
   notice,
   agentBusy,
@@ -95,30 +113,35 @@ function ConnectDialog({
   open: boolean
   onOpenChange: (o: boolean) => void
   projectId: string
-  cloudhike: Cloudhike
+  providers: BackendProviderStatus[]
+  provider: BackendProviderId
+  onProviderChange: (p: BackendProviderId) => void
   backend: BackendInfo | null
   notice: string | null
   agentBusy: boolean
-  onSetup: (services: ServiceId[]) => void
+  onSetup: (provider: BackendProviderId, services: BackendService[]) => void
 }) {
-  const [picked, setPicked] = React.useState<Set<ServiceId>>(
-    () => new Set((backend?.services as ServiceId[] | undefined) ?? ["postgres", "auth", "storage", "email", "jobs"])
-  )
+  const info = providerInfo(provider)
+  const status = providers.find((p) => p.id === provider) ?? { configured: false, accountConnected: false }
+  const [picked, setPicked] = React.useState<Set<string>>(() => new Set(backend?.services ?? SERVICE_IDS))
   const [leaving, setLeaving] = React.useState(false)
-  const services = SERVICES.filter((s) => s.required || picked.has(s.id)).map((s) => s.id)
-  const reconnect = backend?.error === "reconnect"
-  const needsAuth = !cloudhike.accountConnected || reconnect
-  const failed = backend?.status === "error" && !reconnect ? backend.error : null
+  const isRequired = (id: BackendService) => info.required.includes(id)
+  const services = info.services.filter((id) => isRequired(id) || picked.has(id))
+  // Picking another provider than the app is on means a fresh setup there, not a repair of this one.
+  const sameProvider = backend?.provider === provider
+  const reconnect = sameProvider && backend?.error === "reconnect"
+  const needsAuth = !status.accountConnected || reconnect
+  const failed = sameProvider && backend?.status === "error" && !reconnect ? backend.error : null
 
   const go = () => {
     if (needsAuth) {
       setLeaving(true)
       const q = new URLSearchParams({ projectId, services: services.join(",") })
       if (reconnect) q.set("reconnect", "1")
-      window.location.assign(`/api/cloudhike/connect?${q}`)
+      window.location.assign(`/api/backend-providers/${provider}/connect?${q}`)
       return
     }
-    onSetup(services)
+    onSetup(provider, services)
     onOpenChange(false)
   }
 
@@ -141,91 +164,109 @@ function ConnectDialog({
         )}
 
         <div role="radiogroup" aria-label="Backend provider" className="grid gap-2">
-          <div
-            role="radio"
-            aria-checked
-            className="flex items-start gap-3 rounded-(--r-md) border border-primary/50 bg-primary/5 p-3"
-          >
-            <ProviderMark />
-            <span className="min-w-0 flex-1">
-              <span className="flex items-center gap-2 text-sm font-medium">
-                CloudHike
-                <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
-                  Default
-                </Badge>
-              </span>
-              <span className="block text-xs text-muted-foreground">
-                Managed Postgres, Auth, Storage, Email and Jobs, in your own CloudHike workspace.
-              </span>
-            </span>
-            <span className="mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border border-primary bg-primary text-primary-foreground">
-              <Check className="size-2.5" strokeWidth={3} />
-            </span>
-          </div>
+          {BACKEND_PROVIDER_IDS.map((id) => {
+            const checked = id === provider
+            const p = providerInfo(id)
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={checked}
+                onClick={() => onProviderChange(id)}
+                className={cn(
+                  "flex items-start gap-3 rounded-(--r-md) border p-3 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+                  checked ? "border-primary/50 bg-primary/5" : "border-border hover:bg-muted/60"
+                )}
+              >
+                <ProviderMark />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2 text-sm font-medium">
+                    {p.label}
+                    {id === DEFAULT_BACKEND_PROVIDER && (
+                      <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                        Default
+                      </Badge>
+                    )}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">{p.tagline}</span>
+                </span>
+                <span
+                  className={cn(
+                    "mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border",
+                    checked ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40"
+                  )}
+                >
+                  {checked && <Check className="size-2.5" strokeWidth={3} />}
+                </span>
+              </button>
+            )
+          })}
         </div>
 
         <fieldset className="grid gap-2">
           <legend className="mb-2 text-xs font-medium text-muted-foreground">Services</legend>
-          {SERVICES.map((s) => {
-            const checked = s.required || picked.has(s.id)
+          {info.services.map((id) => {
+            const required = isRequired(id)
+            const Icon = SERVICE_ICONS[id]
             return (
               <label
-                key={s.id}
+                key={id}
                 className={cn(
                   "flex items-center gap-3 rounded-(--r-sm) px-1 py-1",
-                  s.required ? "cursor-default" : "cursor-pointer hover:bg-muted/60"
+                  required ? "cursor-default" : "cursor-pointer hover:bg-muted/60"
                 )}
               >
                 <Checkbox
-                  checked={checked}
-                  disabled={s.required}
+                  checked={required || picked.has(id)}
+                  disabled={required}
                   onCheckedChange={(v) =>
                     setPicked((p) => {
                       const next = new Set(p)
-                      if (v) next.add(s.id)
-                      else next.delete(s.id)
+                      if (v) next.add(id)
+                      else next.delete(id)
                       return next
                     })
                   }
-                  aria-label={s.label}
+                  aria-label={BACKEND_SERVICE_INFO[id].label}
                 />
-                <s.icon className="size-4 text-muted-foreground" />
+                <Icon className="size-4 text-muted-foreground" />
                 <span className="min-w-0 flex-1">
-                  <span className="block text-sm">{s.label}</span>
-                  <span className="block text-xs text-muted-foreground">{s.body}</span>
+                  <span className="block text-sm">{BACKEND_SERVICE_INFO[id].label}</span>
+                  <span className="block text-xs text-muted-foreground">{BACKEND_SERVICE_INFO[id].body}</span>
                 </span>
-                {s.required && <span className="text-[11px] text-muted-foreground">Required</span>}
+                {required && <span className="text-[11px] text-muted-foreground">Required</span>}
               </label>
             )
           })}
         </fieldset>
 
-        {backend && !needsAuth && (
+        {sameProvider && !needsAuth && (
           <p className="-mt-2 text-xs text-muted-foreground">
-            Unchecking a service stops this app from using it; anything already deployed stays in your CloudHike workspace.
+            Unchecking a service stops this app from using it; anything already deployed stays in your {info.label} workspace.
           </p>
         )}
 
         <div className="flex items-start gap-2.5 rounded-(--r-md) bg-muted/60 p-3 text-xs text-muted-foreground">
           <ShieldCheck className="mt-0.5 size-4 shrink-0 text-foreground/70" />
           <p>
-            {needsAuth ? "You'll sign in to CloudHike and allow access. " : "Your CloudHike account is connected. "}
+            {needsAuth ? `You'll sign in to ${info.label} and allow access. ` : `Your ${info.label} account is connected. `}
             The agent then creates a project and deploys the services. Keys stay encrypted on our servers and are never shown to the AI or
-            put in your app&apos;s code. Usage is billed to your CloudHike workspace, and deploying needs about a day of the services&apos; cost in credits.
+            put in your app&apos;s code. {info.billing}
           </p>
         </div>
 
-        {!cloudhike.configured && (
-          <p className="-mt-2 text-xs text-destructive">CloudHike Connect isn&apos;t configured on this server yet.</p>
+        {!status.configured && (
+          <p className="-mt-2 text-xs text-destructive">{info.label} isn&apos;t configured on this server yet.</p>
         )}
 
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={go} disabled={!cloudhike.configured || leaving || agentBusy}>
+          <Button onClick={go} disabled={!status.configured || leaving || agentBusy}>
             {leaving ? <Spinner /> : <Cloud />}
-            {needsAuth ? (reconnect ? "Reconnect CloudHike" : "Continue with CloudHike") : backend ? "Save and deploy" : "Set up backend"}
+            {needsAuth ? (reconnect ? `Reconnect ${info.label}` : `Continue with ${info.label}`) : sameProvider ? "Save and deploy" : "Set up backend"}
           </Button>
         </div>
         {agentBusy && <p className="-mt-3 text-right text-xs text-muted-foreground">Available once the agent finishes its current task.</p>}
@@ -248,6 +289,7 @@ function ConnectedPopover({
   onEditServices: () => void
   onDisconnect: () => void
 }) {
+  const { label, dashboardUrl } = providerInfo(backend.provider)
   return (
     <Popover>
       <PopoverTrigger
@@ -255,7 +297,7 @@ function ConnectedPopover({
           <button
             type="button"
             className="flex h-8 items-center gap-2 rounded-full border border-emerald-600/25 bg-emerald-500/10 px-3 text-xs font-medium text-emerald-700 outline-none transition-colors hover:bg-emerald-500/15 focus-visible:ring-3 focus-visible:ring-ring/50 dark:text-emerald-300 max-sm:px-2.5"
-            aria-label="CloudHike backend connected"
+            aria-label={`${label} backend connected`}
           />
         }
       >
@@ -263,15 +305,15 @@ function ConnectedPopover({
           <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500/60 [animation-duration:2.5s]" />
           <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
         </span>
-        <span className="hidden lg:inline">CloudHike Backend Connected</span>
+        <span className="hidden lg:inline">{label} Backend Connected</span>
         <span className="hidden sm:inline lg:hidden">Connected</span>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 gap-3 p-3.5">
         <div className="flex items-center gap-3">
           <ProviderMark />
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">CloudHike backend</p>
-            <p className="truncate text-xs text-muted-foreground">{backend.projectName ?? "CloudHike project"}</p>
+            <p className="text-sm font-medium">{label} backend</p>
+            <p className="truncate text-xs text-muted-foreground">{backend.projectName ?? `${label} project`}</p>
           </div>
           <Badge className="h-5 bg-emerald-500/15 px-1.5 text-[10px] text-emerald-700 dark:text-emerald-300">Live</Badge>
         </div>
@@ -283,8 +325,8 @@ function ConnectedPopover({
           <p className="rounded-(--r-sm) bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-300">Last setup attempt: {backend.error}</p>
         )}
         <div className="grid gap-1.5">
-          <Button variant="outline" className="h-8 justify-start" render={<a href="https://cloudhike.dev" target="_blank" rel="noreferrer noopener" />}>
-            <ExternalLink /> Open CloudHike dashboard
+          <Button variant="outline" className="h-8 justify-start" render={<a href={dashboardUrl} target="_blank" rel="noreferrer noopener" />}>
+            <ExternalLink /> Open {label} dashboard
           </Button>
           <Button variant="ghost" className="h-8 justify-start" onClick={onEditServices} disabled={agentBusy}>
             <Settings2 /> Edit services
@@ -308,7 +350,7 @@ function ConnectedPopover({
 export function BackendControl({
   projectId,
   backend,
-  cloudhike,
+  providers,
   agentBusy,
   onSetupBackend,
   onDisconnected,
@@ -316,11 +358,11 @@ export function BackendControl({
 }: {
   projectId: string
   backend: BackendInfo | null
-  cloudhike: Cloudhike
+  providers: BackendProviderStatus[]
   agentBusy: boolean
-  onSetupBackend: (services: string[]) => void
+  onSetupBackend: (provider: BackendProviderId, services: string[]) => void
   onDisconnected: () => void
-  /** Re-checks the CloudHike connection and this app's backend with the server, in case either went stale (disconnected elsewhere, revoked on CloudHike's side). */
+  /** Re-checks the provider links and this app's backend with the server, in case either went stale (disconnected elsewhere, revoked on the provider's side). */
   onRefresh: () => void
 }) {
   const [open, setOpen] = React.useState(false)
@@ -328,11 +370,13 @@ export function BackendControl({
   const [confirm, setConfirm] = React.useState(false)
   const [forgetAccount, setForgetAccount] = React.useState(false)
   const [disconnectError, setDisconnectError] = React.useState<string | null>(null)
-  // After "also remove my authorization" the server-rendered flag is stale.
-  const [accountForgotten, setAccountForgotten] = React.useState(false)
-  const account = { ...cloudhike, accountConnected: cloudhike.accountConnected && !accountForgotten }
+  const [provider, setProvider] = React.useState<BackendProviderId>(backend?.provider ?? DEFAULT_BACKEND_PROVIDER)
+  // After "also remove my authorization" the server-rendered link state is stale.
+  const [forgotten, setForgotten] = React.useState<BackendProviderId | null>(null)
+  const linked = providers.map((p) => (p.id === forgotten ? { ...p, accountConnected: false } : p))
+  const currentLabel = providerInfo(backend?.provider ?? provider).label
 
-  // Back from CloudHike's Allow screen: set up right away, or explain what went wrong.
+  // Back from the provider's Allow screen: set up right away, or explain what went wrong.
   const handled = React.useRef(false)
   React.useEffect(() => {
     if (handled.current) return
@@ -342,11 +386,15 @@ export function BackendControl({
     if (!result) return
     const services = (url.searchParams.get("services") ?? "").split(",").filter(Boolean)
     const reason = url.searchParams.get("reason") ?? "failed"
-    for (const k of ["backend", "services", "reason"]) url.searchParams.delete(k)
+    const raw = url.searchParams.get("provider")
+    const returned = isBackendProviderId(raw) ? raw : DEFAULT_BACKEND_PROVIDER
+    for (const k of ["backend", "services", "reason", "provider"]) url.searchParams.delete(k)
     window.history.replaceState(null, "", url.pathname + (url.search ? url.search : "") + url.hash)
-    if (result === "connected") onSetupBackend(services.length ? services : ["postgres", "auth", "storage"])
+    setProvider(returned)
+    // An empty list is fine: the server always adds the provider's required services.
+    if (result === "connected") onSetupBackend(returned, services)
     else {
-      setNotice(ERRORS[reason] ?? ERRORS.failed)
+      setNotice(connectError(reason, providerInfo(returned).label))
       setOpen(true)
     }
   }, [onSetupBackend])
@@ -361,7 +409,7 @@ export function BackendControl({
     },
     onSuccess: (_, { forget }) => {
       setConfirm(false)
-      if (forget) setAccountForgotten(true)
+      if (forget && backend) setForgotten(backend.provider)
       onDisconnected()
     },
     onError: (e) => {
@@ -378,9 +426,10 @@ export function BackendControl({
 
   // The connection/backend state shown here is a snapshot: resync before
   // opening anything, so the dialog's needsAuth and the buttons below reflect
-  // the real thing (not a connection dropped in another tab, or on CloudHike's side).
+  // the real thing (not a connection dropped in another tab, or on the provider's side).
   const openDialog = () => {
     onRefresh()
+    if (backend) setProvider(backend.provider)
     setOpen(true)
   }
 
@@ -390,7 +439,7 @@ export function BackendControl({
     trigger = (
       <span className="flex h-8 items-center gap-2 rounded-full border border-border bg-muted/60 px-3 text-xs font-medium text-muted-foreground" role="status">
         <Spinner className="size-3.5" />
-        <span className="hidden sm:inline">Setting up CloudHike…</span>
+        <span className="hidden sm:inline">Setting up {currentLabel}…</span>
       </span>
     )
   } else if (status === "ready") {
@@ -398,7 +447,7 @@ export function BackendControl({
       <ConnectedPopover
         backend={backend!}
         agentBusy={agentBusy}
-        onRerun={() => onSetupBackend(backend!.services)}
+        onRerun={() => onSetupBackend(backend!.provider, backend!.services)}
         onEditServices={openDialog}
         onDisconnect={() => setConfirm(true)}
       />
@@ -434,7 +483,9 @@ export function BackendControl({
           if (!o) setNotice(null)
         }}
         projectId={projectId}
-        cloudhike={account}
+        providers={linked}
+        provider={provider}
+        onProviderChange={setProvider}
         backend={backend}
         notice={notice}
         agentBusy={agentBusy}
@@ -443,17 +494,17 @@ export function BackendControl({
       <AlertDialog open={confirm} onOpenChange={setConfirm}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Disconnect this app from CloudHike?</AlertDialogTitle>
+            <AlertDialogTitle>Disconnect this app from {currentLabel}?</AlertDialogTitle>
             <AlertDialogDescription>
-              The preview goes back to data stored on this device. Your CloudHike project and everything in it stay in your CloudHike
-              workspace; you can delete them there.
+              The preview goes back to data stored on this device. Your {currentLabel} project and everything in it stay in your{" "}
+              {currentLabel} workspace; you can delete them there.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <label className="flex cursor-pointer items-start gap-2.5 text-sm">
             <Checkbox checked={forgetAccount} onCheckedChange={(v) => setForgetAccount(!!v)} className="mt-0.5" />
             <span>
-              Also remove my CloudHike authorization
-              <span className="block text-xs text-muted-foreground">You can revoke it in CloudHike too, under Settings → API &amp; apps.</span>
+              Also remove my {currentLabel} authorization
+              <span className="block text-xs text-muted-foreground">You can also revoke it from your {currentLabel} account settings.</span>
             </span>
           </label>
           {disconnectError && <p className="text-xs text-destructive">{disconnectError}</p>}
@@ -468,5 +519,3 @@ export function BackendControl({
     </>
   )
 }
-
-export { LABEL as BACKEND_SERVICE_LABELS }

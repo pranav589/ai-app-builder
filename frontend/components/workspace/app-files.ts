@@ -54,16 +54,7 @@ export function appFileTree({
   const all: Record<string, string> = { ...files }
   // Screens show up as they are written, including the one streaming in.
   for (const s of screens) if (s.path && s.code) all[s.path] = s.code
-  all["backend.config.json"] =
-    JSON.stringify(
-      {
-        // Local storage until a CloudHike account is connected; then CloudHike Database, Storage and Auth.
-        provider: backend?.provider ?? "local",
-        defaultProvider: "cloudhike",
-        ...(backend?.provider === "cloudhike" ? { cloudhike: { projectRef: backend.projectRef, region: backend.region } } : {}),
-      },
-      null,
-      2
-    ) + "\n"
+  // Local storage until a backend provider is connected; then that provider's project.
+  all["backend.config.json"] = JSON.stringify(backend ?? { provider: "local" }, null, 2) + "\n"
   return toTree(all)
 }

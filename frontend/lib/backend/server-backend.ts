@@ -1,32 +1,31 @@
 "use client"
 
-// CloudHike backend: the app's data, settings, files and users live in the
-// creator's CloudHike project (Database, Storage, Auth). CloudHike has no
-// browser data API, so every call goes to this app's server
-// (/api/projects/[id]/backend/data), which holds the project's credentials;
-// nothing secret ever reaches the browser.
+// A connected backend: the app's data, settings, files and users live in the
+// creator's project on a backend provider. Whichever provider it is, every
+// call goes to this app's server (/api/projects/[id]/backend/data), which
+// holds the project's credentials and talks to the provider; nothing secret
+// ever reaches the browser, and nothing here is provider-specific.
 //
 // No live sync: data is fetched on load and again after this client's own writes
 // (subscribe() listeners are told). A change made from another device or tab shows
 // up on the next load.
 
+import { providerInfo, type BackendProviderId } from "@app/shared/app-backend/providers"
 import type { DataModel } from "@app/shared/app-runtime/data-model"
 import { apiClient, getApiErrorData, isApiNetworkError } from "@/lib/api-client"
 import { compressImage } from "./local-backend"
 import { BackendError, type AppBackend, type AppRecord, type AppUser, type BackendChange } from "./types"
 
-export type CloudHikeConfig = { projectRef: string; region?: string }
-
-export class CloudHikeBackend implements AppBackend {
-  readonly provider = "cloudhike" as const
+export class ServerBackend implements AppBackend {
   private listeners = new Set<(c: BackendChange) => void>()
   private sessionKey: string
 
   constructor(
     readonly appId: string,
-    readonly config: CloudHikeConfig
+    readonly provider: BackendProviderId
   ) {
-    this.sessionKey = `anything:cloudhike-session:${appId}`
+    // Per provider: a session token from one provider's auth means nothing to another's.
+    this.sessionKey = `anything:${provider}-session:${appId}`
   }
 
   private get session() {
@@ -146,8 +145,9 @@ export class CloudHikeBackend implements AppBackend {
   }
 
   async reset() {
-    // Real data in the creator's CloudHike database is never wiped from the preview.
-    throw new BackendError("This app's data lives in CloudHike. Manage or clear it in your CloudHike dashboard.")
+    // Real data in the creator's database is never wiped from the preview.
+    const { label } = providerInfo(this.provider)
+    throw new BackendError(`This app's data lives in ${label}. Manage or clear it in your ${label} dashboard.`)
   }
 
   dispose() {

@@ -108,8 +108,10 @@ flowchart TD
 | `components/workspace/chat-panel.tsx` | Chat UI: message list, plan-approval UI, input box |
 | `app/api/projects/[projectId]/agent/route.ts` | Entry point. Picks a `task` ("plan" / "generate" / "backend") based on project state, opens a run, dispatches it, streams the SSE response back |
 | `lib/agent/run-store.ts` | DB-backed mutex (`openRun`) so only **one run per project** can be active at a time, enforced by a Postgres partial unique index — plus the event sink that backs the SSE stream (`agent_runs` / `agent_events` tables) |
-| `lib/jobs/cloudhike-jobs.ts` | Decides whether to enqueue the run to the Cloudhike Jobs HTTP queue (production) or just call `executeRun` in-process (local dev) |
-| `app/api/jobs/agent/route.ts` | The webhook a Cloudhike Jobs worker calls back into to actually execute a run in production |
+| `lib/jobs/index.ts` | `agentRunner()` decides whether to enqueue the run to the job queue (production) or just call `executeRun` in-process (local dev); `jobQueue` is the queue in use |
+| `lib/jobs/queue.ts` | The `JobQueue` interface any queue implements |
+| `lib/jobs/cloudhike-jobs.ts` | The Cloudhike Jobs adapter (HTTP queue, signed worker calls) |
+| `app/api/jobs/agent/route.ts` | The webhook the queue's worker calls back into to actually execute a run in production (signature checked by `jobQueue.verifySignature`) |
 | `lib/agent/execute.ts` | `executeRun` — the single entry point both paths above call into |
 | `lib/agent/orchestrator.ts` | The brain. Facade re-exporting modular agent lifecycle subsystems: planning (`planning.ts`), generation (`generation.ts`), message routing (`router.ts`), history & state persistence (`history.ts`), repair (`repair.ts`), canvas AST edits (`canvas-edit.ts`), and verified single-screen edits (`verified-edit.ts`) |
 | `lib/agent/protocol.ts` | Parses the planner's tagged-block replies into structured data |
@@ -457,24 +459,30 @@ flowchart TD
 | File | Role |
 |---|---|
 | `components/workspace/backend-connect.tsx` | The "Connect Backend" UI flow |
-| `lib/cloudhike/connect.ts` | OAuth-like "connect your CloudHike account" flow; stores the resulting token encrypted |
-| `lib/cloudhike/config.ts` | Parses which CloudHike services are available/configured |
-| `lib/cloudhike/mcp.ts` | Client for CloudHike's MCP server (the protocol used to actually provision resources) |
-| `lib/cloudhike/provision.ts` | A dedicated "backend engineer" AI agent — runs its own tagged-reply loop calling CloudHike MCP tools to create a project and deploy services |
-| `lib/cloudhike/app-backend.ts` | The `app_backends` row: `getBackend`, decrypting the env (`readEnv`/`sealEnv`), and minting the public app key (`ensureAppKey`) |
-| `lib/cloudhike/app-data.ts` | The data plane: Postgres tables/queries, S3 uploads, CloudHike Auth calls, schema sync. No builder-only imports (a copy ships in exports) |
-| `lib/cloudhike/app-ops.ts` | The one `{ op }` dispatcher (list/insert/auth.*/upload/...) shared by the preview route, the public route and the self-host server |
-| `lib/cloudhike/rate-limit.ts` | In-memory per-key rate limiter for the public route |
+| `shared/app-backend/providers.ts` | The provider catalogue (labels, services, required services) both sides read, plus `parseServices` |
+| `lib/app-backend/types.ts` | `BackendProvider`: what every provider adapter implements (account link, provisioning, runtime, self-host) |
+| `lib/app-backend/registry.ts` | `getProvider(id)` / `providerFor(row)`: the one place providers are listed |
+| `lib/app-backend/contract.ts` | `AppServices` (data/auth/upload) and `AppBackendError`: the provider-neutral contract the op dispatcher runs on. No imports (a copy ships in exports) |
+| `lib/app-backend/app-ops.ts` | The one `{ op }` dispatcher (list/insert/auth.*/upload/...) shared by the preview route, the public route and the self-host server |
+| `lib/app-backend/backend.service.ts` | What the routes do (status, disconnect, preview/runtime data calls, file serving, schema sync after builds), via the row's provider |
+| `lib/app-backend/app-backend.ts` | The `app_backends` row and the app doc's `backend` field: `getBackend`, `saveBackend`, `setDocBackend`, `readEnv`/`sealEnv`, `backendInfo`, `ensureAppKey` |
+| `lib/app-backend/connect-state.ts` | Signed state cookie pinning a provider's account-link redirect to one user, app and provider |
+| `lib/app-backend/rate-limit.ts` | In-memory per-key rate limiter for the public route |
+| `lib/app-backend/cloudhike/index.ts` | The CloudHike `BackendProvider` adapter, wiring the files below |
+| `lib/app-backend/cloudhike/connect.ts`, `config.ts` | CloudHike Connect: authorize URL, code exchange, the encrypted stored token (`cloudhike_connections`) |
+| `lib/app-backend/cloudhike/mcp.ts` | Client for CloudHike's MCP server (the protocol used to actually provision resources) |
+| `lib/app-backend/cloudhike/provision.ts` | A dedicated "backend engineer" AI agent — runs its own tagged-reply loop calling CloudHike MCP tools to create a project and deploy services |
+| `lib/app-backend/cloudhike/app-data.ts` | CloudHike's `AppServices`: Postgres tables/queries, S3 uploads, CloudHike Auth calls, schema sync. No builder-only imports (a copy ships in exports) |
+| `lib/app-backend/cloudhike/self-host.ts`, `backend-readme.ts` | The `server/` folder and README section a ZIP/GitHub export of a CloudHike-backed app gets |
+| `routes/backend-providers.routes.ts`, `controllers/backend.controller.ts` | `/api/backend-providers/:provider/{connect,callback}` plus the generic `/api/projects/:id/backend*` handlers |
 | `app/api/app-runtime/[projectId]/data/route.ts` | Public, CORS-enabled route built apps call with their app key |
-| `lib/app-project/with-backend.ts` | At output time (APK, QR preview, web deploy, ZIP, GitHub), swaps the on-device `lib/backend` for the remote one when CloudHike is connected |
+| `lib/app-project/with-backend.ts` | At output time (APK, QR preview, web deploy, ZIP, GitHub), swaps the on-device `lib/backend` for the remote one when a backend is connected, and answers which provider |
 | `lib/app-project/backend-remote.ts` | The generated remote `lib/backend` module (same hooks as the local one, over HTTP) and its `config.ts` |
-| `lib/app-project/self-host.ts` | The `server/` folder shipped in ZIP/GitHub exports (copies `app-data.ts`/`app-ops.ts`) plus `.env.example` files |
-| `lib/app-project/backend-readme.ts` | README section with the step-by-step hosted / self-host instructions |
-| `lib/cloudhike/owner.ts` | Ownership check helper used by backend-related routes |
+| `middleware/requireProjectOwner.ts` | Ownership check used by backend-related routes |
 | `lib/crypto/secret-box.ts` | Symmetric encryption for stored tokens/secrets |
 | `lib/backend/types.ts` | `AppBackend` — the interface generated app code calls (db/kv/storage/auth) |
 | `lib/backend/local-backend.ts` | In-browser/on-device fake implementation (used before a real backend is connected) |
-| `lib/backend/cloudhike-backend.ts` | Real implementation that talks to a provisioned CloudHike project |
+| `lib/backend/server-backend.ts` | Real implementation for any connected provider: every call goes through our server's `/api/projects/[id]/backend/data` |
 | `lib/backend/index.ts` | `createBackend` — factory that picks an implementation based on project config |
 | `app/api/projects/[projectId]/backend/route.ts` | Backend status/setup endpoint |
 | `app/api/projects/[projectId]/backend/data/route.ts` | The creator-session route the builder's own preview uses for data, auth and storage |
@@ -486,10 +494,10 @@ connected: they keep using on-device storage). A ZIP/GitHub export additionally 
 run with their own `.env` (see the README the export generates). The key stops working when the backend is disconnected.
 
 **How to explain it to someone technical**: "Generated apps are written against one
-small interface (`AppBackend`), never against CloudHike directly — so the same
+small interface (`AppBackend`), never against a provider directly — so the same
 generated code works whether or not a real backend is connected, it's just a
 different implementation behind the interface. Provisioning the real backend is
-itself done by a *second*, separate AI agent (`lib/cloudhike/provision.ts`) that's
+itself the provider adapter's job; for CloudHike a *second*, separate AI agent (`lib/app-backend/cloudhike/provision.ts`) that's
 allowed to call CloudHike's MCP tools — it's a different agent loop from the one
 that writes your app's UI."
 
@@ -506,7 +514,7 @@ flowchart TD
     A["User clicks 'Download as ZIP' in Export menu"] --> B["Client sends GET /api/projects/[id]/export/zip via apiClient"]
     B --> C["Server validates project ownership"]
     C --> D["workspaceFromDoc extracts project files from AppDoc"]
-    D --> E["buildExportFileMap: withBackend swap (if CloudHike connected) + scaffoldFiles(null) + README.md\n(+ server/ and .env.example for a connected app)"]
+    D --> E["buildExportFileMap: withBackend swap (if a backend is connected) + scaffoldFiles(null) + README.md\n(+ server/ and .env.example for a connected app)"]
     E --> F["zipFileMap packages files into Buffer using JSZip"]
     F --> G["Server streams application/zip with attachment header"]
     G --> H["Client receives blob, creates object URL, triggers download"]
@@ -702,7 +710,8 @@ flowchart TD
 | `components/auth/auth-provider.tsx` | React context exposing the current user |
 | `components/auth/social-icons.tsx` | OAuth provider buttons |
 | `app/api/auth/{session,sign-in,sign-up,sign-out,social}/route.ts` | Cookie-session endpoints; `social` exchanges a CloudHike-issued token for the local session cookie |
-| `lib/cloudhike-auth.ts` | Verifies tokens against CloudHike's auth service |
+| `lib/identity/index.ts`, `types.ts` | `identity`: the builder's sign-in provider behind the `IdentityProvider` interface |
+| `lib/identity/cloudhike.ts` | The CloudHike Auth implementation (sign-up/in/out, session lookup) |
 | `lib/session.ts` | Cookie get/set/clear helpers |
 | `lib/users.ts` | `ensureUser` — upserts a local `users` row mirroring the CloudHike-side user |
 | `lib/current-user.ts` | `getCurrentUser`-style helper every API route uses; throws a `ServiceUnavailableError` if there's no session |

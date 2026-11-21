@@ -1,6 +1,6 @@
 import ts from "typescript"
 import { describe, expect, it } from "vitest"
-import { excludeServerFromTsconfig, selfHostFiles } from "../self-host"
+import { selfHostFiles } from "../self-host"
 
 describe("selfHostFiles", () => {
   const files = selfHostFiles()
@@ -9,6 +9,7 @@ describe("selfHostFiles", () => {
   it("copies the builder's own data logic instead of rewriting it", () => {
     expect(files["server/app-data.ts"]).toContain("export function dataApi")
     expect(files["server/app-ops.ts"]).toContain("export async function runAppOp")
+    expect(files["server/contract.ts"]).toContain("export interface AppServices")
     expect(files["server/data-model-types.ts"]).toContain("export type DataModel")
   })
 
@@ -45,18 +46,5 @@ describe("selfHostFiles", () => {
     const read = [...files["server/index.ts"].matchAll(/"([A-Z][A-Z0-9_]{2,})"/g)].map((m) => m[1]).filter((k) => /^(DATABASE|DIRECT|AUTH|S3)_/.test(k))
     for (const key of read) expect(files["server/.env.example"], key).toContain(`${key}=`)
     expect(files["server/.env.example"]).toContain("APP_KEY=")
-  })
-})
-
-describe("excludeServerFromTsconfig", () => {
-  it("keeps the app's settings and adds the server to exclude", () => {
-    const out = JSON.parse(excludeServerFromTsconfig('{"extends":"expo/tsconfig.base","include":["**/*.ts"]}')!)
-    expect(out.extends).toBe("expo/tsconfig.base")
-    expect(out.exclude).toContain("server")
-  })
-
-  it("passes through a missing or unreadable tsconfig", () => {
-    expect(excludeServerFromTsconfig(undefined)).toBeUndefined()
-    expect(excludeServerFromTsconfig("not json")).toBe("not json")
   })
 })

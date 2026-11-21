@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, users, type User } from "@/db";
-import type { CloudHikeUser } from "@/lib/cloudhike-auth";
+import type { IdentityUser } from "@/lib/identity";
 
 export const SIGNUP_CREDITS = 100;
 
@@ -11,11 +11,11 @@ function toPublic(u: User): PublicUser {
 }
 
 /**
- * Returns the app user for a CloudHike account, creating it on first sight.
+ * Returns the app user for an identity-provider account, creating it on first sight.
  * The signup credits are only ever written by the INSERT of a brand-new row;
  * an existing row is never updated here, so signing in again cannot grant them twice.
  */
-export async function ensureUser(auth: CloudHikeUser): Promise<PublicUser> {
+export async function ensureUser(auth: IdentityUser): Promise<PublicUser> {
   const email = auth.email.trim().toLowerCase();
 
   await db

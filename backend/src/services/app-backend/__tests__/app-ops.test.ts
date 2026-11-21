@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import type { DataModel } from "@app/shared/app-runtime/data-model-types"
-import { AppBackendError } from "../app-data"
 import { appOpFailure, runAppOp, type OpContext } from "../app-ops"
+import { AppBackendError, type AppServices } from "../contract"
 
 const data = {
   list: vi.fn(async (c: string) => [{ id: "1", collection: c }]),
@@ -14,22 +14,17 @@ const data = {
   version: vi.fn(async () => 7),
 }
 const auth = { current: vi.fn(async () => null), signUp: vi.fn(), signIn: vi.fn(), signOut: vi.fn(), resetPassword: vi.fn() }
+const upload = vi.fn(async () => ({ url: "https://x/uploads/a.png" }))
 
-// The real database and CloudHike Auth are exercised elsewhere; this is about which calls get through.
-vi.mock("../app-data", async (orig) => ({
-  ...(await orig<typeof import("../app-data")>()),
-  dataApi: () => data,
-  authApi: () => auth,
-}))
+// An in-memory provider: the dispatcher only ever sees AppServices, so any
+// provider that implements them works unchanged. Real providers are tested in their own folders.
+const services = { data, auth, upload } as unknown as AppServices
 
 const model: DataModel = { collections: [{ name: "tasks", label: "Tasks", fields: [], seed: [] }], settings: {}, user: { name: "A", email: "a@b.c" }, hash: "h" }
 const ctx = (over: Partial<OpContext> = {}): OpContext => ({
-  projectId: "p1",
-  env: {},
+  services,
   model,
   session: "tok",
-  fileUrl: (k) => `https://x/${k}`,
-  resetRedirect: "https://x/",
   declaredOnly: true,
   ...over,
 })
@@ -57,6 +52,11 @@ describe("runAppOp with declaredOnly", () => {
   it("passes the end user's session to auth", async () => {
     await runAppOp(ctx(), { op: "auth.current" })
     expect(auth.current).toHaveBeenCalledWith("tok")
+  })
+
+  it("hands uploads to the provider's storage", async () => {
+    expect(await runAppOp(ctx(), { op: "upload", dataUrl: "data:image/png;base64,AA==" })).toEqual({ url: "https://x/uploads/a.png" })
+    expect(upload).toHaveBeenCalledWith("data:image/png;base64,AA==")
   })
 
   it("rejects schema setup and anything unknown", async () => {

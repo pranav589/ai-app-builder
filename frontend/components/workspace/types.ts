@@ -1,4 +1,5 @@
 import type { AgentPhase, BackendInfo, GeneratedScreen, StoredMessage } from "@app/shared/agent/types"
+import type { BackendProviderStatus } from "@app/shared/app-backend/providers"
 import type { BackendConfig } from "@app/shared/app-runtime/app-doc"
 import type { DataModel } from "@app/shared/app-runtime/data-model"
 import type { ThemePackage } from "@app/shared/app-runtime/theme"
@@ -25,9 +26,9 @@ export type WorkspaceProject = {
   /** Project files other than screens. */
   files: Record<string, string>
   backend: BackendConfig
-  /** The app's CloudHike backend (status only, never credentials). */
+  /** The app's connected backend (status only, never credentials). */
   backendInfo: BackendInfo | null
-  cloudhike: { configured: boolean; accountConnected: boolean }
+  backendProviders: BackendProviderStatus[]
   isPublic: boolean
   publicSlug: string | null
 }

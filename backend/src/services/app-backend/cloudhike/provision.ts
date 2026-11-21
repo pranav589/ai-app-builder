@@ -1,15 +1,15 @@
 import { randomBytes } from "node:crypto"
 import { Agent, assistant, run as runAgent, system, user, type AgentInputItem } from "@openai/agents"
-import { eq, sql } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 
-import { appBackends, db, messages, projects } from "@/db"
+import { db, messages, projects } from "@/db"
 import { getFastModel, reasoningEffort, reasoningProviderData } from "@/lib/agent/config"
 import type { LiveRun } from "@/lib/agent/registry"
-import type { BackendInfo } from "@app/shared/agent/types"
+import { BACKEND_SERVICE_INFO, type BackendService } from "@app/shared/app-backend/providers"
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
-import { getBackend, readEnv, sealEnv } from "./app-backend"
-import { syncSchema, type AppEnv } from "./app-data"
-import type { BackendService } from "./config"
+import { backendInfo, getBackend, saveBackend, sealEnv, setDocBackend } from "../app-backend"
+import type { AppEnv } from "../contract"
+import { syncSchema } from "./app-data"
 import { getAccess, markRevoked, type CloudHikeAccess } from "./connect"
 import { CloudHikeRateLimitError, CloudHikeRevokedError, parseEnv, withMcp, type McpSession, type McpTool } from "./mcp"
 
@@ -26,14 +26,6 @@ import { CloudHikeRateLimitError, CloudHikeRevokedError, parseEnv, withMcp, type
 const AGENT_TOOLS = ["list_projects", "create_project", "get_project", "deploy_services", "wait_for_services", "get_docs"]
 const MAX_STEPS = 16
 const RESULT_LIMIT = 6000
-
-export const SERVICE_LABELS: Record<BackendService, string> = {
-  postgres: "Database",
-  auth: "Authentication",
-  storage: "File storage",
-  email: "Email",
-  jobs: "Background jobs",
-}
 
 /** What each service must put in the project's environment before the app can use it. */
 const REQUIRED_ENV: Record<BackendService, string[]> = {
@@ -205,30 +197,10 @@ async function fetchEnv(access: CloudHikeAccess, session: McpSession, done: Done
 }
 
 function missingEnv(env: AppEnv, services: BackendService[]) {
-  return services.flatMap((s) => REQUIRED_ENV[s].filter((k) => !env[k]).map((k) => `${SERVICE_LABELS[s]} (${k})`))
+  return services.flatMap((s) => REQUIRED_ENV[s].filter((k) => !env[k]).map((k) => `${BACKEND_SERVICE_INFO[s].label} (${k})`))
 }
 
-export function backendInfo(row: Awaited<ReturnType<typeof getBackend>>): BackendInfo | null {
-  if (!row) return null
-  return {
-    provider: "cloudhike",
-    status: row.status,
-    projectId: row.externalProjectId,
-    projectName: row.externalProjectName,
-    services: row.services,
-    error: row.error,
-    connectedAt: row.connectedAt?.toISOString() ?? null,
-  }
-}
-
-async function saveRow(projectId: string, patch: Partial<typeof appBackends.$inferInsert>) {
-  const values = { ...patch, updatedAt: new Date() }
-  await db
-    .insert(appBackends)
-    .values({ projectId, ...values })
-    .onConflictDoUpdate({ target: appBackends.projectId, set: values })
-  return getBackend(projectId)
-}
+const saveRow = (projectId: string, patch: Parameters<typeof saveBackend>[2]) => saveBackend(projectId, "cloudhike", patch)
 
 /**
  * Sets up (or repairs) the CloudHike backend of an app: project, services,
@@ -313,19 +285,10 @@ export async function runBackendSetup(run: LiveRun, projectId: string, userId: s
       connectedAt: previous?.connectedAt ?? new Date(),
     })
     // The app now runs on CloudHike in the preview (and in exports).
-    await db
-      .update(projects)
-      .set({
-        previewScreens: sql`jsonb_set(coalesce(${projects.previewScreens}, '{"v":2,"screens":[]}'::jsonb), '{backend}', ${JSON.stringify({
-          provider: "cloudhike",
-          projectRef: result.done.projectId,
-        })}::jsonb)`,
-        updatedAt: new Date(),
-      })
-      .where(eq(projects.id, projectId))
+    await setDocBackend(projectId, { provider: "cloudhike", projectRef: result.done.projectId })
     await emitInfo(row)
     await finish(
-      `Your app is connected to **CloudHike**. ${services.map((s) => SERVICE_LABELS[s]).join(", ")} ${services.length === 1 ? "is" : "are"} live in the project **${result.done.projectName ?? project.name}**, and the preview now stores, loads and syncs real data there.`
+      `Your app is connected to **CloudHike**. ${services.map((s) => BACKEND_SERVICE_INFO[s].label).join(", ")} ${services.length === 1 ? "is" : "are"} live in the project **${result.done.projectName ?? project.name}**, and the preview now stores, loads and syncs real data there.`
     )
   } catch (e) {
     let reason: string
@@ -342,20 +305,5 @@ export async function runBackendSetup(run: LiveRun, projectId: string, userId: s
       await finish(`I couldn't finish the CloudHike setup. ${reason}`)
     }
     await emitInfo(await saveRow(projectId, { status: previous?.status === "ready" ? "ready" : "error", error: reason }))
-  }
-}
-
-/** After a build changed the data model: add the new tables to a connected app's database. Never fails the build. */
-export async function syncBackendSchema(projectId: string) {
-  try {
-    const row = await getBackend(projectId)
-    if (!row || row.status !== "ready" || !row.envEnc) return
-    const [project] = await db.select({ previewScreens: projects.previewScreens }).from(projects).where(eq(projects.id, projectId)).limit(1)
-    const data = readAppDoc(project?.previewScreens).data
-    if (!data || data.hash === row.schemaHash) return
-    await syncSchema(readEnv(row), data)
-    await db.update(appBackends).set({ schemaHash: data.hash, updatedAt: new Date() }).where(eq(appBackends.projectId, projectId))
-  } catch (e) {
-    console.error("syncing the app's CloudHike tables failed", projectId, e)
   }
 }

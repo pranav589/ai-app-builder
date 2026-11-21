@@ -1,10 +1,11 @@
 // The one interface every generated app talks to for data, files and auth.
 // Screens never see it directly: they send declarative requests to the host
-// page, and the host calls whichever backend is configured. Today that is
-// the browser's local storage; when the creator connects CloudHike, the same
-// calls go to CloudHike Database, Storage and Auth instead. Nothing in the
+// page, and the host calls whichever backend is configured: the browser's
+// local storage until the creator connects a backend provider, then that
+// provider's database, storage and auth (through our server). Nothing in the
 // screens or the runtime changes when that switch happens.
 
+import type { BackendProviderId } from "@app/shared/app-backend/providers"
 import type { DataModel } from "@app/shared/app-runtime/data-model"
 
 export type AppRecord = Record<string, unknown> & { id: string; createdAt: string; updatedAt?: string }
@@ -45,9 +46,11 @@ export interface AppAuth {
 }
 
 export interface AppBackend {
-  readonly provider: "local" | "cloudhike"
+  readonly provider: "local" | BackendProviderId
   /** Prepares storage for this app's data model (seeding on first run). */
   init(model: DataModel): Promise<void>
+  /** Everything the preview shows, in one request, for backends where each call is a round trip. */
+  snapshot?(collections: string[]): Promise<{ collections: Record<string, AppRecord[]>; settings: Record<string, unknown>; user: AppUser | null }>
   db: AppDatabase
   kv: AppKeyValue
   storage: AppStorage

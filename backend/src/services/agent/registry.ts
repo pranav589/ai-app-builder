@@ -2,7 +2,7 @@ import type { AgentEvent } from "@app/shared/agent/types"
 
 // What the orchestrator writes to while it works. The run's events are
 // persisted (lib/agent/run-store.ts) and streamed to the workspace from the
-// database, so a run can execute in a Cloudhike Jobs worker, in this process,
+// database, so a run can execute in a job-queue worker, in this process,
 // or anywhere else, and a reloaded page can join it.
 export type LiveRun = {
   projectId: string

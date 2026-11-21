@@ -1,9 +1,14 @@
 import type { Request, Response, NextFunction } from "express"
-import { CloudHikeAuthError, getSessionUser, signInEmail, signOutToken, signUpEmail } from "../services/cloudhike-auth"
+import { identity, IdentityError } from "../services/identity"
 import { extractToken } from "../middleware/requireUser"
 import { SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from "../services/session"
 import { ensureUser } from "../services/users"
 import { validateCredentials } from "@app/shared/auth-validation"
+
+/** 4xx from the provider is the person's to fix; anything else upstream is our 502 (503 stays "try again"). */
+function sendIdentityError(res: Response, err: IdentityError) {
+  res.status(err.status === 503 ? 503 : err.status < 500 ? err.status : 502).json({ error: err.message, code: err.code })
+}
 
 export async function getSession(req: Request, res: Response, next: NextFunction) {
   const token = extractToken(req)
@@ -13,7 +18,7 @@ export async function getSession(req: Request, res: Response, next: NextFunction
   }
 
   try {
-    const authUser = await getSessionUser(token)
+    const authUser = await identity.getSessionUser(token)
     if (!authUser) {
       res.clearCookie(SESSION_COOKIE, { path: "/" })
       res.json({ user: null })
@@ -40,16 +45,13 @@ export async function signIn(req: Request, res: Response, next: NextFunction) {
   }
 
   try {
-    const { token, user: authUser } = await signInEmail(input)
+    const { token, user: authUser } = await identity.signIn(input)
     const user = await ensureUser(authUser)
     res.cookie(SESSION_COOKIE, token, SESSION_COOKIE_OPTIONS)
     res.json({ user })
   } catch (err) {
-    if (err instanceof CloudHikeAuthError) {
-      res.status(err.status === 503 ? 503 : err.status < 500 ? err.status : 502).json({
-        error: err.message,
-        code: err.code,
-      })
+    if (err instanceof IdentityError) {
+      sendIdentityError(res, err)
       return
     }
     console.error("sign-in failed", err)
@@ -71,7 +73,7 @@ export async function signUp(req: Request, res: Response, next: NextFunction) {
   }
 
   try {
-    const { token, user: authUser } = await signUpEmail(input)
+    const { token, user: authUser } = await identity.signUp(input)
     let user
     try {
       user = await ensureUser(authUser)
@@ -85,11 +87,8 @@ export async function signUp(req: Request, res: Response, next: NextFunction) {
     res.cookie(SESSION_COOKIE, token, SESSION_COOKIE_OPTIONS)
     res.json({ user })
   } catch (err) {
-    if (err instanceof CloudHikeAuthError) {
-      res.status(err.status === 503 ? 503 : err.status < 500 ? err.status : 502).json({
-        error: err.message,
-        code: err.code,
-      })
+    if (err instanceof IdentityError) {
+      sendIdentityError(res, err)
       return
     }
     console.error("sign-up failed", err)
@@ -100,7 +99,7 @@ export async function signUp(req: Request, res: Response, next: NextFunction) {
 export async function signOut(req: Request, res: Response, next: NextFunction) {
   const token = extractToken(req)
   if (token) {
-    await signOutToken(token).catch(() => undefined)
+    await identity.signOut(token).catch(() => undefined)
   }
   res.clearCookie(SESSION_COOKIE, { path: "/" })
   res.json({ ok: true })
@@ -114,7 +113,7 @@ export async function social(req: Request, res: Response, next: NextFunction) {
   }
 
   try {
-    const authUser = await getSessionUser(token)
+    const authUser = await identity.getSessionUser(token)
     if (!authUser) {
       res.status(401).json({ error: "Sign-in expired. Try again." })
       return
@@ -123,10 +122,8 @@ export async function social(req: Request, res: Response, next: NextFunction) {
     res.cookie(SESSION_COOKIE, token, SESSION_COOKIE_OPTIONS)
     res.json({ user })
   } catch (err) {
-    if (err instanceof CloudHikeAuthError) {
-      res.status(err.status === 503 ? 503 : err.status < 500 ? err.status : 502).json({
-        error: err.message,
-      })
+    if (err instanceof IdentityError) {
+      sendIdentityError(res, err)
       return
     }
     console.error("social sign-in failed", err)

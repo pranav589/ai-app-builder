@@ -1,6 +1,6 @@
-// The device backend for an app whose creator connected CloudHike. Same API
-// as backendDevice() (templates.ts), so no screen changes, but data, auth and
-// files go over HTTP to a server that holds the CloudHike credentials: the
+// The device backend for an app whose creator connected a backend provider.
+// Same API as backendDevice() (templates.ts), so no screen changes, but data,
+// auth and files go over HTTP to a server that holds the provider's credentials: the
 // builder's public route (/api/app-runtime/[id]/data), or the self-host
 // server shipped in a ZIP/GitHub export. The app itself never holds a secret;
 // the only credential in the bundle is the public app key.

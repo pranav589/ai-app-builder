@@ -38,7 +38,7 @@ Assembles all project data required for workspace SSR loading and initial hydrat
   },
   "initialMessages": [],
   "signedAssetUrls": {},
-  "hasCloudhike": true,
+  "backendProviders": [{ "id": "cloudhike", "configured": true, "accountConnected": true }],
   "hasBackend": false,
   "backendInfo": null,
   "hasGitHub": false,
@@ -225,7 +225,7 @@ The main driver — chat, plan approval, and backend-connect all go through this
 one endpoint. **Response is a Server-Sent Events stream**, not a single JSON body.
 
 - **Auth**: required + project ownership
-- **Request body**: `{ action, text?, screenId?, element?, services? }`
+- **Request body**: `{ action, text?, screenId?, element?, provider?, services? }` (`provider` is a backend provider id from `shared/app-backend/providers.ts`, default `"cloudhike"`; used by `action: "backend"`)
 
 **Sample request — chat message**
 ```json
@@ -239,7 +239,7 @@ one endpoint. **Response is a Server-Sent Events stream**, not a single JSON bod
 
 **Sample request — connect backend**
 ```json
-{ "action": "backend", "services": ["database", "auth", "storage"] }
+{ "action": "backend", "provider": "cloudhike", "services": ["postgres", "auth", "storage"] }
 ```
 
 **Response**: `text/event-stream`, one JSON event per line, union of event types
@@ -272,10 +272,10 @@ data: {"type":"done"}
 ```
 Other cases: `400` bad request / empty message / message too long, `401` signed
 out, `404` project not found, `409` plan not ready to approve / backend not
-connected yet (`{"error": "...", "reconnect": true}`), `503` unavailable.
+connected yet (`{"error": "...", "reconnect": true}`), `404` unknown backend `provider`, `503` unavailable.
 
 **Notes**: `maxDuration = 800`. One run per project is enforced by a DB mutex
-(`lib/agent/run-store.ts`); dispatches to the Cloudhike Jobs queue in production,
+(`lib/agent/run-store.ts`); dispatches to the job queue (`lib/jobs`, Cloudhike Jobs today) in production,
 runs inline in dev.
 
 ---
@@ -407,22 +407,25 @@ never conflicts with a concurrent build writing screens.
 
 ---
 
-## Backend (CloudHike connect)
+## Backend (pluggable providers)
+
+An app's backend runs on a **provider** (`shared/app-backend/providers.ts`; only `cloudhike`
+today). The routes below are the same for every provider: the server looks up which provider
+the app is on and hands the work to that provider's adapter.
 
 ### `GET /api/projects/[projectId]/backend`
-Backend connection status.
+Backend connection status: which providers this creator has linked, and this app's backend.
 
 **Response 200**
 ```json
 {
-  "configured": true,
-  "accountConnected": true,
+  "providers": [{ "id": "cloudhike", "configured": true, "accountConnected": true }],
   "backend": {
     "provider": "cloudhike",
     "status": "ready",
     "projectId": "ch_proj_1",
     "projectName": "recipe-tracker-backend",
-    "services": ["database", "auth"],
+    "services": ["postgres", "auth"],
     "error": null,
     "connectedAt": "2026-11-10T12:05:00.000Z"
   }
@@ -431,7 +434,8 @@ Backend connection status.
 Never returns credentials.
 
 ### `DELETE /api/projects/[projectId]/backend`
-Disconnect the backend (keeps the actual CloudHike project/data intact).
+Disconnect the backend (keeps the actual project/data on the provider intact). `forgetAccount`
+also forgets this creator's link to that provider.
 
 **Sample request**
 ```json
@@ -485,12 +489,13 @@ End-user auth for the generated app travels via the `x-app-session` header.
 ```json
 { "error": "The app's database is waking up. Try again in a moment." }
 ```
-Other cases: `400` unknown op, `409` app not connected to CloudHike.
+Other cases: `400` unknown op, `409` app not connected to a backend.
 
 **Notes**: `snapshot` op batches multiple reads (`collections[]`, `settings`,
 `auth.current`, `version`) into one response. `init` (creator only) creates/updates the
-database tables for the app's data model. Every other op is run by the dispatcher in
-`lib/cloudhike/app-ops.ts`, shared with the public route below.
+database tables for the app's data model. Every other op is run by the provider-neutral
+dispatcher in `lib/app-backend/app-ops.ts` (shared with the public route below) on the
+provider's `AppServices`.
 
 ---
 
@@ -502,7 +507,7 @@ authorized by cookies. The caller proves itself with the project's app key.
 
 - **Auth**: header `x-app-key` must equal the key stored for the project (`app_backends.app_key`,
   minted the first time a connected project is built or exported). End users add
-  `x-app-session` (their CloudHike Auth token) as usual.
+  `x-app-session` (their token from the provider's auth) as usual.
 - **Ops**: same as above except `init` (rejected as an unknown operation; schema setup stays
   creator-only).
 - **Limits**: only collections the app's data model declares (`404 Unknown collection.` on
@@ -529,20 +534,25 @@ up. Responses never include internal error details.
 
 ---
 
-### `GET /api/cloudhike/connect`
-Start the "Connect CloudHike account" OAuth-like flow. **Always a redirect**, not JSON.
+### `GET /api/backend-providers/:provider/connect`
+Start linking the creator's account on `provider` (e.g. `cloudhike`), an OAuth-like flow.
+**Always a redirect**, not JSON. (Was `GET /api/cloudhike/connect`.)
 
 - **Request**: query params `projectId` (required), `services` (comma list), `reconnect` ("1")
-- **Response**: `303` redirect to CloudHike's authorize URL, or back to the
-  workspace with `?backend=connected` / `?backend=error&reason=...`
+- **Response**: `303` redirect to the provider's authorize URL, or back to the
+  workspace with `?provider=...&backend=connected` / `?provider=...&backend=error&reason=...`.
+  Unknown `provider`: `404`.
 
-### `GET /api/cloudhike/callback`
-OAuth callback. **Always a redirect.**
+### `GET /api/backend-providers/:provider/callback`
+OAuth callback, the URL registered with the provider. **Always a redirect.**
+(Was `GET /api/cloudhike/callback`; the URL registered with CloudHike must be updated, or
+`CLOUDHIKE_REDIRECT_URI` set.)
 
 - **Request**: query params `code`, `state`, or `error`
-- **Response**: `303` redirect to `/` (not signed in) or
-  `/workspace/{projectId}?backend=connected&services=...` /
-  `?backend=error&reason=denied|failed|expired|not_configured`
+- **Response**: `303` redirect to `/` (not signed in), `/?backend=expired` (state cookie
+  missing/expired/for another provider), or
+  `/workspace/{projectId}?provider=...&backend=connected&services=...` /
+  `?provider=...&backend=error&reason=denied|failed|expired|not_configured`
 
 ---
 
@@ -651,9 +661,9 @@ Download the full project as a standalone, runnable Expo project in a `.zip` arc
   - `Content-Type: application/zip`
   - `Content-Disposition: attachment; filename="<project-slug>.zip"`
   - `Cache-Control: no-store`
-- **Connected apps**: if the project's CloudHike backend is connected, `lib/backend/index.ts` is the
+- **Connected apps**: if the project's backend is connected (any provider), `lib/backend/index.ts` is the
   one that calls `/api/app-runtime/[projectId]/data` (with `lib/backend/config.ts` holding the endpoint
-  and app key), and the zip also contains `server/` (a self-host server), `server/.env.example`,
+  and app key), and the zip also contains the provider's self-host files: `server/` (a self-host server), `server/.env.example`,
   `.env.example` and a README section with step-by-step instructions for running either way.
   Not connected: unchanged (on-device storage). `GET/POST /api/projects/[projectId]/github*` export the
   same file set.
@@ -812,7 +822,7 @@ Signed out: `{ "user": null }`.
 **Request**: none. **Response 200**: `{ "ok": true }`.
 
 ### `POST /api/auth/social`
-Exchange a CloudHike-issued token for a local session cookie.
+Exchange a token issued by the identity provider (`lib/identity`; CloudHike Auth today) for a local session cookie.
 
 **Sample request**
 ```json
@@ -829,10 +839,10 @@ Exchange a CloudHike-issued token for a local session cookie.
 ## Internal / webhook
 
 ### `POST /api/jobs/agent`
-The webhook a Cloudhike Jobs worker calls back into to actually execute an agent
+The webhook the job queue's worker (`lib/jobs`; Cloudhike Jobs today) calls back into to actually execute an agent
 run in production. Not called by the frontend.
 
-- **Auth**: HMAC-style webhook signature in `x-cloudhike-signature` header
+- **Auth**: the queue's signature, checked by `jobQueue.verifySignature` (Cloudhike Jobs: HMAC in the `x-cloudhike-signature` header)
   (`verifyJobSignature`), not user auth.
 
 **Sample request**

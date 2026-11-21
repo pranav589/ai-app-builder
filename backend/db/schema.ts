@@ -148,10 +148,10 @@ export const appSnapshots = pgTable(
 
 export type AppSnapshotRow = typeof appSnapshots.$inferSelect;
 
-// ---------------------------------------------------------------- CloudHike backend
+// ---------------------------------------------------------------- app backends
 // Created by db/sql/cloudhike.sql (npm run db:sql). Secrets are encrypted at rest.
 
-/** A user's CloudHike Connect authorization (one per user; connecting again replaces it). */
+/** Owned by the CloudHike provider adapter (src/services/app-backend/cloudhike). A user's CloudHike Connect authorization (one per user; connecting again replaces it). */
 export const cloudhikeConnections = pgTable("cloudhike_connections", {
   userId: text("user_id")
     .primaryKey()
@@ -168,7 +168,7 @@ export const cloudhikeConnections = pgTable("cloudhike_connections", {
 
 export type BackendStatus = "provisioning" | "ready" | "error";
 
-/** The backend a generated app runs on: a CloudHike project with its services. */
+/** The backend a generated app runs on: a project on `provider` (an id from shared/app-backend/providers.ts) with its services. */
 export const appBackends = pgTable("app_backends", {
   projectId: text("project_id")
     .primaryKey()
@@ -178,7 +178,7 @@ export const appBackends = pgTable("app_backends", {
   externalProjectId: text("external_project_id"),
   externalProjectName: text("external_project_name"),
   services: jsonb("services").$type<string[]>().notNull().default([]),
-  /** The CloudHike project's environment (.env), encrypted. Server only. */
+  /** The provider project's credentials (keys defined by the provider), encrypted. Server only. */
   envEnc: text("env_enc"),
   /** Public key built apps send to /api/app-runtime/[projectId]/data. Not a secret (it ships in the app); disconnecting the backend deletes the row, which revokes it. */
   appKey: text("app_key"),

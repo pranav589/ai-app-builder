@@ -4,10 +4,8 @@ import { signedDownloadUrl } from "../storage"
 import { toStoredMessage } from "../agent/orchestrator"
 import type { AgentPhase } from "@app/shared/agent/types"
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
-import { getBackend } from "../cloudhike/app-backend"
-import { isConnectConfigured } from "../cloudhike/config"
-import { hasConnection } from "../cloudhike/connect"
-import { backendInfo } from "../cloudhike/provision"
+import { backendInfo, getBackend } from "../app-backend/app-backend"
+import { providerStatuses } from "../app-backend/backend.service"
 
 const PHASES: AgentPhase[] = ["draft", "planning", "awaiting_approval", "generating", "ready"]
 const normalizePhase = (s: string | null): AgentPhase => (PHASES.includes(s as AgentPhase) ? (s as AgentPhase) : "draft")
@@ -21,7 +19,7 @@ export async function getWorkspaceData(userId: string, projectId: string) {
 
   if (!project) return null
 
-  const [assets, history, backendRow, accountConnected] = await Promise.all([
+  const [assets, history, backendRow, backendProviders] = await Promise.all([
     Promise.all(
       (project.assets ?? []).map(async (a) => ({
         id: a.id,
@@ -38,7 +36,7 @@ export async function getWorkspaceData(userId: string, projectId: string) {
       .orderBy(asc(messages.createdAt))
       .limit(200),
     getBackend(project.id).catch(() => null),
-    project.userId ? hasConnection(project.userId).catch(() => false) : false,
+    providerStatuses(userId),
   ])
 
   const doc = readAppDoc(project.previewScreens)
@@ -56,7 +54,7 @@ export async function getWorkspaceData(userId: string, projectId: string) {
     files: doc.files ?? {},
     backend: doc.backend,
     backendInfo: backendInfo(backendRow),
-    cloudhike: { configured: isConnectConfigured(), accountConnected },
+    backendProviders,
     isPublic: project.isPublic,
     publicSlug: project.publicSlug,
   }

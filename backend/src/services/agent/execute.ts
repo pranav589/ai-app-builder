@@ -5,8 +5,9 @@ import { readAppDoc } from "@app/shared/app-runtime/app-doc"
 import { AgentConfigError } from "./config"
 import { latestPlan, NEW_SCREEN_NUDGE, routeMessage, runGeneration, runPlanning, runVerifiedEdit, setPhase } from "./orchestrator"
 import { claimRun, createEventSink, finishRun, holdRun, type RunInput } from "./run-store"
-import { parseServices } from "@/lib/cloudhike/config"
-import { runBackendSetup, syncBackendSchema } from "@/lib/cloudhike/provision"
+import { DEFAULT_BACKEND_PROVIDER, parseServices } from "@app/shared/app-backend/providers"
+import { syncBackendSchema } from "@/lib/app-backend/backend.service"
+import { getProvider } from "@/lib/app-backend/registry"
 import type { AgentPhase } from "@app/shared/agent/types"
 import type { EditRequest } from "./protocol"
 import type { LiveRun } from "./registry"
@@ -23,8 +24,8 @@ export function friendlyError(e: unknown) {
 }
 
 /**
- * Runs one queued agent run to the end. Called by the Cloudhike Jobs worker
- * route, or in-process when Jobs isn't available. Everything is persisted as
+ * Runs one queued agent run to the end. Called by the job queue's worker
+ * route, or in-process when no queue is available. Everything is persisted as
  * it goes, so the browser can come and go. Returns false when the run was not
  * ours to take (a duplicate delivery or a run another worker holds).
  */
@@ -41,7 +42,9 @@ export async function executeRun(runId: string): Promise<{ taken: boolean; ok?: 
 
   try {
     if (input.task === "backend") {
-      await runBackendSetup(run, projectId, input.userId!, parseServices(input.services))
+      // Runs queued before providers were pluggable carry no provider: they were CloudHike's.
+      const provider = getProvider(input.provider ?? DEFAULT_BACKEND_PROVIDER)
+      await provider.provision(run, projectId, input.userId!, parseServices(provider.id, input.services))
     } else if (input.task === "plan") {
       // The fast router (Phase 8): a verified project with a built app gets
       // most chat messages classified and handled without the slow planner

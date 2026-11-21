@@ -1,5 +1,7 @@
 // Shared API contracts and entity types for the web frontend, mobile client, and backend service.
 
+import type { BackendProviderStatus } from "@app/shared/app-backend/providers"
+
 export interface User {
   id: string
   name: string | null
@@ -202,7 +204,7 @@ export interface WorkspaceResponse {
     files: Record<string, string>
     backend?: unknown
     backendInfo?: unknown
-    cloudhike: { configured: boolean; accountConnected: boolean }
+    backendProviders: BackendProviderStatus[]
     isPublic: boolean
     publicSlug: string | null
   }

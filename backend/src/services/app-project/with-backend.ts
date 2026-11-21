@@ -1,17 +1,20 @@
 
-import { ensureAppKey, getBackend } from "@/lib/cloudhike/app-backend"
+import { ensureAppKey, getBackend } from "@/lib/app-backend/app-backend"
 import { lanIPv4Stable } from "@/lib/device/lan"
+import { providerFor } from "@/lib/app-backend/registry"
 import type { FileMap } from "@app/shared/verify/types"
+import type { BackendProvider } from "@/lib/app-backend/types"
 import { remoteBackendFiles } from "./backend-remote"
 
 // Every output of a project (APK, Expo Go preview, web deploy, ZIP, GitHub)
 // starts from the stored files, whose lib/backend is the on-device one. When
-// the creator has connected CloudHike, this swaps it for the one that talks to
+// the creator has connected a backend provider, this swaps it for the one that talks to
 // the backend, at output time rather than in the stored files: the stored
 // files are regenerated on every plan change, and the app key must never be
 // baked into them where a disconnect couldn't take it back.
 
-export type WithBackend = { files: FileMap; connected: boolean }
+/** `provider` is the connected backend's, or null when the app keeps its on-device data. */
+export type WithBackend = { files: FileMap; provider: BackendProvider | null }
 
 /**
  * The builder's public address, which built apps call. When that's localhost
@@ -36,8 +39,8 @@ async function builderUrl(): Promise<string> {
 
 export async function withBackend(projectId: string, files: FileMap): Promise<WithBackend> {
   const row = await getBackend(projectId)
-  if (!row || row.status !== "ready" || !row.envEnc) return { files, connected: false }
+  if (!row || row.status !== "ready" || !row.envEnc) return { files, provider: null }
   const appKey = await ensureAppKey(row)
   const endpoint = `${await builderUrl()}/api/app-runtime/${encodeURIComponent(projectId)}/data`
-  return { files: { ...files, ...remoteBackendFiles(projectId, endpoint, appKey) }, connected: true }
+  return { files: { ...files, ...remoteBackendFiles(projectId, endpoint, appKey) }, provider: providerFor(row) }
 }

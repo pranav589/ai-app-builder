@@ -50,7 +50,7 @@ export function WorkspaceShell({
     initialData: project.dataModel,
     initialFiles: project.files ?? {},
     initialBackend: project.backendInfo,
-    initialCloudhike: project.cloudhike,
+    initialProviders: project.backendProviders,
   })
   useProjectStatusStream(project.id)
 
@@ -62,11 +62,13 @@ export function WorkspaceShell({
   const [previewPick, setPreviewPick] = React.useState<string | null>(null)
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null)
   const chatInputRef = React.useRef<HTMLTextAreaElement>(null)
-  // The app runs on CloudHike once its backend is ready (live, without a reload); otherwise on-device storage.
-  const cloudRef = agent.backend?.status === "ready" ? agent.backend.projectId : null
+  // The app runs on its connected provider once the backend is ready (live, without a reload); otherwise on-device storage.
+  const ready = agent.backend?.status === "ready" && agent.backend.projectId ? agent.backend : null
+  const readyProvider = ready?.provider ?? null
+  const readyRef = ready?.projectId ?? null
   const backendConfig = React.useMemo<BackendConfig>(
-    () => (cloudRef ? { provider: "cloudhike", projectRef: cloudRef } : { provider: "local" }),
-    [cloudRef]
+    () => (readyProvider && readyRef ? { provider: readyProvider, projectRef: readyRef } : { provider: "local" }),
+    [readyProvider, readyRef]
   )
   const files = React.useMemo(
     () => appFileTree({ files: agent.files, screens: agent.screens, backend: backendConfig }),
@@ -317,7 +319,7 @@ export function WorkspaceShell({
         status={agent.phase}
         onRename={agent.setName}
         backend={agent.backend}
-        cloudhike={agent.cloudhike}
+        providers={agent.providers}
         agentBusy={agent.busy}
         onSetupBackend={agent.setupBackend}
         onBackendDisconnected={() => agent.setBackend(null)}

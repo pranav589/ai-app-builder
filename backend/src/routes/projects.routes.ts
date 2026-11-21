@@ -6,7 +6,7 @@ import { requireTrustedOrigin, requireTrustedOriginJson } from "../middleware/or
 import * as projectsController from "../controllers/projects.controller"
 import * as agentController from "../controllers/agent.controller"
 import * as versionsController from "../controllers/versions.controller"
-import * as cloudhikeController from "../controllers/cloudhike.controller"
+import * as backendController from "../controllers/backend.controller"
 import * as deviceController from "../controllers/device.controller"
 import * as githubController from "../controllers/github.controller"
 import * as publishController from "../controllers/publish.controller"
@@ -38,10 +38,10 @@ projectsRouter.get("/:projectId/versions", requireUser, versionsController.list)
 projectsRouter.get("/:projectId/versions/:version/diff", requireUser, versionsController.diff)
 projectsRouter.post("/:projectId/versions/:version/restore", requireUser, versionsController.restore)
 
-// CloudHike backend
-projectsRouter.get("/:projectId/backend", requireUser, requireProjectOwner, cloudhikeController.getBackend)
-projectsRouter.delete("/:projectId/backend", requireUser, requireTrustedOriginJson, requireProjectOwner, cloudhikeController.deleteBackend)
-projectsRouter.post("/:projectId/backend/data", requireUser, requireTrustedOriginJson, requireProjectOwner, cloudhikeController.postBackendData)
+// App backend (whichever provider it is on)
+projectsRouter.get("/:projectId/backend", requireUser, requireProjectOwner, backendController.getBackend)
+projectsRouter.delete("/:projectId/backend", requireUser, requireTrustedOriginJson, requireProjectOwner, backendController.deleteBackend)
+projectsRouter.post("/:projectId/backend/data", requireUser, requireTrustedOriginJson, requireProjectOwner, backendController.postBackendData)
 
 // Device preview
 projectsRouter.get("/:projectId/device", requireUser, deviceController.getMetroLane)

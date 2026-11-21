@@ -13,7 +13,7 @@ declare global {
 /**
  * Confirms the signed-in user owns the project named by req.params.projectId or
  * req.query.projectId (in that order), 404-ing otherwise -- the Express equivalent of the
- * old lib/cloudhike/owner.ts::requireOwnedProject. Must run after requireUser.
+ * old lib/cloudhike/owner.ts::requireOwnedProject (pre-Express). Must run after requireUser.
  */
 export async function requireProjectOwner(req: Request, res: Response, next: NextFunction) {
   try {

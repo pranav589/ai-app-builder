@@ -18,7 +18,7 @@ module.exports = config
 
 export const GITIGNORE = "node_modules/\n.expo/\ndist/\nweb-build/\n*.log\n.env\n"
 
-/** `extra` is appended after the getting-started steps (the CloudHike backend section for a connected app). */
+/** `extra` is appended after the getting-started steps (the backend provider's section for a connected app). */
 export function readmeFile(projectName: string, extra = ""): string {
   return `# ${projectName}
 

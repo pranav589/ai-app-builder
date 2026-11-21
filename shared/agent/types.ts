@@ -1,5 +1,6 @@
 // Shared by the server (agent runs) and the browser (workspace UI).
 
+import type { BackendProviderId } from "@app/shared/app-backend/providers"
 import type { DataModel } from "@app/shared/app-runtime/data-model"
 import type { ThemePackage } from "@app/shared/app-runtime/theme"
 import type { ElementRef } from "@app/shared/preview/protocol"
@@ -77,12 +78,12 @@ export type StoredMessage = {
 
 /** The app's backend as the workspace shows it. Never carries credentials. */
 export type BackendInfo = {
-  provider: "cloudhike"
+  provider: BackendProviderId
   status: "provisioning" | "ready" | "error"
   projectId: string | null
   projectName: string | null
   services: string[]
-  /** "reconnect" when the CloudHike account must be connected again; otherwise a message for the creator. */
+  /** "reconnect" when the provider account must be connected again; otherwise a message for the creator. */
   error: string | null
   connectedAt: string | null
 }

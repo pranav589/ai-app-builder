@@ -3,6 +3,7 @@ import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3
 import postgres from "postgres"
 
 import type { DataField, DataModel, FieldType } from "@app/shared/app-runtime/data-model-types"
+import { AppBackendError, type AppAuthApi, type AppDataApi, type AppEnv, type AppRecord, type AppServices, type AppUser } from "../contract"
 
 // The data plane of a generated app on CloudHike. CloudHike has no client
 // data API (its database is reached with a connection string), so the app
@@ -17,17 +18,6 @@ import type { DataField, DataModel, FieldType } from "@app/shared/app-runtime/da
 //                        fields working without a migration).
 //   app_settings        key -> jsonb value (useSetting)
 //   app_meta            'version': bumped on every write, polled for live sync
-
-export class AppBackendError extends Error {
-  constructor(
-    message: string,
-    readonly status = 400
-  ) {
-    super(message)
-  }
-}
-
-export type AppEnv = Record<string, string>
 
 // ---------------------------------------------------------------- database
 
@@ -242,8 +232,8 @@ function splitPatch(fields: EffectiveField[], patch: Record<string, unknown>) {
 }
 
 /** A row (every real column, plus `extra`) back into the record shape a screen expects. */
-function toRecord(row: Record<string, unknown>, fields: EffectiveField[]) {
-  const out: Record<string, unknown> = { ...((row.extra as Record<string, unknown> | null) ?? {}) }
+function toRecord(row: Record<string, unknown>, fields: EffectiveField[]): AppRecord {
+  const out: AppRecord = { ...((row.extra as Record<string, unknown> | null) ?? {}) }
   for (const f of fields) {
     const v = row[f.column]
     out[f.name] = v === null || v === undefined ? null : f.type === "number" ? Number(v) : f.type === "date" ? new Date(v as string).toISOString() : v
@@ -274,7 +264,7 @@ async function bump(sql: postgres.Sql) {
 const newId = () => `r${Date.now().toString(36)}${randomUUID().slice(0, 8)}`
 
 /** `model` is the project's current data model, so each collection's writes land in its declared columns. A collection it doesn't name (or no model at all) just keeps everything in `extra`. */
-export function dataApi(projectId: string, env: AppEnv, model?: DataModel | null) {
+export function dataApi(projectId: string, env: AppEnv, model?: DataModel | null): AppDataApi {
   const sql = appSql(projectId, env)
   const fieldsOf = (collection: string) => effectiveFields(model?.collections.find((c) => c.name === collection)?.fields ?? [])
 
@@ -417,8 +407,6 @@ export async function readFile(env: AppEnv, key: string) {
 
 // ---------------------------------------------------------------- auth (the app's own end users)
 
-export type AppUser = { id: string; name: string; email: string; avatar?: string }
-
 async function authCall<T>(env: AppEnv, path: string, init: { method?: string; body?: unknown; token?: string } = {}): Promise<T> {
   if (!env.AUTH_URL || !env.AUTH_PUBLISHABLE_KEY) throw new AppBackendError("The app's CloudHike Auth isn't ready.", 409)
   const headers: Record<string, string> = { "x-api-key": env.AUTH_PUBLISHABLE_KEY }
@@ -452,7 +440,7 @@ const toUser = (u: { id: string; name?: string | null; email: string; image?: st
 })
 
 /** `resetRedirect` is where the emailed password-reset link lands. */
-export function authApi(env: AppEnv, resetRedirect: string) {
+export function authApi(env: AppEnv, resetRedirect: string): AppAuthApi {
   type AuthRes = { token: string; user: { id: string; name?: string; email: string; image?: string } }
   return {
     async signUp(input: { name?: string; email: string; password: string }) {
@@ -481,5 +469,23 @@ export function authApi(env: AppEnv, resetRedirect: string) {
     async resetPassword(email: string) {
       await authCall(env, "/request-password-reset", { method: "POST", body: { email, redirectTo: resetRedirect } })
     },
+  }
+}
+
+/** Everything the op protocol needs, on this project's database, bucket and auth. Used by the builder and by the self-host server. */
+export function appServices(input: {
+  projectId: string
+  env: AppEnv
+  /** The project's current data model: writes for a collection it declares land in that collection's real columns. */
+  model?: DataModel | null
+  /** Maps a stored file's key to the URL it's served from. */
+  fileUrl: (key: string) => string
+  /** Where the emailed password-reset link lands. */
+  resetRedirect: string
+}): AppServices {
+  return {
+    data: dataApi(input.projectId, input.env, input.model),
+    auth: authApi(input.env, input.resetRedirect),
+    upload: (dataUrl) => uploadFile(input.env, dataUrl, input.fileUrl),
   }
 }

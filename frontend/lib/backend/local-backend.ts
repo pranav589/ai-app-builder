@@ -1,9 +1,9 @@
 "use client"
 
-// Local-storage backend: the default until a CloudHike account is connected.
+// Local-storage backend: the default until a backend provider is connected.
 // One JSON document per project, seeded from the app's data model. It keeps
 // the same semantics a remote backend will have (ids, timestamps, async
-// calls, change events), so moving to CloudHike is a provider swap.
+// calls, change events), so connecting a provider is a backend swap.
 
 import { newRecordId, type DataModel } from "@app/shared/app-runtime/data-model"
 import { BackendError, type AppBackend, type AppRecord, type AppUser, type BackendChange } from "./types"

@@ -1,12 +1,16 @@
 import JSZip from "jszip"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { buildExportFileMap, zipFileMap } from "../zip-export"
+import { cloudhikeProvider } from "@/lib/app-backend/cloudhike"
+import { buildExportFileMap, excludeServerFromTsconfig, zipFileMap } from "../zip-export"
 import { withBackend } from "../with-backend"
 
 vi.mock("../with-backend", () => ({ withBackend: vi.fn() }))
 
-const notConnected = (files: Record<string, string>) => ({ files, connected: false })
-const connected = (files: Record<string, string>) => ({ files: { ...files, "lib/backend/index.ts": "remote backend", "tsconfig.json": '{"extends":"expo/tsconfig.base"}' }, connected: true })
+const notConnected = (files: Record<string, string>) => ({ files, provider: null })
+const connected = (files: Record<string, string>) => ({
+  files: { ...files, "lib/backend/index.ts": "remote backend", "tsconfig.json": '{"extends":"expo/tsconfig.base"}' },
+  provider: cloudhikeProvider,
+})
 
 beforeEach(() => {
   vi.mocked(withBackend).mockReset()
@@ -76,5 +80,18 @@ describe("zip-export", () => {
     expect(readmeFile).not.toBeNull()
     expect(await indexFile!.async("string")).toBe("export default function Screen() {}")
     expect(await readmeFile!.async("string")).toBe("# Readme Content")
+  })
+})
+
+describe("excludeServerFromTsconfig", () => {
+  it("keeps the app's settings and adds the server to exclude", () => {
+    const out = JSON.parse(excludeServerFromTsconfig('{"extends":"expo/tsconfig.base","include":["**/*.ts"]}')!)
+    expect(out.extends).toBe("expo/tsconfig.base")
+    expect(out.exclude).toContain("server")
+  })
+
+  it("passes through a missing or unreadable tsconfig", () => {
+    expect(excludeServerFromTsconfig(undefined)).toBeUndefined()
+    expect(excludeServerFromTsconfig("not json")).toBe("not json")
   })
 })

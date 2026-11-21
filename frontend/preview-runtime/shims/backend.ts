@@ -1,7 +1,7 @@
 // "@/lib/backend" in the preview. Same API as the generated
 // lib/backend/index.ts that ships with the app, but every call goes to the
-// host, which runs the configured backend (local storage now, CloudHike
-// later). Hooks re-render when any frame changes the data.
+// host, which runs the configured backend (local storage, or the provider
+// the creator connected). Hooks re-render when any frame changes the data.
 
 import * as React from "react"
 import { dataStore, rpc } from "../bridge"

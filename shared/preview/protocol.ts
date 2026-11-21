@@ -4,7 +4,7 @@
 // The frame is sandboxed without same-origin access: it has no storage or
 // network of its own. App data, auth, file storage and native system UI all
 // go through these messages to the host, which talks to the app's backend
-// (local storage today, CloudHike later).
+// (local storage, or the provider the creator connected).
 
 import type { AppTheme } from "@app/shared/app-runtime/theme"
 

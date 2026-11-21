@@ -2,16 +2,17 @@
 // stored a bare array of screens there; readAppDoc accepts both shapes.
 
 import type { GeneratedScreen } from "@app/shared/agent/types"
+import type { BackendProviderId } from "@app/shared/app-backend/providers"
 import type { AppManifest } from "@app/shared/manifest/schema"
 import type { PlannedRoute } from "@app/shared/preview/protocol"
 import type { DataModel } from "./data-model"
 import type { ThemePackage } from "./theme"
 
 export type BackendConfig =
-  /** Data lives in the browser (default until a CloudHike account is connected). */
+  /** Data lives in the browser (default until a backend is connected). */
   | { provider: "local" }
-  /** Filled in when the creator connects CloudHike. */
-  | { provider: "cloudhike"; projectRef: string; region?: string }
+  /** Filled in when the creator connects a backend provider; data then goes through the builder's server. */
+  | { provider: BackendProviderId; projectRef: string; region?: string }
 
 export type AppDoc = {
   v: 2

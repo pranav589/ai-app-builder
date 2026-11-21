@@ -7,7 +7,7 @@ import cors from "cors"
 import cookieParser from "cookie-parser"
 import { authRouter } from "./routes/auth.routes"
 import { projectsRouter } from "./routes/projects.routes"
-import { cloudhikeRouter } from "./routes/cloudhike.routes"
+import { backendProvidersRouter } from "./routes/backend-providers.routes"
 import { githubRouter } from "./routes/github.routes"
 import { expoRouter } from "./routes/expo.routes"
 import { publishRouter } from "./routes/publish.routes"
@@ -68,7 +68,7 @@ app.get("/health", (_req, res) => {
 // Application routes
 app.use("/api/auth", authRouter)
 app.use("/api/projects", projectsRouter)
-app.use("/api/cloudhike", cloudhikeRouter)
+app.use("/api/backend-providers", backendProvidersRouter)
 app.use("/api/github", githubRouter)
 app.use("/api/expo", expoRouter)
 app.use("/api/app-files", appFilesRouter)

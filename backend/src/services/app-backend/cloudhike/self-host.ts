@@ -12,13 +12,18 @@ import type { FileMap } from "@app/shared/verify/types"
 
 /** [source in this repo, path in the export]. */
 const COPIED: [string, string][] = [
-  ["src/services/cloudhike/app-data.ts", "server/app-data.ts"],
-  ["src/services/cloudhike/app-ops.ts", "server/app-ops.ts"],
+  ["src/services/app-backend/cloudhike/app-data.ts", "server/app-data.ts"],
+  ["src/services/app-backend/app-ops.ts", "server/app-ops.ts"],
+  ["src/services/app-backend/contract.ts", "server/contract.ts"],
   ["../shared/app-runtime/data-model-types.ts", "server/data-model-types.ts"],
 ]
 
-// The only import a copied file has that doesn't resolve next to it.
-const TYPES_IMPORT = '"@app/shared/app-runtime/data-model-types"'
+// The imports a copied file has that don't resolve once flattened into server/.
+const REWRITES: [string, string][] = [
+  ['"@app/shared/app-runtime/data-model-types"', '"./data-model-types"'],
+  ['"../contract"', '"./contract"'],
+]
+const flatten = (text: string) => REWRITES.reduce((t, [from, to]) => t.replaceAll(from, to), text)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
@@ -26,18 +31,13 @@ function readSource(rel: string): string {
   const candidates = [
     path.resolve(process.cwd(), rel),
     path.resolve(process.cwd(), "backend", rel),
-    path.resolve(HERE, "../../..", rel),
-    path.resolve(HERE, "../..", rel),
+    // Unbundled (tsx, vitest): this file sits in src/services/app-backend/cloudhike/.
+    path.resolve(HERE, "../../../..", rel),
+    // Bundled: everything is in dist/index.js.
     path.resolve(HERE, "..", rel),
   ]
-  for (const c of candidates) {
-    if (fs.existsSync(c)) {
-      const text = fs.readFileSync(c, "utf8")
-      return text.replaceAll(TYPES_IMPORT, '"./data-model-types"')
-    }
-  }
-  const text = fs.readFileSync(path.resolve(process.cwd(), rel), "utf8")
-  return text.replaceAll(TYPES_IMPORT, '"./data-model-types"')
+  const found = candidates.find((c) => fs.existsSync(c)) ?? path.resolve(process.cwd(), rel)
+  return flatten(fs.readFileSync(found, "utf8"))
 }
 
 const SERVER_INDEX = String.raw`// This app's backend, for running it yourself. It holds your CloudHike
@@ -47,8 +47,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFileSync } from "node:fs"
 import { timingSafeEqual } from "node:crypto"
 import path from "node:path"
-import { AppBackendError, readFile, syncSchema, type AppEnv } from "./app-data"
+import { appServices, readFile, syncSchema } from "./app-data"
 import { appOpFailure, runAppOp } from "./app-ops"
+import { AppBackendError, type AppEnv } from "./contract"
 import type { DataModel } from "./data-model-types"
 
 const PORT = Number(process.env.PORT || 3001)
@@ -133,12 +134,9 @@ const server = createServer(async (req, res) => {
   try {
     const result = await runAppOp(
       {
-        projectId: "app",
-        env,
+        services: appServices({ projectId: "app", env, model, fileUrl: (key) => PUBLIC_URL + "/files/" + key, resetRedirect: PUBLIC_URL + "/" }),
         model,
         session: String(req.headers["x-app-session"] || ""),
-        fileUrl: (key) => PUBLIC_URL + "/files/" + key,
-        resetRedirect: PUBLIC_URL + "/",
         declaredOnly: true,
       },
       body
@@ -205,7 +203,7 @@ const APP_ENV_EXAMPLE = `# Copy this file to .env to make the app use your own s
 # EXPO_PUBLIC_APP_KEY=same-value-as-APP_KEY-in-server/.env
 `
 
-/** The self-host server, its .env templates, and the app-side .env template. */
+/** The self-host server (under server/), its .env templates, and the app-side .env template. */
 export function selfHostFiles(): FileMap {
   const files: FileMap = {
     "server/index.ts": SERVER_INDEX,
@@ -215,14 +213,4 @@ export function selfHostFiles(): FileMap {
   }
   for (const [from, to] of COPIED) files[to] = readSource(from)
   return files
-}
-
-/** The app's tsconfig globs every .ts file; the Node server isn't part of the app's type-check. */
-export function excludeServerFromTsconfig(tsconfig: string | undefined): string | undefined {
-  if (!tsconfig) return tsconfig
-  try {
-    return JSON.stringify({ ...JSON.parse(tsconfig), exclude: ["server", "node_modules"] }, null, 2) + "\n"
-  } catch {
-    return tsconfig
-  }
 }

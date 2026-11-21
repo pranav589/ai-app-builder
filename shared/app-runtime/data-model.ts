@@ -1,7 +1,7 @@
 // The app's data contract: the collections every screen reads and writes,
 // with seed records so a fresh preview already looks lived-in. Screens bind
-// to these names declaratively; the backend (local storage today, CloudHike
-// later) stores them. Shared by the server and the browser.
+// to these names declaratively; the backend (local storage, or the
+// provider the creator connected) stores them. Shared by the server and the browser.
 
 import { isImageLibraryCategory } from "@app/shared/image-library/categories"
 

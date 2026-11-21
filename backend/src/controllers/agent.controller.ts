@@ -55,10 +55,7 @@ export async function postAgent(req: Request, res: Response, next: NextFunction)
 export async function postJobWorker(req: Request, res: Response, next: NextFunction) {
   try {
     const raw = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : typeof req.body === "string" ? req.body : JSON.stringify(req.body)
-    const sig = req.headers["x-cloudhike-signature"]
-    const signature = typeof sig === "string" ? sig : null
-
-    const result = await handleJobWorker(raw, signature)
+    const result = await handleJobWorker(raw, req.headers)
     res.status(result.status).json(result.body)
   } catch (err) {
     next(err)

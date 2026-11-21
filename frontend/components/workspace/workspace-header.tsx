@@ -28,6 +28,7 @@ import { cn } from "cn"
 
 import { useAuth } from "@/components/auth/auth-provider"
 import type { BackendInfo } from "@app/shared/agent/types"
+import type { BackendProviderId, BackendProviderStatus } from "@app/shared/app-backend/providers"
 import { apiClient, getApiErrorMessage } from "@/lib/api-client"
 import { slug } from "@app/shared/app-project/scaffold"
 import { BackendControl } from "./backend-connect"
@@ -297,7 +298,7 @@ export function WorkspaceHeader({
   status,
   onRename,
   backend,
-  cloudhike,
+  providers,
   agentBusy,
   onSetupBackend,
   onBackendDisconnected,
@@ -310,9 +311,9 @@ export function WorkspaceHeader({
   status: string | null
   onRename: (name: string) => void
   backend: BackendInfo | null
-  cloudhike: { configured: boolean; accountConnected: boolean }
+  providers: BackendProviderStatus[]
   agentBusy: boolean
-  onSetupBackend: (services: string[]) => void
+  onSetupBackend: (provider: BackendProviderId, services: string[]) => void
   onBackendDisconnected: () => void
   onRefreshBackend: () => void
   initialIsPublic: boolean
@@ -401,7 +402,7 @@ export function WorkspaceHeader({
         <BackendControl
           projectId={projectId}
           backend={backend}
-          cloudhike={cloudhike}
+          providers={providers}
           agentBusy={agentBusy}
           onSetupBackend={onSetupBackend}
           onDisconnected={onBackendDisconnected}

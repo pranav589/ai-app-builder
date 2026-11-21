@@ -1,4 +1,4 @@
-// Applies every db/sql/*.sql file (agent runs, CloudHike tables). Each file is idempotent.
+// Applies every db/sql/*.sql file (agent runs, app-backend tables). Each file is idempotent.
 // Usage: npm run db:sql
 import { readdirSync, readFileSync } from "node:fs"
 import postgres from "postgres"

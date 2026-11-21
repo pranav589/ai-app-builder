@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express"
-import { handleServeAppFile } from "../services/cloudhike/cloudhike.service"
-import { AppBackendError } from "../services/cloudhike/app-data"
+import { handleServeAppFile } from "../services/app-backend/backend.service"
+import { AppBackendError } from "../services/app-backend/contract"
 
 export async function getAppFile(req: Request, res: Response, next: NextFunction) {
   try {

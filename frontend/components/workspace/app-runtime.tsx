@@ -7,7 +7,6 @@ import { emptyDataModel, type DataModel } from "@app/shared/app-runtime/data-mod
 import type { AppTheme } from "@app/shared/app-runtime/theme"
 import { compileForPreview, projectExports, type ProjectFiles } from "@app/shared/app-project/project"
 import { BackendError, createBackend, type AppBackend } from "@/lib/backend"
-import { CloudHikeBackend } from "@/lib/backend/cloudhike-backend"
 import {
   BRIDGE_TAG,
   type ElementEdit,
@@ -167,7 +166,7 @@ export function AppRuntimeProvider({
   const refresh = React.useCallback(async () => {
     const names = new Set([...model.collections.map((c) => c.name), ...collections.current])
     // A remote backend loads everything in one request; the local one reads each part.
-    const bulk = backend instanceof CloudHikeBackend ? await backend.snapshot([...names]) : null
+    const bulk = backend.snapshot ? await backend.snapshot([...names]) : null
     const [lists, settings, user] = bulk
       ? [Object.entries(bulk.collections), bulk.settings, bulk.user]
       : await Promise.all([
@@ -326,7 +325,7 @@ function frameDocument(config: FrameConfig) {
     `script-src ${origin} 'unsafe-inline' 'unsafe-eval'`,
     "style-src 'unsafe-inline'",
     `font-src ${origin} data:`,
-    // Our origin serves files apps store in their CloudHike bucket (/api/app-files).
+    // Our origin serves files apps store with their backend provider (/api/app-files).
     // https: covers remote photos the app references (ImageKit-hosted or
     // user-picked URLs); the frame is sandboxed with no same-origin access,
     // so it carries no cookies/credentials for those requests to leak.

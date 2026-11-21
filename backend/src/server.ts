@@ -20,8 +20,8 @@ try {
 } catch {}
 
 // Next.js logged stray rejections and kept serving; Node's default is to exit. Background work
-// (CloudHike setup, agent runs) can reject after its request ended, e.g. when the connection
-// to CloudHike resets, and that must not take every other request down with it.
+// (backend setup, agent runs) can reject after its request ended, e.g. when the connection
+// to a provider resets, and that must not take every other request down with it.
 process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason))
 process.on("uncaughtException", (err) => console.error("Uncaught exception:", err))
 

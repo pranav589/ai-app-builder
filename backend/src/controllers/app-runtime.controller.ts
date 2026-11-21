@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express"
-import { handleRuntimeDataOp } from "../services/cloudhike/cloudhike.service"
+import { handleRuntimeDataOp } from "../services/app-backend/backend.service"
 
 const FRONTEND_URL = (process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(/\/+$/, "")
 

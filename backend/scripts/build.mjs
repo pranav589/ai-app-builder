@@ -18,7 +18,7 @@ await build({
   packages: "external",
   sourcemap: true,
   // backend/package.json has "type":"module", so the output below must be real ESM --
-  // but src/services/app-project/self-host.ts (copied so the exported app's own
+  // but src/services/app-backend/cloudhike/self-host.ts (copied so the exported app's own
   // server can read these same files) still uses the CJS globals __dirname/
   // __filename/require. This banner defines working equivalents the same way
   // Node's CJS loader would, so that file keeps working unbundled too.

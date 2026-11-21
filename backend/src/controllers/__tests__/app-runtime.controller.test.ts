@@ -3,15 +3,21 @@ import request from "supertest"
 
 const getBackend = vi.fn()
 const runAppOp = vi.fn()
+const runtime = vi.fn((_input: { fileUrl: (key: string) => string }) => ({ fake: "services" }))
 
-vi.mock("../../services/cloudhike/app-backend", async (orig) => ({
-  ...(await orig<typeof import("../../services/cloudhike/app-backend")>()),
+vi.mock("../../services/app-backend/app-backend", async (orig) => ({
+  ...(await orig<typeof import("../../services/app-backend/app-backend")>()),
   getBackend: (id: string) => getBackend(id),
   readEnv: () => ({ DATABASE_URL: "x" }),
 }))
-vi.mock("../../services/cloudhike/app-ops", async (orig) => ({
-  ...(await orig<typeof import("../../services/cloudhike/app-ops")>()),
+vi.mock("../../services/app-backend/app-ops", async (orig) => ({
+  ...(await orig<typeof import("../../services/app-backend/app-ops")>()),
   runAppOp: (...a: unknown[]) => runAppOp(...a),
+}))
+// The route must hand the call to whichever provider the row names.
+vi.mock("../../services/app-backend/registry", async (orig) => ({
+  ...(await orig<typeof import("../../services/app-backend/registry")>()),
+  providerFor: () => ({ runtime }),
 }))
 vi.mock("@/db", async (orig) => ({
   ...(await orig<typeof import("@/db")>()),
@@ -20,7 +26,7 @@ vi.mock("@/db", async (orig) => ({
 
 const { app } = await import("../../index")
 
-const ready = { projectId: "p1", status: "ready", envEnc: "enc", appKey: "the-app-key" }
+const ready = { projectId: "p1", provider: "cloudhike", status: "ready", envEnc: "enc", appKey: "the-app-key" }
 let n = 0
 
 function call(headers: Record<string, string>, body: object = { op: "version" }) {
@@ -33,6 +39,7 @@ function call(headers: Record<string, string>, body: object = { op: "version" })
 beforeEach(() => {
   getBackend.mockReset()
   runAppOp.mockReset().mockResolvedValue(42)
+  runtime.mockClear()
 })
 
 describe("POST /api/app-runtime/:projectId/data", () => {
@@ -42,8 +49,9 @@ describe("POST /api/app-runtime/:projectId/data", () => {
     expect(res.body).toEqual({ result: 42 })
     expect(res.headers["access-control-allow-origin"]).toBe("*")
     const ctx = runAppOp.mock.calls[0][0]
-    expect(ctx).toMatchObject({ session: "tok", declaredOnly: true })
-    expect(ctx.fileUrl("uploads/a.png")).toContain("/api/app-files/")
+    expect(ctx).toMatchObject({ services: { fake: "services" }, session: "tok", declaredOnly: true })
+    const input = runtime.mock.calls[0][0]
+    expect(input.fileUrl("uploads/a.png")).toContain("/api/app-files/")
   })
 
   it.each([

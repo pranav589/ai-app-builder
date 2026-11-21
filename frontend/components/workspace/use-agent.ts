@@ -4,6 +4,7 @@ import * as React from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 
 import type { AgentEvent, AgentPhase, BackendInfo, GeneratedScreen } from "@app/shared/agent/types"
+import { providerInfo, type BackendProviderId, type BackendProviderStatus } from "@app/shared/app-backend/providers"
 import type { DataModel } from "@app/shared/app-runtime/data-model"
 import type { ThemePackage } from "@app/shared/app-runtime/theme"
 import type { ElementRef } from "@app/shared/preview/protocol"
@@ -11,7 +12,7 @@ import { apiClient, getApiErrorData, getApiErrorStatus, isApiCancelled } from "@
 import type { ChatMessage } from "./types"
 
 type Action = "start" | "resume" | "message" | "approve" | "backend"
-type Request = { action: Action; text?: string; screenId?: string; element?: ElementRef; services?: string[] }
+type Request = { action: Action; text?: string; screenId?: string; element?: ElementRef; provider?: BackendProviderId; services?: string[] }
 
 export type AgentError = { message: string; retry?: Request }
 
@@ -33,7 +34,7 @@ export function useAgent({
   initialData,
   initialFiles,
   initialBackend,
-  initialCloudhike,
+  initialProviders,
 }: {
   initialBackend: BackendInfo | null
   initialFiles: Record<string, string>
@@ -44,8 +45,8 @@ export function useAgent({
   initialMessages: ChatMessage[]
   initialScreens: GeneratedScreen[]
   initialName: string
-  /** Whether the creator's CloudHike account is connected. Can go stale (a disconnect in another tab, another project); refreshed on a failed backend action. */
-  initialCloudhike: { configured: boolean; accountConnected: boolean }
+  /** Which backend providers the creator has linked. Can go stale (a disconnect in another tab, another project); refreshed on a failed backend action. */
+  initialProviders: BackendProviderStatus[]
 }) {
   const [phase, setPhase] = React.useState<AgentPhase>(initialPhase)
   const [messages, setMessages] = React.useState<ChatMessage[]>(initialMessages)
@@ -65,12 +66,12 @@ export function useAgent({
   const filesRef = React.useRef(files)
   filesRef.current = files
   const [backend, setBackend] = React.useState<BackendInfo | null>(initialBackend)
-  const [cloudhike, setCloudhike] = React.useState(initialCloudhike)
+  const [providers, setProviders] = React.useState(initialProviders)
 
   const backendQuery = useQuery({
     queryKey: ["project-backend", projectId],
     queryFn: async () => {
-      const res = await apiClient.get<{ configured: boolean; accountConnected: boolean; backend: BackendInfo | null }>(
+      const res = await apiClient.get<{ providers: BackendProviderStatus[]; backend: BackendInfo | null }>(
         `/api/projects/${projectId}/backend`
       )
       return res.data
@@ -79,10 +80,10 @@ export function useAgent({
   })
 
   /**
-   * The CloudHike connection and backend state as the server sees them right
+   * The provider links and backend state as the server sees them right
    * now: both are rendered once at page load and otherwise only move through
    * SSE events, so they can go stale (the account disconnected from another
-   * tab or another project, or revoked directly in CloudHike). Called after
+   * tab or another project, or revoked directly on the provider's side). Called after
    * a "backend" action fails, so the header's next state (and the dialog's
    * needsAuth) reflect reality instead of repeating the same failure.
    */
@@ -90,7 +91,7 @@ export function useAgent({
     try {
       const { data } = await backendQuery.refetch()
       if (!data) return
-      setCloudhike({ configured: data.configured, accountConnected: data.accountConnected })
+      setProviders(data.providers)
       setBackend(data.backend)
     } catch {
       // Keep whatever we had; the next action will try again.
@@ -217,7 +218,7 @@ export function useAgent({
       setError(null)
       setBusy(true)
       setStatus(
-        req.action === "approve" ? "Starting the build" : req.action === "message" ? "Sending" : req.action === "backend" ? "Connecting to CloudHike" : "Connecting to the agent"
+        req.action === "approve" ? "Starting the build" : req.action === "message" ? "Sending" : req.action === "backend" && req.provider ? `Connecting to ${providerInfo(req.provider).label}` : "Connecting to the agent"
       )
       setStatusSince(Date.now())
       try {
@@ -232,7 +233,7 @@ export function useAgent({
           const status = getApiErrorStatus(err)
           const data = getApiErrorData<{ error?: string }>(err)
           // The account/backend state this request relied on may be stale (disconnected
-          // elsewhere, revoked on CloudHike's side): resync it so the header and the
+          // elsewhere, revoked on the provider's side): resync it so the header and the
           // Connect dialog show what's actually true, instead of repeating the same failure.
           if (req.action === "backend") void refreshBackend()
           setError({ message: data?.error ?? "The agent couldn't start. Please try again.", retry: status === 409 ? undefined : req })
@@ -491,10 +492,10 @@ export function useAgent({
     dismissError: () => setError(null),
     backend,
     setBackend,
-    cloudhike,
+    providers,
     refreshBackend,
-    /** Sets up (or repairs) the app's CloudHike backend; progress streams into the chat. */
-    setupBackend: (services: string[]) => send({ action: "backend", services }),
+    /** Sets up (or repairs) the app's backend on `provider`; progress streams into the chat. */
+    setupBackend: (provider: BackendProviderId, services: string[]) => send({ action: "backend", provider, services }),
     applyElementEdit,
   }
 }
