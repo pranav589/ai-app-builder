@@ -6,6 +6,7 @@ import type { AgentPhase } from "@app/shared/agent/types"
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
 import { backendInfo, getBackend } from "../app-backend/app-backend"
 import { providerStatuses } from "../app-backend/backend.service"
+import { withBackend } from "../app-project/with-backend"
 
 const PHASES: AgentPhase[] = ["draft", "planning", "awaiting_approval", "generating", "ready"]
 const normalizePhase = (s: string | null): AgentPhase => (PHASES.includes(s as AgentPhase) ? (s as AgentPhase) : "draft")
@@ -40,6 +41,13 @@ export async function getWorkspaceData(userId: string, projectId: string) {
   ])
 
   const doc = readAppDoc(project.previewScreens)
+  // The stored lib/backend is always the on-device one (with-backend.ts never
+  // persists the connected version, so a disconnect can revoke the key
+  // without resyncing every project). The code tab reads live, though, not
+  // an export, so without this it would show Zustand/local even once a
+  // backend is actually connected and the app is really calling it over
+  // Axios + React Query -- exactly the mismatch that prompted this.
+  const { files } = await withBackend(project.id, doc.files ?? {})
   const data = {
     id: project.id,
     name: project.name,
@@ -51,7 +59,7 @@ export async function getWorkspaceData(userId: string, projectId: string) {
     screens: doc.screens,
     themes: doc.themes ?? null,
     dataModel: doc.data ?? null,
-    files: doc.files ?? {},
+    files,
     backend: doc.backend,
     backendInfo: backendInfo(backendRow),
     backendProviders,
