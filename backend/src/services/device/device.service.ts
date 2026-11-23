@@ -6,6 +6,7 @@ import { deviceLaneStatus, MetroPortBusyError, startDeviceLane, stopDeviceLane }
 import { cancelDeviceBuild, isDeviceBuildRunning, startDeviceBuild } from "./build"
 import { lanIPv4 } from "./lan"
 import { buildDeviceManifest, type DeviceManifestPlatform } from "./manifest"
+import type { BuildPlatform } from "@app/shared/api-types"
 import { workspaceFromDoc } from "../verify/workspace"
 import { withCurrentPlatform } from "../agent/verify-glue"
 
@@ -83,6 +84,7 @@ export async function getDeviceBuildStatus(userId: string, projectId: string, re
   // A row left "building" by a server restart has no process to finish it.
   const orphaned = build.status === "building" && !isDeviceBuildRunning(projectId)
   return {
+    platform: build.platform,
     status: orphaned ? ("failed" as const) : build.status,
     error: orphaned ? "The build was interrupted because the server restarted. Build again." : build.error,
     stale: build.status === "ready" && build.builtVersion !== project.currentVersion,
@@ -90,7 +92,7 @@ export async function getDeviceBuildStatus(userId: string, projectId: string, re
   }
 }
 
-export async function triggerDeviceBuild(userId: string, projectId: string, reqHost?: string) {
+export async function triggerDeviceBuild(userId: string, projectId: string, platform: BuildPlatform, reqHost?: string) {
   const [project] = await db
     .select({ id: projects.id, name: projects.name, currentVersion: projects.currentVersion, previewScreens: projects.previewScreens })
     .from(projects)
@@ -104,6 +106,7 @@ export async function triggerDeviceBuild(userId: string, projectId: string, reqH
       projectId,
       userId,
       currentVersion: project.currentVersion,
+      platform,
       files: workspace.files,
     })
     // The caller shows this as the build's state right away, so it must be the same shape GET returns.
@@ -121,7 +124,8 @@ export async function getPublicDeviceManifest(projectId: string, platform: Devic
   if (!project) return null
 
   const [build] = await db.select().from(deviceBuilds).where(eq(deviceBuilds.projectId, projectId)).limit(1)
-  if (!build || build.status !== "ready" || !build.s3Prefix) return null
+  // A build only holds the platform it was made for; the phone's other one has nothing to serve.
+  if (!build || build.status !== "ready" || !build.s3Prefix || build.platform !== platform) return null
 
   return await buildDeviceManifest({
     s3Prefix: build.s3Prefix,

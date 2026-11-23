@@ -7,6 +7,7 @@ import { Check, Copy, Loader2, Play, QrCode, RotateCw, Smartphone, Square } from
 
 import { Button } from "@/components/ui/button"
 import { apiClient, getApiErrorMessage } from "@/lib/api-client"
+import type { BuildPlatform } from "@app/shared/api-types"
 import {
   Dialog,
   DialogContent,
@@ -35,7 +36,7 @@ export function QrPattern({ text, className }: { text: string; className?: strin
 }
 
 type BuildStatus = "none" | "building" | "ready" | "failed"
-type Build = { status: BuildStatus; error?: string | null; stale?: boolean; manifestUrl?: string | null }
+type Build = { status: BuildStatus; platform?: BuildPlatform; error?: string | null; stale?: boolean; manifestUrl?: string | null }
 
 /**
  * Phase 10b's hosted device preview (app/api/projects/[projectId]/device-build): follows
@@ -56,7 +57,7 @@ function useDeviceBuild(projectId: string, active: boolean) {
   })
 
   const startMutation = useMutation({
-    mutationFn: async () => (await apiClient.post<Build>(endpoint)).data,
+    mutationFn: async (platform: BuildPlatform) => (await apiClient.post<Build>(endpoint, { platform })).data,
     onSuccess: (data) => {
       if (data) queryClient.setQueryData(["device-build", projectId], data)
     },
@@ -82,9 +83,9 @@ function useDeviceBuild(projectId: string, active: boolean) {
       stopMutation.mutate()
     },
     error: customError,
-    start: () => {
+    start: (platform: BuildPlatform) => {
       setCustomError(null)
-      startMutation.mutate()
+      startMutation.mutate(platform)
     },
   }
 }
@@ -100,7 +101,9 @@ export function ExpoQrDialog({
 }) {
   const { build, busy, stopping, stop, error, start } = useDeviceBuild(projectId, open)
   const building = build.status === "building"
-  const url = build.status === "ready" ? build.manifestUrl ?? null : null
+  // A build holds one platform only, so a phone of the other kind needs its own build.
+  const [platform, setPlatform] = React.useState<BuildPlatform>("android")
+  const url = build.status === "ready" && build.platform === platform ? build.manifestUrl ?? null : null
   const [copied, setCopied] = React.useState(false)
 
   React.useEffect(() => {
@@ -120,7 +123,8 @@ export function ExpoQrDialog({
         "Install Expo Go from the App Store or Google Play.",
         'Open Expo Go, tap "Enter URL manually", and paste the link once it\'s ready.',
       ]
-  const overlay = building ? "Building..." : build.status === "failed" ? "Couldn't build" : "Not built yet"
+  const otherPlatformBuilt = build.status === "ready" && build.platform !== platform
+  const overlay = building ? "Building..." : otherPlatformBuilt ? "Not built for this phone" : build.status === "failed" ? "Couldn't build" : "Not built yet"
   const problem = error ?? (build.status === "failed" ? build.error : null)
 
   return (
@@ -130,6 +134,20 @@ export function ExpoQrDialog({
           <DialogTitle>Test on your phone</DialogTitle>
           <DialogDescription>Build this app and open it in Expo Go on a real device.</DialogDescription>
         </DialogHeader>
+
+        <div className="flex gap-1 self-start rounded-(--r-md) border border-border p-0.5" role="group" aria-label="Phone type">
+          {(["android", "ios"] as const).map((p) => (
+            <Button
+              key={p}
+              size="sm"
+              variant={platform === p ? "secondary" : "ghost"}
+              disabled={building}
+              onClick={() => setPlatform(p)}
+            >
+              {p === "ios" ? "iPhone" : "Android"}
+            </Button>
+          ))}
+        </div>
 
         <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start min-w-0">
           <div className="relative shrink-0 rounded-(--r-md) border border-border bg-white p-2">
@@ -191,7 +209,7 @@ export function ExpoQrDialog({
         )}
 
         <div className="flex min-w-0 w-full items-center justify-end gap-2">
-          {build.stale && !building && (
+          {build.stale && !building && url && (
             <span className="min-w-0 flex-1 text-xs text-muted-foreground">Rebuild to include your latest changes.</span>
           )}
           {building && (
@@ -199,7 +217,7 @@ export function ExpoQrDialog({
               {stopping ? <Loader2 className="animate-spin" /> : <Square />} Stop
             </Button>
           )}
-          <Button size="sm" className="shrink-0" disabled={busy || building} onClick={start}>
+          <Button size="sm" className="shrink-0" disabled={busy || building} onClick={() => start(platform)}>
             {busy || building ? <Loader2 className="animate-spin" /> : url ? <RotateCw /> : <Play />}{" "}
             {url ? "Rebuild" : "Build for phone"}
           </Button>

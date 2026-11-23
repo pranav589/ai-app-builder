@@ -43,6 +43,13 @@
       "when": 1795244108712,
       "tag": "0005_red_the_captain",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795454901864,
+      "tag": "0006_late_sentinel",
+      "breakpoints": true
     }
   ]
 }

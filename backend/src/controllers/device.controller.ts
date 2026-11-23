@@ -75,7 +75,8 @@ export async function getDeviceBuild(req: Request, res: Response, next: NextFunc
 export async function postDeviceBuild(req: Request, res: Response, next: NextFunction) {
   try {
     const projectId = String(req.params.projectId || "")
-    const result = await triggerDeviceBuild(req.user!.id, projectId, req.headers.host)
+    const platform = req.body?.platform === "ios" ? "ios" : "android"
+    const result = await triggerDeviceBuild(req.user!.id, projectId, platform, req.headers.host)
     if (!result) {
       res.status(404).json({ error: "Project not found." })
       return

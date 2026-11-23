@@ -414,7 +414,7 @@ Expo Go only re-fetches the manifest on a fresh launch, not while already runnin
 | File | Role |
 |---|---|
 | `lib/device/export.ts` | `exportExpoProject` — writes a project's files out as a real Expo project under `.device/<id>/` |
-| `lib/device/build.ts` | Runs `expo export` and uploads its output to S3; tracks status in the `device_builds` table |
+| `lib/device/build.ts` | Runs `expo export` for the one platform picked in the dialog (iPhone/Android, stored in `device_builds.platform`) and uploads its output to S3 in parallel, gzipping the JS bundle; logs prepare/export/upload timings; tracks status in the `device_builds` table |
 | `lib/device/manifest.ts` | Builds the Expo Updates protocol manifest (presigned S3 URLs) a ready build serves to Expo Go |
 | `app/api/projects/[projectId]/device-build/route.ts` | `GET`/`POST` — authenticated status/start for a project's build |
 | `app/api/device/[projectId]/manifest/route.ts` | **Public, unauthenticated** — what Expo Go actually fetches |

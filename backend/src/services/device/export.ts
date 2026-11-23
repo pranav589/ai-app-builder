@@ -14,6 +14,7 @@
 import fs from "node:fs"
 import path from "node:path"
 
+import { withApiClientDeps } from "@/lib/app-project/api-client"
 import { packageJson } from "@/lib/app-project/templates"
 import { scaffoldFiles } from "@app/shared/app-project/scaffold"
 import type { FileMap } from "@app/shared/verify/types"
@@ -37,9 +38,14 @@ export class DeviceDepsMissingError extends Error {
   }
 }
 
-/** The shared node_modules every export links to; same dependency list a real export actually ships, so it's never short a package. */
+/**
+ * The shared node_modules every export links to; same dependency list a real export actually ships
+ * (including the axios/React Query a connected app adds), so it's never short a package. A package
+ * missing here isn't an export error: Metro finds it by walking up to the repo root's node_modules,
+ * which brings that copy's own `react` along -- two Reacts in one bundle, and a white screen on launch.
+ */
 export function sharedDepsPackageJson(): string {
-  return packageJson("device-preview-shared-deps")
+  return withApiClientDeps(packageJson("device-preview-shared-deps"))
 }
 
 function writeFile(file: string, content: string) {

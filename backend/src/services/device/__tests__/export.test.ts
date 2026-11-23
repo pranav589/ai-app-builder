@@ -68,4 +68,10 @@ describe("exportExpoProject", () => {
     expect(fs.existsSync(path.join(second, "app/old-screen.tsx"))).toBe(false)
     expect(fs.existsSync(path.join(second, "app/home.tsx"))).toBe(true)
   })
+
+  it("installs the packages a connected app imports, so Metro never resolves them from the repo root (a second React: white screen)", () => {
+    const deps = JSON.parse(sharedDepsPackageJson()).dependencies
+    expect(deps).toHaveProperty("axios")
+    expect(deps).toHaveProperty("@tanstack/react-query")
+  })
 })

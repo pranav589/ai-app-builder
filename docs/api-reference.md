@@ -675,12 +675,13 @@ Current build status for this project (auth required, owner only).
 ```json
 {
   "status": "ready",
+  "platform": "android",
   "error": null,
   "stale": false,
   "manifestUrl": "exp://192.168.1.50:3000/api/device/proj-abc123/manifest"
 }
 ```
-`status` is `"none" | "building" | "ready" | "failed"`. `manifestUrl` is only present when
+`platform` (`"android" | "ios"`) is the one platform this build exported. `status` is `"none" | "building" | "ready" | "failed"`. `manifestUrl` is only present when
 `status` is `"ready"`. `stale` is true once `projects.current_version` has moved past the
 version this build was made from (a "Rebuild" prompt in the dialog, not an error).
 
@@ -694,8 +695,8 @@ Stops a device build that is still `building`: kills its `expo export` if it run
 **Errors**: `404` project not found, `409` (`not_running`) when no build is running.
 
 ### `POST /api/projects/[projectId]/device-build`
-Starts a build (`npx expo export` on the project's current files, uploaded to S3) if one
-isn't already running; no-ops otherwise. Returns immediately with the same shape as the `GET`
+Starts a build (`expo export` for one platform on the project's current files, uploaded to S3; the JS bundle is gzipped) if one
+isn't already running; no-ops otherwise. Body: `{ "platform": "android" | "ios" }` (defaults to `android`). Returns immediately with the same shape as the `GET`
 above (usually `{"status": "building"}` on the first response) -- follow `GET` (kept fresh by `status-stream`) for completion.
 
 ### `GET /api/device/[projectId]/manifest`
@@ -704,7 +705,7 @@ opens (`exp://<host>/api/device/[projectId]/manifest`). Reads the `expo-platform
 (`ios` or `android`, defaulting to `android`) and returns an Expo Updates protocol manifest
 (`multipart/mixed`, a `manifest` JSON part and an empty `extensions` part) pointing at presigned
 S3 URLs for that platform's bundle and assets. 404s (plain text, not a manifest) when the
-project has no ready build yet, or no export for the requested platform.
+project has no ready build yet, or the ready build was made for the other platform.
 
 ---
 

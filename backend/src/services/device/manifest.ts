@@ -40,7 +40,7 @@ function assetKey(assetPath: string): string {
   return assetPath.split(/[\\/]/).pop()!
 }
 
-/** null when this build's export didn't include `platform` (shouldn't happen -- the build always exports "all"). */
+/** null when this build's export didn't include `platform`. */
 export async function buildDeviceManifest(opts: {
   s3Prefix: string
   platform: DeviceManifestPlatform

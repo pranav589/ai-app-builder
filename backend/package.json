@@ -11,7 +11,7 @@
     "lint": "eslint --config ../eslint.config.mjs .",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push",
+    "db:push": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:sql": "node --env-file=.env scripts/migrate-sql.mjs",
     "device:deps": "node --import tsx scripts/device-deps.ts"

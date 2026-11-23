@@ -1,0 +1,1 @@
+ALTER TABLE "device_builds" ADD COLUMN "platform" text DEFAULT 'android' NOT NULL;

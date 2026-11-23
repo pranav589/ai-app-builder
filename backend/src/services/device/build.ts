@@ -14,6 +14,8 @@
 import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
+import { promisify } from "node:util"
+import { gzip } from "node:zlib"
 import { spawn, type ChildProcess } from "node:child_process"
 import { and, eq } from "drizzle-orm"
 
@@ -21,7 +23,10 @@ import { db, deviceBuilds } from "@/db"
 import { withBackend } from "@/lib/app-project/with-backend"
 import { DEVICE_ROOT, exportExpoProject } from "@/lib/device/export"
 import { putObject } from "@/lib/storage"
+import type { BuildPlatform } from "@app/shared/api-types"
 import type { FileMap } from "@app/shared/verify/types"
+
+const gzipAsync = promisify(gzip)
 
 const EXPORT_ROOT = path.join(DEVICE_ROOT, "_hosted-export")
 
@@ -55,6 +60,17 @@ function listFilesRecursive(dir: string, base = dir): string[] {
   return out
 }
 
+const UPLOAD_CONCURRENCY = 8
+
+/** Runs `fn` over `items` with at most `limit` in flight; rejects on the first failure. */
+async function mapConcurrent<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++])
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+}
+
 /**
  * The builds running in this process. A run that is no longer the one registered for its
  * project was stopped, so it must not write its outcome over the row (which may by now
@@ -64,29 +80,26 @@ type Run = { child?: ChildProcess }
 const runs = new Map<string, Run>()
 
 function killTree(child: ChildProcess) {
-  // `shell: true` on Windows makes child.kill() end only the shell, leaving `expo export` running.
+  // Metro spawns worker processes; on Windows child.kill() would leave them running.
   if (process.platform === "win32" && child.pid) spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true })
   else child.kill()
 }
 
-function runExportCli(cwd: string, outDir: string, run: Run): Promise<void> {
+function runExportCli(cwd: string, outDir: string, platform: BuildPlatform, run: Run): Promise<void> {
   return new Promise((resolve, reject) => {
     const env = { ...process.env }
     delete env.CI
-    const win32 = process.platform === "win32"
-    // spawn with shell:true on Windows joins args into one command-line string without quoting
-    // them itself, so a space in outDir (this repo's own path has one) splits into extra argv
-    // tokens unless quoted here.
-    const quotedOutDir = win32 ? `"${outDir}"` : outDir
+    // Run expo's CLI through node directly: skips `npx`'s package lookup on every build, and with
+    // no shell involved a space in outDir (this repo's own path has one) needs no quoting.
+    const expoCli = path.join(cwd, "node_modules", "expo", "bin", "cli")
     // --no-bytecode: Expo Go can't load a precompiled Hermes bytecode bundle (the `expo export`
     // default) as an update -- "Expo Go runs plain JavaScript bundles, so it can't load this
     // update," found on a real device. Fine for this use case: this build only has to run in
     // Expo Go, never in a standalone compiled app that would want the faster bytecode.
-    const child = spawn("npx", ["expo", "export", "--platform", "all", "--no-bytecode", "--output-dir", quotedOutDir], {
+    const child = spawn(process.execPath, [expoCli, "export", "--platform", platform, "--no-bytecode", "--output-dir", outDir], {
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
-      shell: win32,
       windowsHide: true,
     })
     run.child = child
@@ -115,8 +128,9 @@ export async function startDeviceBuild(opts: {
   userId: string
   files: FileMap
   currentVersion: number
+  platform: BuildPlatform
 }): Promise<void> {
-  const { projectId, userId, files, currentVersion } = opts
+  const { projectId, userId, files, currentVersion, platform } = opts
 
   // Only a build this process is running counts as in progress. A row still
   // saying "building" with no run here was orphaned by a server restart (dev's
@@ -126,45 +140,53 @@ export async function startDeviceBuild(opts: {
 
   await db
     .insert(deviceBuilds)
-    .values({ projectId, userId, status: "building" })
-    .onConflictDoUpdate({ target: deviceBuilds.projectId, set: { status: "building", error: null, updatedAt: new Date() } })
+    .values({ projectId, userId, status: "building", platform })
+    .onConflictDoUpdate({ target: deviceBuilds.projectId, set: { status: "building", platform, error: null, updatedAt: new Date() } })
 
   const run: Run = {}
   runs.set(projectId, run)
-  runBuild(projectId, files, currentVersion, run).catch(() => {
+  runBuild(projectId, files, currentVersion, platform, run).catch(() => {
     // Failures are already recorded on the row inside runBuild; nothing more to do here.
   })
 }
 
-async function runBuild(projectId: string, files: FileMap, currentVersion: number, run: Run): Promise<void> {
+async function runBuild(projectId: string, files: FileMap, currentVersion: number, platform: BuildPlatform, run: Run): Promise<void> {
   const buildId = `${Date.now()}-${randomBytes(4).toString("hex")}`
   const outDir = path.join(EXPORT_ROOT, projectId, buildId)
 
   try {
+    const t0 = Date.now()
     const projectDir = exportExpoProject(projectId, (await withBackend(projectId, files)).files)
     fs.rmSync(outDir, { force: true, recursive: true })
+    const tPrepared = Date.now()
 
-    await runExportCli(projectDir, outDir, run)
+    await runExportCli(projectDir, outDir, platform, run)
+    const tExported = Date.now()
 
     const s3Prefix = `device/${projectId}/${buildId}/`
-    // app.json isn't part of `expo export`'s own output (only the bundle/assets/metadata are),
-    // but the manifest route needs it for extra.expoClient -- upload it alongside under the
-    // same prefix instead of duplicating app config into Postgres.
-    await putObject(s3Prefix + "app.json", fs.readFileSync(path.join(projectDir, "app.json")), "application/json")
-
     // The Expo Updates protocol requires each asset's (and the bundle's) base64url SHA-256 hash
     // for integrity verification; Expo Go silently drops an asset it can't verify rather than
     // erroring, which looked like "icons just don't show up" with this omitted. Computed once
     // here (the bytes are already in hand for upload) and stored alongside instead of re-hashing
     // on every manifest request.
     const hashes: Record<string, string> = {}
-    for (const rel of listFilesRecursive(outDir)) {
+    await mapConcurrent(listFilesRecursive(outDir), UPLOAD_CONCURRENCY, async (rel) => {
       const relKey = rel.split(path.sep).join("/")
-      const buf = fs.readFileSync(path.join(outDir, rel))
+      const buf = await fs.promises.readFile(path.join(outDir, rel))
       hashes[relKey] = createHash("sha256").update(buf).digest("base64url")
-      await putObject(s3Prefix + relKey, buf, contentTypeFor(rel))
-    }
+      // The JS bundle is the bulk of the upload and compresses several-fold; the hash above stays
+      // over the raw bytes since that is what the phone checks after decoding Content-Encoding.
+      if (path.extname(rel) === ".js") await putObject(s3Prefix + relKey, await gzipAsync(buf), contentTypeFor(rel), "gzip")
+      else await putObject(s3Prefix + relKey, buf, contentTypeFor(rel))
+    })
+    // app.json isn't part of `expo export`'s own output (only the bundle/assets/metadata are),
+    // but the manifest route needs it for extra.expoClient -- upload it alongside under the
+    // same prefix instead of duplicating app config into Postgres.
+    await putObject(s3Prefix + "app.json", fs.readFileSync(path.join(projectDir, "app.json")), "application/json")
     await putObject(s3Prefix + "hashes.json", Buffer.from(JSON.stringify(hashes)), "application/json")
+    console.log(
+      `[device-build] ${projectId} prepare=${tPrepared - t0}ms export=${tExported - tPrepared}ms upload=${Date.now() - tExported}ms`
+    )
 
     if (runs.get(projectId) !== run) return
     runs.delete(projectId)

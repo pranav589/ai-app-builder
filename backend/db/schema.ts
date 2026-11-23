@@ -412,6 +412,8 @@ export const deviceBuilds = pgTable("device_builds", {
   projectId: text("project_id").primaryKey().references(() => projects.id, { onDelete: "cascade" }),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   status: text("status").$type<DeviceBuildStatus>().notNull(),
+  /** The one platform this build exported: a single-platform `expo export` is about half the bundle and upload time of both. */
+  platform: text("platform").$type<BuildPlatform>().default("android").notNull(),
   /** projects.currentVersion this build was made from; set once ready, compared against the live value to show a "rebuild" badge. */
   builtVersion: integer("built_version"),
   /** S3 key prefix (e.g. "device/<projectId>/<buildId>/") holding this build's `expo export` output, including metadata.json. Set once ready. */

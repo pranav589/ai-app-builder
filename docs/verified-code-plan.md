@@ -916,6 +916,17 @@ machine and hands out a LAN `exp://` address.
 **Approach (chosen): static export + self-hosted update manifest.** No long-running Metro per
 user; the phone downloads a prebuilt bundle from a public URL.
 
+**Snack was tried as a replacement (2026-11-23) and reverted.** Publishing through `snack-sdk`
+7.4.0 (SDK 58) worked end to end once three gaps were patched (an `App.js` that imports
+`expo-router/entry`, since Snack ignores `package.json`'s `main`; adding transitive deps from
+`missingDependencies[name].wantedVersion`; and swapping `expo-router/native-tabs`, which Snack's
+runtime doesn't ship, for JS `Tabs`). It still failed on a real phone with "Iterator method is
+not callable" in the first `useAnimatedStyle`: Snack compiles user code with its own vendored
+worklets Babel plugin (`runtime/vendor/worklets-plugin.js` in expo/snack, hardcoded to 0.7.2,
+emitting `__closure` as an object) while its SDK 58 runtime ships Reanimated 4.7.1 / worklets
+0.13.0 (which expect an array). Every generated app uses Reanimated through `@/motion`, so
+until Expo updates that plugin, Snack can't run these apps.
+
 **Work.**
 1. ~~Build step: for a project version, run `npx expo export` (iOS and Android) on the exported
    project in a build worker (a queue job, not the request handler), reusing Phase 10's
