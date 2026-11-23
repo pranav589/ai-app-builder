@@ -527,11 +527,15 @@ export async function runGeneration(run: LiveRun, projectId: string) {
   // The shell is kept; refresh only in case a later build changes it.
   files = { ...platform, ...shellFiles, ...generated, ...sideFiles }
   const finalDoc: AppDoc = { ...doc, screens, themes, data, files, manifest, shellHash: sHash, componentsHash: cHash }
-  const { version } = await commitSnapshot(projectId, finalDoc, {
+  const { version, doc: committedDoc } = await commitSnapshot(projectId, finalDoc, {
     author: project.userId,
     intent: todo.length ? `Built ${todo.length} screen${todo.length === 1 ? "" : "s"}` : "Rebuilt (no screens changed)",
     runId: run.runId,
   })
+  // commitSnapshot may have pruned package.json/app.json; the client's code
+  // tab is built from the files stream, not a fresh read of this commit, so
+  // without this it would show the pre-prune files until reopened.
+  if (committedDoc.files && committedDoc.files !== files) run.emit({ type: "files", files: committedDoc.files })
   await setPhase(projectId, "ready")
   run.emit({ type: "phase", phase: "ready" })
   const done = screens.filter((s) => s.state === "ready").length

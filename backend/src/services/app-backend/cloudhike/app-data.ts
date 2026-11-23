@@ -194,11 +194,17 @@ export async function syncSchema(env: AppEnv, model: DataModel) {
   })
 }
 
-/** A field's JS value as its column expects it. `undefined` (absent) becomes a plain null. */
-function toColumnValue(type: FieldType, v: unknown): unknown {
+/** A field's JS value as its column expects it. `undefined` (absent) becomes a plain null. Exported for its own test coverage, not used outside this file. */
+export function toColumnValue(type: FieldType, v: unknown): unknown {
   if (v === undefined || v === null) return null
   if (type === "number") return typeof v === "number" ? v : Number(v)
   if (type === "boolean") return typeof v === "boolean" ? v : Boolean(v)
+  // postgres.js's own date serializer does `new Date(v).toISOString()` with
+  // no validation of its own: an empty or malformed date string (bad seed
+  // data, or a field the data model calls "date" that doesn't actually hold
+  // one) throws RangeError mid-insert and aborts the whole provisioning
+  // transaction. Checking it here turns that into a dropped value instead.
+  if (type === "date" && (typeof v !== "string" || Number.isNaN(new Date(v).getTime()))) return null
   return v
 }
 
