@@ -30,7 +30,7 @@ export function selectFiles(ws: Workspace, targetPaths: string[]): { path: strin
     if (ws.files[target] === undefined) continue
     picked.add(target)
     for (const spec of importsOf(ws.files[target])) {
-      if (!spec.startsWith("@/components/") && !spec.startsWith("@/lib/")) continue
+      if (!spec.startsWith("@/components/") && !spec.startsWith("@/lib/") && !spec.startsWith("@/stores/")) continue
       const p = spec.slice(2)
       for (const f of [p, `${p}.tsx`, `${p}.ts`]) if (ws.files[f] !== undefined) picked.add(f)
     }

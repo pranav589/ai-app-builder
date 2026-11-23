@@ -4,7 +4,7 @@
 // fake model and exercised for real from lib/verify/coder.ts.
 
 import type { GateName, RunState, Workspace } from "@app/shared/verify/types"
-import { formatDiagnostics, verifyChange, type Verdict } from "./pipeline"
+import { formatDiagnostics, verifyChange, type Gate, type Verdict } from "./pipeline"
 import { repairPrompt } from "./prompts"
 import { parseReply } from "./protocol"
 
@@ -45,6 +45,8 @@ export type RunOpts = {
   projectKey?: string
   /** Streamed chunks of the model's reply for the attempt in progress, if the adapter supports it. */
   onDelta?: (delta: string) => void
+  /** Extra gates beyond the normal pipeline (parse/policy/tsc/render) -- the backend-conversion step adds uiFreezeGate, verified-edit and screen generation never do. */
+  extraGates?: Gate[]
 }
 
 export async function runChange(base: Workspace, userPrompt: string, model: ModelAdapter, opts: RunOpts = {}): Promise<RunResult> {
@@ -91,7 +93,7 @@ export async function runChange(base: Workspace, userPrompt: string, model: Mode
         ],
       }
     } else {
-      verdict = await verifyChange(base, parsed.changeSet, opts.projectKey)
+      verdict = await verifyChange(base, parsed.changeSet, opts.projectKey, opts.extraGates)
     }
     const diagnostics = verdict.ok ? undefined : formatDiagnostics(verdict)
     attempts.push({

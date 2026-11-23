@@ -80,6 +80,22 @@ describe("compileManifest", () => {
   })
 })
 
+describe("compileManifest connected", () => {
+  it("wraps the root layout in QueryClientProvider, importing from @/lib/api, only when connected", () => {
+    const local = compileManifest(manifest)["app/_layout.tsx"]
+    expect(local).not.toContain("QueryClientProvider")
+    expect(local).not.toContain("@/lib/api")
+
+    const connected = compileManifest(manifest, { connected: true })["app/_layout.tsx"]
+    expect(connected).toContain('import { QueryClientProvider } from "@tanstack/react-query"')
+    expect(connected).toContain('import { queryClient } from "@/lib/api"')
+    expect(connected).toContain("<QueryClientProvider client={queryClient}>")
+    // Still wraps every modal screen and GestureHandlerRootView the same way.
+    expect(connected).toContain('<Stack.Screen name="add-habit" options={{ presentation: "modal" }} />')
+    expect(connected.indexOf("<GestureHandlerRootView")).toBeLessThan(connected.indexOf("<QueryClientProvider"))
+  })
+})
+
 describe("compileManifest determinism", () => {
   it("produces byte-identical output for the same manifest", () => {
     const a = compileManifest(manifest)

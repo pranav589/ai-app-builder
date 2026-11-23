@@ -9,9 +9,14 @@ import * as RNW from "react-native-web"
 import * as GestureHandler from "react-native-gesture-handler"
 import * as Reanimated from "react-native-reanimated"
 import * as Worklets from "react-native-worklets"
+import * as Zustand from "zustand"
+import * as ZustandMiddleware from "zustand/middleware"
+import * as ReactQuery from "@tanstack/react-query"
+import Axios from "axios"
 
 import { isPlatformOwned } from "@app/shared/verify/ownership"
 import { dataStore, moduleStore } from "./bridge"
+import * as api from "./shims/api"
 import * as backend from "./shims/backend"
 import * as native from "./shims/native"
 import * as theme from "./shims/theme"
@@ -72,9 +77,21 @@ const PACKAGES: Record<string, () => unknown> = {
   "react-native-reanimated": () => withDefault(Reanimated, Reanimated.default),
   "react-native-worklets": () => withDefault(Worklets),
   "react-native-screens": () => withDefault({ enableScreens() {} }),
+  // Real packages, not stand-ins: AI-written Zustand stores (persisted through
+  // the AsyncStorage shim above) and, once a backend is connected, Axios +
+  // React Query run unmodified in the preview, the same code an export ships.
+  zustand: () => withDefault(Zustand, Zustand),
+  "zustand/middleware": () => withDefault(ZustandMiddleware, ZustandMiddleware),
+  "@tanstack/react-query": () => withDefault(ReactQuery, ReactQuery),
+  axios: () => withDefault(Axios, Axios),
   // Platform-owned project modules: the preview versions talk to the host.
   "@/theme": () => withDefault(theme, theme),
   "@/lib/backend": () => withDefault(backend, backend),
+  // @/lib/api exists only once a backend is connected (written by the
+  // backend-conversion step, backend/src/services/agent/backend-conversion.ts);
+  // same redirect as @/lib/backend above, since its real content talks to a
+  // real server the preview has no business calling directly.
+  "@/lib/api": () => withDefault(api, api),
 }
 
 /** Packages generated code may import. Kept in sync with lib/app-project/rules.ts. */
@@ -85,6 +102,8 @@ const PLATFORM_FILES: Record<string, string> = {
   "theme/index.ts": "@/theme",
   "lib/backend/index.ts": "@/lib/backend",
   "lib/backend/index.tsx": "@/lib/backend",
+  "lib/api.ts": "@/lib/api",
+  "lib/api.tsx": "@/lib/api",
 }
 
 const EXTENSIONS = ["", ".tsx", ".ts", ".jsx", ".js", ".json", "/index.tsx", "/index.ts", "/index.js"]

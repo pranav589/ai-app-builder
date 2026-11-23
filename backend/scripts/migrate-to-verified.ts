@@ -48,7 +48,7 @@ async function main() {
         continue
       }
 
-      const generated = compileManifest(manifest)
+      const generated = compileManifest(manifest, { connected: doc.backend.provider !== "local" })
       console.log(`- ${row.id} (${row.name}): migrating -- ${Object.keys(manifest.screens).length} screen(s) in the manifest, ${Object.keys(generated).length} generated file(s)`)
       migrated++
       if (dryRun) continue

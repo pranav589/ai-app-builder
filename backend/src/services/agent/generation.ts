@@ -10,6 +10,7 @@ import { applyHunks, parseEdits } from "@/lib/app-project/patch"
 import { ICONS } from "@app/shared/app-project/icons"
 import { platformFiles } from "@/lib/app-project/templates"
 import { PLATFORM_KIT_FILES } from "@/lib/app-project/platform-kits"
+import { withApiClientDeps } from "@/lib/app-project/api-client"
 import { compileManifest } from "@app/shared/manifest/compile"
 import { syncManifest } from "@app/shared/manifest/migrate"
 import { coderAdapter } from "@/lib/verify/coder"
@@ -398,9 +399,16 @@ export async function runGeneration(run: LiveRun, projectId: string) {
   // a previous edit) and recompiled on every build so it never drifts from
   // the plan. The component and motion kits ship the same way: platform
   // files, not AI-written.
+  // platformFiles() always starts package.json from the base template, which
+  // has no axios/react-query -- backend-conversion.ts only adds those once,
+  // at connect time, into package.json directly, not this template, so every
+  // build after that has to re-merge them back in or they silently vanish
+  // the moment any edit (not just a connect/disconnect) rebuilds this file,
+  // even though the connected screens still import @/lib/api and need them.
   const platform = { ...platformFiles(plan, themes, data), ...PLATFORM_KIT_FILES }
+  if (doc.backend.provider !== "local" && platform["package.json"]) platform["package.json"] = withApiClientDeps(platform["package.json"])
   const manifest = syncManifest({ ...doc, data }, plan)
-  const generated = compileManifest(manifest)
+  const generated = compileManifest(manifest, { connected: doc.backend.provider !== "local" })
   let sideFiles = storedSideFiles(doc.files ?? {}, (p) => SHELL_PATH.test(p))
   let files: ProjectFiles = { ...platform, ...shellFiles, ...generated, ...sideFiles }
   await saveDoc(projectId, { ...doc, screens, themes, data, files, manifest, shellHash: sHash, componentsHash: cHash })
@@ -527,11 +535,15 @@ export async function runGeneration(run: LiveRun, projectId: string) {
   // The shell is kept; refresh only in case a later build changes it.
   files = { ...platform, ...shellFiles, ...generated, ...sideFiles }
   const finalDoc: AppDoc = { ...doc, screens, themes, data, files, manifest, shellHash: sHash, componentsHash: cHash }
-  const { version } = await commitSnapshot(projectId, finalDoc, {
+  const { version, doc: committedDoc } = await commitSnapshot(projectId, finalDoc, {
     author: project.userId,
     intent: todo.length ? `Built ${todo.length} screen${todo.length === 1 ? "" : "s"}` : "Rebuilt (no screens changed)",
     runId: run.runId,
   })
+  // commitSnapshot may have pruned package.json/app.json; the client's code
+  // tab is built from the files stream, not a fresh read of this commit, so
+  // without this it would show the pre-prune files until reopened.
+  if (committedDoc.files && committedDoc.files !== files) run.emit({ type: "files", files: committedDoc.files })
   await setPhase(projectId, "ready")
   run.emit({ type: "phase", phase: "ready" })
   const done = screens.filter((s) => s.state === "ready").length

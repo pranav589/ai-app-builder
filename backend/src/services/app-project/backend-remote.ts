@@ -1,9 +1,14 @@
 // The device backend for an app whose creator connected a backend provider.
 // Same API as backendDevice() (templates.ts), so no screen changes, but data,
-// auth and files go over HTTP to a server that holds the provider's credentials: the
-// builder's public route (/api/app-runtime/[id]/data), or the self-host
-// server shipped in a ZIP/GitHub export. The app itself never holds a secret;
-// the only credential in the bundle is the public app key.
+// auth and files go over HTTP, through Axios, to a server that holds the
+// provider's credentials: the builder's public route
+// (/api/app-runtime/[id]/data), or the self-host server shipped in a
+// ZIP/GitHub export. The app itself never holds a secret; the only
+// credential in the bundle is the public app key. Reads are cached and kept
+// fresh with React Query instead of a bespoke poll loop; this module creates
+// its own QueryClient and passes it explicitly to every hook
+// (useQuery(options, queryClient)) so it works as a drop-in replacement for
+// backendDevice() without the root layout needing a QueryClientProvider.
 
 import type { FileMap } from "@app/shared/verify/types"
 
@@ -27,14 +32,29 @@ export const remoteBackendFiles = (namespace: string, endpoint: string, appKey: 
   [BACKEND_CONFIG_PATH]: backendConfig(endpoint, appKey),
 })
 
+/** Axios and React Query, used only by backendRemote() -- added to the exported package.json only once a backend is actually connected, so a disconnected app's dependencies stay untouched. */
+const REMOTE_DEPENDENCIES: Record<string, string> = { axios: "^1.21.1", "@tanstack/react-query": "^5.108.0" }
+
+/** Merges REMOTE_DEPENDENCIES into a package.json's dependencies; returns the source unchanged if it isn't valid JSON. */
+export function withRemoteBackendDeps(packageJsonSource: string): string {
+  try {
+    const pkg = JSON.parse(packageJsonSource) as { dependencies?: Record<string, string>; [key: string]: unknown }
+    return JSON.stringify({ ...pkg, dependencies: { ...pkg.dependencies, ...REMOTE_DEPENDENCIES } }, null, 2) + "\n"
+  } catch {
+    return packageJsonSource
+  }
+}
+
 /** `namespace` (the project id) keeps the stored sign-in session per app, for the same reason backendDevice's storage key is (Expo Go hosts every scanned project in one install). */
 export function backendRemote(namespace: string): string {
-  return String.raw`// Platform module: the app's data, auth and file storage, served by the app's
-// backend over HTTP (see ./config). Same API as the local-storage version, so
-// no screen has to change.
-import * as React from "react"
+  return String.raw`// Platform module: the app's data, auth and file storage, served by the
+// app's backend over HTTP (see ./config) through Axios, cached and kept
+// fresh with React Query. Same API as the local-storage version, so no
+// screen has to change.
 import { AppState } from "react-native"
 import AsyncStorage from "@react-native-async-storage/async-storage"
+import axios from "axios"
+import { QueryClient, focusManager, useMutation, useQuery } from "@tanstack/react-query"
 import seed from "@/data/seed.json"
 import type { Collections } from "@/data/types"
 import { API_URL, APP_KEY } from "./config"
@@ -43,29 +63,21 @@ type Rec = Record<string, unknown> & { id: string; createdAt: string; updatedAt?
 type Where = Partial<Record<string, unknown>> | ((r: Rec) => boolean)
 type QueryOpts = { where?: Where; sort?: string; limit?: number }
 type User = { id: string; name: string; email: string; avatar?: string }
-type Snapshot = { collections: Record<string, Rec[]>; settings: Record<string, unknown>; user: User | null }
 
 const SESSION_KEY = ${JSON.stringify(`app:${namespace}:session`)}
 const POLL_MS = 10000
 
-let snap: Snapshot = { collections: {}, settings: {}, user: null }
-const listeners = new Set<() => void>()
-const wanted = new Set<string>()
+// React Query only knows the window has focus on the web; on a device, tell
+// it directly, so it stops polling once the app is backgrounded.
+AppState.addEventListener("change", (status) => focusManager.setFocused(status === "active"))
+
+// A standalone client (not from a QueryClientProvider in context) so this
+// module is a drop-in replacement for backendDevice() -- the root layout
+// doesn't need to know a backend is connected.
+export const queryClient = new QueryClient()
+
 let token = ""
 let tokenLoaded: Promise<void> | null = null
-let version = -1
-let pollTimer: ReturnType<typeof setInterval> | null = null
-
-function notify() {
-  for (const l of listeners) l()
-}
-
-// Replaces "snap" wholesale (never mutates it in place) so useSyncExternalStore
-// and the React Compiler see a new snapshot, same reason as the local version.
-function setSnap(next: Snapshot) {
-  snap = next
-  notify()
-}
 
 function loadToken(): Promise<void> {
   tokenLoaded ??= AsyncStorage.getItem(SESSION_KEY).then(
@@ -83,16 +95,19 @@ async function saveToken(next: string) {
   } catch {}
 }
 
+const client = axios.create({ baseURL: API_URL, headers: { "x-app-key": APP_KEY } })
+
 async function call<T>(op: string, body: Record<string, unknown> = {}): Promise<T> {
   await loadToken()
-  let res: Response
   try {
-    res = await fetch(API_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-app-key": APP_KEY, "x-app-session": token },
-      body: JSON.stringify({ op, ...body }),
-    })
+    const res = await client.post("", { op, ...body }, { headers: { "x-app-session": token } })
+    return (res.data as { result?: T }).result as T
   } catch (e) {
+    if (axios.isAxiosError(e) && e.response) {
+      const message = (e.response.data as { error?: string } | undefined)?.error || "Something went wrong. Please try again."
+      console.warn("[backend] " + API_URL + ' (op "' + op + '") answered ' + e.response.status + ": " + message)
+      throw new Error(message)
+    }
     // Logged right here, not left for whichever caller happens to catch it, so this always shows
     // up once with the exact URL this app is trying to reach -- e.g. a device build that baked in
     // "localhost" (unreachable from a phone) shows up immediately instead of as a silent, permanent
@@ -100,78 +115,6 @@ async function call<T>(op: string, body: Record<string, unknown> = {}): Promise<
     console.warn("[backend] Couldn't reach " + API_URL + ' (op "' + op + '"):', e instanceof Error ? e.message : e)
     throw new Error("You're offline. Check your connection and try again.")
   }
-  const data = (await res.json().catch(() => null)) as { result?: T; error?: string } | null
-  if (!res.ok) {
-    console.warn("[backend] " + API_URL + ' (op "' + op + '") answered ' + res.status + ": " + (data?.error ?? "no error message"))
-    throw new Error(data?.error || "Something went wrong. Please try again.")
-  }
-  return data?.result as T
-}
-
-// One snapshot request serves every hook that asked at the same moment; a
-// refresh requested while one is running runs once more afterwards.
-let refreshing: Promise<void> | null = null
-let again = false
-
-function refresh(): Promise<void> {
-  if (refreshing) {
-    again = true
-    return refreshing
-  }
-  refreshing = (async () => {
-    try {
-      do {
-        again = false
-        const r = await call<Snapshot & { version: number }>("snapshot", { collections: [...wanted] })
-        version = r.version
-        setSnap({ collections: r.collections, settings: r.settings, user: r.user })
-      } while (again)
-    } catch {
-      // call() already logged the detail (the URL, the status or the raw error); a sleeping
-      // database or a dropped connection just means the next poll or want() tries again.
-    } finally {
-      refreshing = null
-    }
-  })()
-  return refreshing
-}
-
-async function poll() {
-  if (AppState.currentState !== "active") return
-  try {
-    const v = await call<number>("version")
-    if (v !== version) await refresh()
-  } catch {}
-}
-
-// Settings and the signed-in user come with every snapshot; a screen that only
-// uses those still needs the first one.
-function ensureLoaded() {
-  if (version === -1) void refresh()
-}
-
-function want(collection: string) {
-  if (wanted.has(collection)) return
-  wanted.add(collection)
-  void refresh()
-}
-
-function subscribe(listener: () => void) {
-  listeners.add(listener)
-  pollTimer ??= setInterval(poll, POLL_MS)
-  return () => {
-    listeners.delete(listener)
-    if (!listeners.size && pollTimer) {
-      clearInterval(pollTimer)
-      pollTimer = null
-    }
-  }
-}
-
-const getSnapshot = () => snap
-
-function useStore(): Snapshot {
-  return React.useSyncExternalStore(subscribe, getSnapshot)
 }
 
 function query(rows: Rec[], opts: QueryOpts = {}) {
@@ -194,50 +137,27 @@ function query(rows: Rec[], opts: QueryOpts = {}) {
   return opts.limit ? out.slice(0, opts.limit) : out
 }
 
-// A write shows up in every hook at once, then the next snapshot confirms it.
-function putRecord(collection: string, rec: Rec) {
-  const rows = snap.collections[collection] ?? []
-  const i = rows.findIndex((r) => r.id === rec.id)
-  const next = i === -1 ? [rec, ...rows] : rows.map((r, j) => (j === i ? rec : r))
-  setSnap({ ...snap, collections: { ...snap.collections, [collection]: next } })
-}
-
 export const db = {
-  async list(collection: string, opts?: QueryOpts) { return query(await call<Rec[]>("list", { collection }), opts) },
+  list(collection: string, opts?: QueryOpts) { return call<Rec[]>("list", { collection }).then((rows) => query(rows, opts)) },
   get(collection: string, id: string) { return call<Rec | null>("get", { collection, id }) },
-  async insert(collection: string, values: Record<string, unknown>) {
-    const rec = await call<Rec>("insert", { collection, values })
-    putRecord(collection, rec)
-    void refresh()
-    return rec
-  },
-  async update(collection: string, id: string, patch: Record<string, unknown>) {
-    const rec = await call<Rec>("update", { collection, id, patch })
-    putRecord(collection, rec)
-    void refresh()
-    return rec
-  },
-  async remove(collection: string, id: string) {
-    await call("remove", { collection, id })
-    setSnap({ ...snap, collections: { ...snap.collections, [collection]: (snap.collections[collection] ?? []).filter((r) => r.id !== id) } })
-    void refresh()
-  },
+  insert(collection: string, values: Record<string, unknown>) { return call<Rec>("insert", { collection, values }) },
+  update(collection: string, id: string, patch: Record<string, unknown>) { return call<Rec>("update", { collection, id, patch }) },
+  remove(collection: string, id: string) { return call<null>("remove", { collection, id }) },
 }
 
 export const kv = {
   async get<T = unknown>(key: string, fallback?: T) { return ((await call<Record<string, unknown>>("settings"))[key] ?? fallback) as T },
-  async set(key: string, value: unknown) {
-    await call("setSetting", { key, value })
-    setSnap({ ...snap, settings: { ...snap.settings, [key]: value } })
-    void refresh()
-  },
+  set(key: string, value: unknown) { return call("setSetting", { key, value }) },
 }
 
+// The non-hook auth.signIn/signUp/signOut below are also what useUser's
+// mutations call, but calling them directly (as this module's own code does
+// right after a sign-up form, say) must keep useUser's cache in sync too, so
+// invalidation lives here rather than only in the hook's onSuccess.
 async function startSession(op: "auth.signUp" | "auth.signIn", input: Record<string, unknown>) {
   const r = await call<{ token: string; user: User }>(op, input)
   await saveToken(r.token)
-  setSnap({ ...snap, user: r.user })
-  void refresh()
+  await queryClient.invalidateQueries({ queryKey: ["backend", "session"] })
   return r.user
 }
 
@@ -248,8 +168,7 @@ export const auth = {
   async signOut() {
     await call("auth.signOut").catch(() => {})
     await saveToken("")
-    setSnap({ ...snap, user: null })
-    void refresh()
+    await queryClient.invalidateQueries({ queryKey: ["backend", "session"] })
   },
   async resetPassword(input: { email: string }) { await call("auth.resetPassword", input) },
 }
@@ -281,14 +200,17 @@ export function useCollection(
   opts?: QueryOpts
 ): { data: Rec[]; loading: boolean; insert: (values: Record<string, unknown>) => Promise<Rec>; update: (id: string, patch: Record<string, unknown>) => Promise<Rec>; remove: (id: string) => Promise<void> }
 export function useCollection(collection: string, opts: QueryOpts = {}) {
-  const snapshot = useStore()
-  React.useEffect(() => want(collection), [collection])
+  const q = useQuery({ queryKey: ["backend", collection, "list"], queryFn: () => call<Rec[]>("list", { collection }), refetchInterval: POLL_MS, retry: false }, queryClient)
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["backend", collection] })
+  const insert = useMutation({ mutationFn: (values: Record<string, unknown>) => db.insert(collection, values), onSuccess: invalidate }, queryClient)
+  const update = useMutation({ mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) => db.update(collection, id, patch), onSuccess: invalidate }, queryClient)
+  const remove = useMutation({ mutationFn: (id: string) => db.remove(collection, id), onSuccess: invalidate }, queryClient)
   return {
-    data: query(snapshot.collections[collection] ?? [], opts),
-    loading: !(collection in snapshot.collections),
-    insert: (values: Record<string, unknown>) => db.insert(collection, values),
-    update: (id: string, patch: Record<string, unknown>) => db.update(collection, id, patch),
-    remove: (id: string) => db.remove(collection, id),
+    data: query(q.data ?? [], opts),
+    loading: q.isPending,
+    insert: (values: Record<string, unknown>) => insert.mutateAsync(values),
+    update: (id: string, patch: Record<string, unknown>) => update.mutateAsync({ id, patch }),
+    remove: (id: string) => remove.mutateAsync(id),
   }
 }
 
@@ -301,34 +223,37 @@ export function useRecord(
   id: string | undefined | null
 ): { data: Rec | null; loading: boolean; update: (patch: Record<string, unknown>) => Promise<Rec>; remove: () => Promise<void> }
 export function useRecord(collection: string, id: string | undefined | null) {
-  const snapshot = useStore()
-  React.useEffect(() => want(collection), [collection])
-  const rows = snapshot.collections[collection] ?? []
-  const data = (id ? rows.find((r) => r.id === String(id)) : rows[0]) ?? null
+  const q = useQuery({ queryKey: ["backend", collection, "record", id ?? "first"], queryFn: () => call<Rec | null>("get", { collection, id: id ?? "" }), refetchInterval: POLL_MS, retry: false }, queryClient)
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["backend", collection] })
+  const update = useMutation({ mutationFn: (patch: Record<string, unknown>) => db.update(collection, q.data!.id, patch), onSuccess: invalidate }, queryClient)
+  const remove = useMutation({ mutationFn: () => db.remove(collection, q.data!.id), onSuccess: invalidate }, queryClient)
   return {
-    data,
-    loading: !(collection in snapshot.collections),
-    update: (patch: Record<string, unknown>) => (data ? db.update(collection, data.id, patch) : Promise.reject(new Error("Not found"))),
-    remove: () => (data ? db.remove(collection, data.id) : Promise.resolve()),
+    data: q.data ?? null,
+    loading: q.isPending,
+    update: (patch: Record<string, unknown>) => (q.data ? update.mutateAsync(patch) : Promise.reject(new Error("Not found"))),
+    remove: () => (q.data ? remove.mutateAsync() : Promise.resolve()),
   }
 }
 
 export function useSetting<T>(key: string, fallback: T): [T, (value: T) => Promise<void>] {
-  const snapshot = useStore()
-  React.useEffect(ensureLoaded, [])
-  const value = (key in snapshot.settings ? snapshot.settings[key] : fallback) as T
-  return [value, (v: T) => kv.set(key, v)]
+  const q = useQuery({ queryKey: ["backend", "settings"], queryFn: () => call<Record<string, unknown>>("settings"), retry: false }, queryClient)
+  const set = useMutation({ mutationFn: (value: T) => kv.set(key, value), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backend", "settings"] }) }, queryClient)
+  const value = (q.data && key in q.data ? q.data[key] : fallback) as T
+  return [value, (v: T) => set.mutateAsync(v)]
 }
 
 export function useUser() {
-  const snapshot = useStore()
-  React.useEffect(ensureLoaded, [])
+  const q = useQuery({ queryKey: ["backend", "session"], queryFn: () => auth.current(), refetchInterval: POLL_MS, retry: false }, queryClient)
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["backend", "session"] })
+  const signIn = useMutation({ mutationFn: auth.signIn, onSuccess: invalidate }, queryClient)
+  const signUp = useMutation({ mutationFn: auth.signUp, onSuccess: invalidate }, queryClient)
+  const signOut = useMutation({ mutationFn: auth.signOut, onSuccess: invalidate }, queryClient)
   return {
-    user: snapshot.user ?? (seed.user as User),
-    signedIn: !!snapshot.user,
-    signIn: auth.signIn,
-    signUp: auth.signUp,
-    signOut: auth.signOut,
+    user: q.data ?? (seed.user as User),
+    signedIn: !!q.data,
+    signIn: (input: { email: string; password: string }) => signIn.mutateAsync(input),
+    signUp: (input: { name?: string; email: string; password: string }) => signUp.mutateAsync(input),
+    signOut: () => signOut.mutateAsync(),
   }
 }
 `

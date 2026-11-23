@@ -68,6 +68,19 @@ const EMPTY_SNAPSHOT: RuntimeSnapshot = { collections: {}, settings: {}, user: n
 const str = (v: unknown) => (typeof v === "string" ? v : "")
 const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {})
 
+/** Matches a REST path like "/collections/:name/:id" against "/collections/tasks/t1", the same convention backend/src/routes/app-runtime.routes.ts and the self-host export's server/index.ts use. */
+function matchHttpPath(pattern: string, path: string): Record<string, string> | null {
+  const pParts = pattern.split("/").filter(Boolean)
+  const uParts = path.split("/").filter(Boolean)
+  if (pParts.length !== uParts.length) return null
+  const params: Record<string, string> = {}
+  for (let i = 0; i < pParts.length; i++) {
+    if (pParts[i].startsWith(":")) params[pParts[i].slice(1)] = decodeURIComponent(uParts[i])
+    else if (pParts[i] !== uParts[i]) return null
+  }
+  return params
+}
+
 /** Compiles changed files only; a file that doesn't compile becomes a module that throws a readable error. */
 function useCompiled(files: ProjectFiles) {
   const cache = React.useRef(new Map<string, { src: string; key: string; out: string }>())
@@ -246,6 +259,56 @@ export function AppRuntimeProvider({
         case "theme.set":
           onThemeChangeRef.current?.(str(args.id))
           return null
+        // A connected app's lib/api.ts (backend/src/services/app-project/api-client.ts)
+        // calls real REST paths through Axios; the shim (shims/api.ts) turns each
+        // call into this one RPC instead, answered from the same backend every
+        // other op above already uses -- so the preview behaves like the real,
+        // deployed server without actually running one.
+        case "http": {
+          const httpMethod = str(args.method).toUpperCase() || "GET"
+          const url = str(args.url)
+          const data = args.data
+          let p: Record<string, string> | null
+          if (httpMethod === "GET" && (p = matchHttpPath("/collections/:name", url))) {
+            collections.current.add(p.name)
+            return backend.db.list(p.name)
+          }
+          if (httpMethod === "POST" && (p = matchHttpPath("/collections/:name", url))) {
+            collections.current.add(p.name)
+            return backend.db.insert(p.name, await persistMedia(obj(data)))
+          }
+          if (httpMethod === "GET" && (p = matchHttpPath("/collections/:name/:id", url))) {
+            collections.current.add(p.name)
+            return backend.db.get(p.name, p.id)
+          }
+          if (httpMethod === "PATCH" && (p = matchHttpPath("/collections/:name/:id", url))) {
+            collections.current.add(p.name)
+            return backend.db.update(p.name, p.id, await persistMedia(obj(data)))
+          }
+          if (httpMethod === "DELETE" && (p = matchHttpPath("/collections/:name/:id", url))) {
+            collections.current.add(p.name)
+            await backend.db.remove(p.name, p.id)
+            return null
+          }
+          if (httpMethod === "GET" && url === "/settings") return backend.kv.all()
+          if (httpMethod === "PUT" && (p = matchHttpPath("/settings/:key", url))) {
+            await backend.kv.set(p.key, obj(data).value)
+            return null
+          }
+          if (httpMethod === "POST" && url === "/auth/sign-up") return { token: "preview", user: await backend.auth.signUp({ name: str(obj(data).name), email: str(obj(data).email), password: str(obj(data).password) }) }
+          if (httpMethod === "POST" && url === "/auth/sign-in") return { token: "preview", user: await backend.auth.signIn({ email: str(obj(data).email), password: str(obj(data).password) }) }
+          if (httpMethod === "POST" && url === "/auth/sign-out") {
+            await backend.auth.signOut()
+            return null
+          }
+          if (httpMethod === "POST" && url === "/auth/reset-password") {
+            await backend.auth.resetPassword({ email: str(obj(data).email) })
+            return null
+          }
+          if (httpMethod === "GET" && url === "/auth/me") return backend.auth.current()
+          if (httpMethod === "POST" && url === "/uploads") return backend.storage.upload({ dataUrl: str(obj(data).dataUrl), name: str(obj(data).name) || undefined })
+          throw new BackendError(`That request isn't supported yet (${httpMethod} ${url}).`)
+        }
         default:
           if (method.startsWith("ui.") || method === "native") {
             return entry.handlers.current?.onNative ? entry.handlers.current.onNative(method, args) : null

@@ -2,7 +2,8 @@ import { randomBytes } from "node:crypto"
 import { and, desc, eq, inArray } from "drizzle-orm"
 
 import { appSnapshots, db, projects } from "@/db"
-import { readAppDoc, type AppDoc } from "@app/shared/app-runtime/app-doc"
+import { projectFilesFromDoc, readAppDoc, type AppDoc } from "@app/shared/app-runtime/app-doc"
+import { pruneProject } from "@app/shared/app-project/prune"
 import { selectPrune, versionsToCommit } from "./plan"
 
 const newId = () => `snap-${Date.now()}-${randomBytes(4).toString("hex")}`
@@ -23,8 +24,18 @@ export type CommitOpts = {
  * transaction. A legacy project (current_version still 0, but with an
  * existing doc) first gets that doc committed as version 1.
  */
-export async function commitSnapshot(projectId: string, doc: AppDoc, opts: CommitOpts): Promise<{ version: number }> {
-  return db.transaction(async (tx) => {
+export async function commitSnapshot(projectId: string, doc: AppDoc, opts: CommitOpts): Promise<{ version: number; doc: AppDoc }> {
+  // Every path that persists a new version (a build, an edit, a repair, a
+  // restore) funnels through here, so this is the one place that needs to
+  // drop package.json/app.json entries for capabilities nothing in the
+  // project imports -- the code tab and every export read the same stored
+  // doc, so there's nowhere else pruning could drift out of sync from.
+  // The (possibly pruned) doc is handed back so a caller still streaming to
+  // the client can re-emit its files -- the live code tab is built from that
+  // stream, not a fresh read of this commit, so without this it would show
+  // the pre-prune files until the project is reopened.
+  if (doc.files) doc = { ...doc, files: pruneProject(doc.files, projectFilesFromDoc(doc)) }
+  const version = await db.transaction(async (tx) => {
     const [project] = await tx
       .select({ currentVersion: projects.currentVersion, previewScreens: projects.previewScreens, userId: projects.userId })
       .from(projects)
@@ -69,8 +80,9 @@ export async function commitSnapshot(projectId: string, doc: AppDoc, opts: Commi
     const pruneIds = rows.filter((r) => pruneVersions.has(r.version)).map((r) => r.id)
     if (pruneIds.length) await tx.delete(appSnapshots).where(inArray(appSnapshots.id, pruneIds))
 
-    return { version: plan.next }
+    return plan.next
   })
+  return { version, doc }
 }
 
 export async function listSnapshots(projectId: string) {

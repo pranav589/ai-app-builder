@@ -5,6 +5,8 @@ import { platformFiles } from "@/lib/app-project/templates"
 import { fallbackThemes } from "@app/shared/app-runtime/theme"
 import { normalizeDataModel } from "@app/shared/app-runtime/data-model"
 import type { AppPlan } from "@app/shared/agent/types"
+import { compileManifest } from "@app/shared/manifest/compile"
+import type { AppManifest } from "@app/shared/manifest/schema"
 
 const plan: AppPlan = {
   appName: "Render Test App",
@@ -120,6 +122,90 @@ export default function Home() {
 `
     const r = await renderGate(baseWorkspace(code), ["app/home.tsx"])
     expect(r.ok).toBe(true)
+  }, 15000)
+
+  // The replacement for the @/lib/backend tests above: a real Zustand store
+  // (no platform file -- the AI writes this itself), persisted through
+  // @react-native-async-storage/async-storage, which the preview bundle
+  // backs with the real zustand package, not a stand-in.
+  it("mounts a screen reading from an AI-written Zustand store", async () => {
+    const store = `import { create } from "zustand"
+type Item = { id: string; title: string }
+type Store = { items: Item[] }
+export const useItemsStore = create<Store>(() => ({ items: [{ id: "i1", title: "First" }] }))
+`
+    const code = `import { Text, View } from "react-native"
+import { useItemsStore } from "@/stores/useItemsStore"
+export default function Home() {
+  const items = useItemsStore((s) => s.items)
+  return (
+    <View>
+      {items.map((i) => <Text key={i.id}>{i.title}</Text>)}
+    </View>
+  )
+}
+`
+    const ws = baseWorkspace(code)
+    const r = await renderGate({ files: { ...ws.files, "stores/useItemsStore.ts": store } }, ["app/home.tsx"])
+    expect(r.ok).toBe(true)
+  }, 15000)
+
+  it("mounts a screen reading from @/lib/api with React Query, and survives pressing its insert button", async () => {
+    const code = `import { Text, View, Pressable } from "react-native"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { api } from "@/lib/api"
+export default function Home() {
+  const qc = useQueryClient()
+  const { data: items = [] } = useQuery({ queryKey: ["items"], queryFn: () => api.get("/collections/items").then((r) => r.data) })
+  const insert = useMutation({
+    mutationFn: (title: string) => api.post("/collections/items", { title }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["items"] }),
+  })
+  return (
+    <View>
+      {items.map((i: { id: string; title: string }) => <Text key={i.id}>{i.title}</Text>)}
+      <Pressable onPress={() => insert.mutate("New item")}><Text>Add</Text></Pressable>
+    </View>
+  )
+}
+`
+    // useQuery/useMutation read their QueryClient from context (no client passed explicitly,
+    // same as the real backend-conversion prompt writes), so this needs the real compiled
+    // root layout: only compileManifest's connected:true output wraps the app in
+    // QueryClientProvider (shared/manifest/compile.ts rootLayoutFile).
+    const manifest: AppManifest = {
+      schemaVersion: 1,
+      app: { name: plan.appName, slug: "render-test-app" },
+      screens: { home: { title: "Home", presentation: "tab", icon: "home-outline" } },
+      navigation: { tabs: ["home"], initial: "home" },
+      collections: { items: { label: "Items", fields: { title: { type: "string" } }, seed: data.collections[0].seed } },
+      allowedPackages: [],
+    }
+    const ws = baseWorkspace(code)
+    const r = await renderGate({ files: { ...ws.files, ...compileManifest(manifest, { connected: true }) } }, ["app/home.tsx"])
+    expect(r.ok).toBe(true)
+  }, 15000)
+
+  it("rejects a Zustand-backed lookup-by-id accessed without checking it's found", async () => {
+    const store = `import { create } from "zustand"
+type Item = { id: string; title: string }
+type Store = { items: Item[] }
+export const useItemsStore = create<Store>(() => ({ items: [] }))
+export const useItem = (id: string) => useItemsStore((s) => s.items.find((i) => i.id === id))
+`
+    const code = `import { Text } from "react-native"
+import { useLocalSearchParams } from "expo-router"
+import { useItem } from "@/stores/useItemsStore"
+export default function Home() {
+  const { id } = useLocalSearchParams<{ id?: string }>()
+  const item = useItem(id ?? "")
+  return <Text>{item.title}</Text>
+}
+`
+    const ws = baseWorkspace(code)
+    const r = await renderGate({ files: { ...ws.files, "stores/useItemsStore.ts": store } }, ["app/home.tsx"])
+    expect(r.ok).toBe(false)
+    expect(r.diagnostics.some((d) => d.code === "render_error")).toBe(true)
   }, 15000)
 
   it("rejects a render loop (setState called unconditionally during render)", async () => {

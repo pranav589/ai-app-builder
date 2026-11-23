@@ -131,7 +131,7 @@ export type Collections = Record<string, never>
 
 ${types}
 
-/** Maps a collection name to its record type, for useCollection/useRecord. */
+/** Maps a collection name to its record type, for typing a Zustand store's state or a query result. */
 export type Collections = {
 ${map}
 }

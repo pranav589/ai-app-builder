@@ -15,7 +15,7 @@ import type { LiveRun } from "./registry"
 export function withCurrentPlatform(ws: Workspace): Workspace {
   const updates = platformKitUpdates(ws.files)
   const manifest = ws.manifest as AppManifest | undefined
-  if (manifest) for (const [path, code] of Object.entries(compileManifest(manifest))) if (ws.files[path] !== code) updates[path] = code
+  if (manifest) for (const [path, code] of Object.entries(compileManifest(manifest, { connected: ws.connected }))) if (ws.files[path] !== code) updates[path] = code
   return Object.keys(updates).length ? { ...ws, files: { ...ws.files, ...updates } } : ws
 }
 

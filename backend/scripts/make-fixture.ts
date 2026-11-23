@@ -2,8 +2,9 @@
 // (both well under the 300-line policy limit, unlike every existing
 // fixture/project, which made eval cost far more than expected by forcing a
 // repair round on almost every task just to shrink an already-oversized
-// file). Platform files (theme, backend, config) come from the real
-// generators so they're identical to what a real build would produce.
+// file). Platform files (theme, config) come from the real generators so
+// they're identical to what a real build would produce; the data layer is a
+// hand-written Zustand store, same as the AI itself would write one.
 import { writeFileSync } from "node:fs"
 import path from "node:path"
 
@@ -204,12 +205,48 @@ export function TextField({ label, value, onChangeText, placeholder, multiline =
 }
 `
 
+// ---------------------------------------------------------------- state
+
+const NOTES_STORE = `import { create } from "zustand"
+import { createJSONStorage, persist } from "zustand/middleware"
+import AsyncStorage from "@react-native-async-storage/async-storage"
+import seed from "@/data/seed.json"
+import type { Note } from "@/data/types"
+
+type Store = {
+  notes: Note[]
+  insert: (values: { title: string; body: string }) => Note
+  update: (id: string, patch: Partial<Pick<Note, "title" | "body">>) => void
+  remove: (id: string) => void
+}
+
+const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+
+export const useNotesStore = create<Store>()(
+  persist(
+    (set) => ({
+      notes: seed.collections.notes as Note[],
+      insert: (values) => {
+        const note: Note = { ...values, id: newId(), createdAt: new Date().toISOString() }
+        set((s) => ({ notes: [note, ...s.notes] }))
+        return note
+      },
+      update: (id, patch) => set((s) => ({ notes: s.notes.map((n) => (n.id === id ? { ...n, ...patch, updatedAt: new Date().toISOString() } : n)) })),
+      remove: (id) => set((s) => ({ notes: s.notes.filter((n) => n.id !== id) })),
+    }),
+    { name: "notes", storage: createJSONStorage(() => AsyncStorage) }
+  )
+)
+
+export const useNote = (id: string | undefined) => useNotesStore((s) => s.notes.find((n) => n.id === id))
+`
+
 // ---------------------------------------------------------------- screens
 
 const NOTES_LIST = `import { FlatList, Text, View } from "react-native"
 import { useRouter } from "expo-router"
 import { createStyles, useTheme } from "@/theme"
-import { useCollection } from "@/lib/backend"
+import { useNotesStore } from "@/stores/useNotesStore"
 import { NoteCard } from "@/components/NoteCard"
 import { PrimaryButton } from "@/components/PrimaryButton"
 import { EmptyState } from "@/components/EmptyState"
@@ -226,7 +263,7 @@ export default function NotesListScreen() {
   const t = useTheme()
   const s = useStyles()
   const router = useRouter()
-  const { data: notes, loading } = useCollection("notes", { sort: "-createdAt" })
+  const notes = useNotesStore((state) => state.notes)
 
   return (
     <View style={s.screen}>
@@ -237,10 +274,10 @@ export default function NotesListScreen() {
         ListHeaderComponent={
           <View style={s.header}>
             <Text style={s.title}>Notes</Text>
-            <Text style={s.subtitle}>{loading ? "Loading..." : \`\${notes.length} note\${notes.length === 1 ? "" : "s"}\`}</Text>
+            <Text style={s.subtitle}>{\`\${notes.length} note\${notes.length === 1 ? "" : "s"}\`}</Text>
           </View>
         }
-        ListEmptyComponent={loading ? undefined : <EmptyState title="No notes yet" message="Tap Add Note to write your first one." />}
+        ListEmptyComponent={<EmptyState title="No notes yet" message="Tap Add Note to write your first one." />}
         renderItem={({ item }) => (
           <NoteCard title={item.title} body={item.body} onPress={() => router.push({ pathname: "/note-detail", params: { id: item.id } })} />
         )}
@@ -259,7 +296,7 @@ const NOTE_DETAIL = `import { useState } from "react"
 import { ScrollView, Text, View } from "react-native"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import { createStyles, useTheme } from "@/theme"
-import { useCollection, useRecord } from "@/lib/backend"
+import { useNote, useNotesStore } from "@/stores/useNotesStore"
 import { PrimaryButton } from "@/components/PrimaryButton"
 import { TextField } from "@/components/TextField"
 
@@ -275,21 +312,23 @@ export default function NoteDetailScreen() {
   const s = useStyles()
   const router = useRouter()
   const { id } = useLocalSearchParams<{ id?: string }>()
-  const { data: note, update, remove } = useRecord("notes", id)
-  const { insert } = useCollection("notes")
+  const note = useNote(id)
+  const insert = useNotesStore((state) => state.insert)
+  const update = useNotesStore((state) => state.update)
+  const remove = useNotesStore((state) => state.remove)
 
   const [title, setTitle] = useState(note?.title ?? "")
   const [body, setBody] = useState(note?.body ?? "")
 
-  const save = async () => {
-    if (id && note) await update({ title, body })
-    else await insert({ title, body })
+  const save = () => {
+    if (id && note) update(id, { title, body })
+    else insert({ title, body })
     router.back()
   }
 
-  const remove_ = async () => {
+  const remove_ = () => {
     if (!id) return
-    await remove()
+    remove(id)
     router.back()
   }
 
@@ -349,6 +388,7 @@ const files: Record<string, string> = {
   ...platform,
   "app/_layout.tsx": ROOT_LAYOUT,
   "app/(tabs)/_layout.tsx": TABS_LAYOUT,
+  "stores/useNotesStore.ts": NOTES_STORE,
   "components/NoteCard.tsx": NOTE_CARD,
   "components/PrimaryButton.tsx": PRIMARY_BUTTON,
   "components/EmptyState.tsx": EMPTY_STATE,

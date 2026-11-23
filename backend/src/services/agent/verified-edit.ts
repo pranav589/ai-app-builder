@@ -77,7 +77,7 @@ export async function runVerifiedEdit(run: LiveRun, projectId: string, edit: Edi
   }
 
   const updatedDoc = docFromWorkspace(doc, result.ws)
-  const { version } = await commitSnapshot(projectId, updatedDoc, {
+  const { version, doc: committedDoc } = await commitSnapshot(projectId, updatedDoc, {
     author: project.userId,
     intent: result.intent || `Edit: ${edit.instruction.slice(0, 140)}`,
     runId: run.runId,
@@ -86,7 +86,10 @@ export async function runVerifiedEdit(run: LiveRun, projectId: string, edit: Edi
     const screen = updatedDoc.screens.find((s) => s.path === path)
     if (screen) run.emit({ type: "screen_done", screen })
   }
-  if (result.changed.some((p) => !updatedDoc.screens.some((s) => s.path === p))) run.emit({ type: "files", files: updatedDoc.files ?? {} })
+  // committedDoc.files (not updatedDoc.files): commitSnapshot may have pruned
+  // package.json/app.json, and the client's code tab is built from this
+  // stream, not a fresh read of the commit.
+  if (result.changed.some((p) => !updatedDoc.screens.some((s) => s.path === p))) run.emit({ type: "files", files: committedDoc.files ?? {} })
 
   // The model's own one-sentence <intent> often carries something worth
   // telling the user (e.g. it built the closest version of an unsupported

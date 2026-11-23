@@ -2,9 +2,9 @@
 // Router and every allowed package (vendor/type-bundle), replacing a plain
 // noResolve name check with real type errors. Ported from
 // poc/verified-code/src/gates/typecheck.ts, with two differences: there is
-// no separate SDK (platform files like @/theme and @/lib/backend already
-// live in the workspace being checked, so they just need the same @/* alias
-// as everything else), and diagnostics are scoped to the files this change
+// no separate SDK (a platform file like @/theme already lives in the
+// workspace being checked, so it just needs the same @/* alias as everything
+// else -- as do an app's own stores/**), and diagnostics are scoped to the files this change
 // touched (`changed`), same as parse/policy: a project with pre-existing
 // type errors in files an edit didn't touch shouldn't block that edit.
 

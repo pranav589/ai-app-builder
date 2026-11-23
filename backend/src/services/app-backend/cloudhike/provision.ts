@@ -9,6 +9,7 @@ import { BACKEND_SERVICE_INFO, type BackendService } from "@app/shared/app-backe
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
 import { backendInfo, getBackend, saveBackend, sealEnv, setDocBackend } from "../app-backend"
 import type { AppEnv } from "../contract"
+import { convertBackend } from "@/lib/agent/backend-conversion"
 import { syncSchema } from "./app-data"
 import { getAccess, markRevoked, type CloudHikeAccess } from "./connect"
 import { CloudHikeRateLimitError, CloudHikeRevokedError, parseEnv, withMcp, type McpSession, type McpTool } from "./mcp"
@@ -287,8 +288,14 @@ export async function runBackendSetup(run: LiveRun, projectId: string, userId: s
     // The app now runs on CloudHike in the preview (and in exports).
     await setDocBackend(projectId, { provider: "cloudhike", projectRef: result.done.projectId })
     await emitInfo(row)
+
+    const conversion = await convertBackend(run, projectId, "connect").catch((e) => {
+      console.error("backend-conversion (connect) failed", projectId, e)
+      return { converted: false, message: undefined }
+    })
+
     await finish(
-      `Your app is connected to **CloudHike**. ${services.map((s) => BACKEND_SERVICE_INFO[s].label).join(", ")} ${services.length === 1 ? "is" : "are"} live in the project **${result.done.projectName ?? project.name}**, and the preview now stores, loads and syncs real data there.`
+      `Your app is connected to **CloudHike**. ${services.map((s) => BACKEND_SERVICE_INFO[s].label).join(", ")} ${services.length === 1 ? "is" : "are"} live in the project **${result.done.projectName ?? project.name}**, and the preview now stores, loads and syncs real data there.${conversion.message ? ` ${conversion.message}` : ""}`
     )
   } catch (e) {
     let reason: string

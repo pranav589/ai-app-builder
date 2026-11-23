@@ -10,7 +10,9 @@ import type { Diagnostic, GateResult, Workspace } from "@app/shared/verify/types
 const MAX_LINES = 300
 
 const FORBIDDEN: { re: RegExp; code: string; message: string }[] = [
-  { re: /\bfetch\s*\(/, code: "network", message: `Network calls aren't allowed in app code. Use "@/lib/backend" hooks instead.` },
+  // TODO(backend-conversion): once a connected app gets a real Axios/React Query layer (plan part B),
+  // this message should point at it instead of just banning network calls outright.
+  { re: /\bfetch\s*\(/, code: "network", message: `Network calls aren't allowed in app code: this app has no backend connected, so there's nowhere to call. Use local state (Zustand/useState) instead.` },
   { re: /\bXMLHttpRequest\b|\bWebSocket\b/, code: "network", message: "Network APIs aren't allowed in app code." },
   { re: /\beval\s*\(|\bnew\s+Function\s*\(/, code: "eval", message: "eval and new Function aren't allowed." },
 ]

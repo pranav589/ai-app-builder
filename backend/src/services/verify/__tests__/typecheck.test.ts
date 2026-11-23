@@ -44,10 +44,23 @@ const data = normalizeDataModel(
   "test-hash"
 )
 
-/** A realistic base workspace: the generated platform files plus one screen, so imports like @/theme and @/lib/backend resolve for real. */
+/** A realistic base workspace: the generated platform files plus one screen, so an import like @/theme resolves for real. */
 function baseWorkspace(screenCode: string): Workspace {
   const files = platformFiles(plan, { themes: fallbackThemes(plan), activeId: "original", hash: "t" }, data)
   return { files: { ...files, "app/home.tsx": screenCode } }
+}
+
+/** Same, but with a small AI-written Zustand store too, as a real screen would have -- @/data/types still comes from platformFiles(). */
+const HABITS_STORE = `import { create } from "zustand"
+import type { Habit } from "@/data/types"
+
+type Store = { habits: Habit[] }
+export const useHabitsStore = create<Store>(() => ({ habits: [] }))
+export const useHabit = (id: string) => useHabitsStore((s) => s.habits.find((h) => h.id === id))
+`
+function workspaceWithStore(screenCode: string): Workspace {
+  const ws = baseWorkspace(screenCode)
+  return { files: { ...ws.files, "stores/useHabitsStore.ts": HABITS_STORE } }
 }
 
 const PROJECT_KEY = "typecheck-test"
@@ -55,20 +68,20 @@ const PROJECT_KEY = "typecheck-test"
 describe("typecheckGate", () => {
   it("passes a correct screen", () => {
     const code = `import { View, Text } from "react-native"
-import { useCollection } from "@/lib/backend"
+import { useHabitsStore } from "@/stores/useHabitsStore"
 
 export default function Home() {
-  const { data } = useCollection("habits")
+  const habits = useHabitsStore((s) => s.habits)
   return (
     <View>
-      {data.map((h) => (
+      {habits.map((h) => (
         <Text key={h.id}>{h.title}</Text>
       ))}
     </View>
   )
 }
 `
-    const r = typecheckGate(baseWorkspace(code), ["app/home.tsx"], PROJECT_KEY)
+    const r = typecheckGate(workspaceWithStore(code), ["app/home.tsx"], PROJECT_KEY)
     expect(r.ok).toBe(true)
   })
 
@@ -107,43 +120,43 @@ export default function Home() {
 
   it("flags an unknown collection field", () => {
     const code = `import { Text } from "react-native"
-import { useCollection } from "@/lib/backend"
+import { useHabitsStore } from "@/stores/useHabitsStore"
 
 export default function Home() {
-  const { data } = useCollection("habits")
-  return <Text>{data[0]?.notAField}</Text>
+  const habits = useHabitsStore((s) => s.habits)
+  return <Text>{habits[0]?.notAField}</Text>
 }
 `
-    const r = typecheckGate(baseWorkspace(code), ["app/home.tsx"], PROJECT_KEY)
+    const r = typecheckGate(workspaceWithStore(code), ["app/home.tsx"], PROJECT_KEY)
     expect(r.ok).toBe(false)
     expect(r.diagnostics.some((d) => d.code === "TS2339")).toBe(true)
   })
 
-  it("flags an unchecked useRecord null access", () => {
+  it("flags an unchecked lookup-by-id null access", () => {
     const code = `import { Text } from "react-native"
-import { useRecord } from "@/lib/backend"
+import { useHabit } from "@/stores/useHabitsStore"
 
 export default function Home() {
-  const { data } = useRecord("habits", "h1")
-  return <Text>{data.title}</Text>
+  const habit = useHabit("h1")
+  return <Text>{habit.title}</Text>
 }
 `
-    const r = typecheckGate(baseWorkspace(code), ["app/home.tsx"], PROJECT_KEY)
+    const r = typecheckGate(workspaceWithStore(code), ["app/home.tsx"], PROJECT_KEY)
     expect(r.ok).toBe(false)
-    expect(r.diagnostics.some((d) => d.code === "TS18047" || d.code === "TS2339")).toBe(true)
+    expect(r.diagnostics.some((d) => d.code === "TS18048" || d.code === "TS2339")).toBe(true)
   })
 
-  it("passes when useRecord's null case is handled", () => {
+  it("passes when the lookup's undefined case is handled", () => {
     const code = `import { Text } from "react-native"
-import { useRecord } from "@/lib/backend"
+import { useHabit } from "@/stores/useHabitsStore"
 
 export default function Home() {
-  const { data } = useRecord("habits", "h1")
-  if (!data) return <Text>Not found</Text>
-  return <Text>{data.title}</Text>
+  const habit = useHabit("h1")
+  if (!habit) return <Text>Not found</Text>
+  return <Text>{habit.title}</Text>
 }
 `
-    const r = typecheckGate(baseWorkspace(code), ["app/home.tsx"], PROJECT_KEY)
+    const r = typecheckGate(workspaceWithStore(code), ["app/home.tsx"], PROJECT_KEY)
     expect(r.ok).toBe(true)
   })
 

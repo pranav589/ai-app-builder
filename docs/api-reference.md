@@ -548,6 +548,49 @@ up. Responses never include internal error details.
 
 ---
 
+### REST routes (built app, same auth as the route above)
+What a **connected** app's `lib/api.ts` (an Axios instance; `lib/app-project/api-client.ts`) actually
+calls, generated since the state-management redesign -- a pre-redesign app still calls the single
+`POST /data` route above instead. Same auth, rate limit and `declaredOnly` as that route (each maps
+onto the identical `{ op, ...args }` dispatcher through `handleRuntimeDataOp`), but each answers with
+the bare resource, not an `{ "result": ... }` envelope.
+
+| Method & path | Op | Request body | Response |
+|---|---|---|---|
+| `GET /api/app-runtime/[projectId]/collections/:name` | `list` | — | `Record[]` |
+| `POST /api/app-runtime/[projectId]/collections/:name` | `insert` | the record's fields | the created `Record` |
+| `GET /api/app-runtime/[projectId]/collections/:name/:id` | `get` | — | `Record \| null` |
+| `PATCH /api/app-runtime/[projectId]/collections/:name/:id` | `update` | the patch | the updated `Record` |
+| `DELETE /api/app-runtime/[projectId]/collections/:name/:id` | `remove` | — | `null` |
+| `GET /api/app-runtime/[projectId]/settings` | `settings` | — | the settings object |
+| `PUT /api/app-runtime/[projectId]/settings/:key` | `setSetting` | `{ "value": ... }` | `null` |
+| `POST /api/app-runtime/[projectId]/auth/sign-up` | `auth.signUp` | `{ name?, email, password }` | `{ token, user }` |
+| `POST /api/app-runtime/[projectId]/auth/sign-in` | `auth.signIn` | `{ email, password }` | `{ token, user }` |
+| `POST /api/app-runtime/[projectId]/auth/sign-out` | `auth.signOut` | — | `null` |
+| `POST /api/app-runtime/[projectId]/auth/reset-password` | `auth.resetPassword` | `{ email }` | `null` |
+| `GET /api/app-runtime/[projectId]/auth/me` | `auth.current` | — | `AppUser \| null` |
+| `POST /api/app-runtime/[projectId]/uploads` | `upload` | `{ dataUrl, name? }` | `{ url }` |
+
+**Sample request — insert**
+```http
+POST /api/app-runtime/p_123/collections/recipes
+x-app-key: <app key>
+content-type: application/json
+
+{ "title": "Pasta", "minutes": 20 }
+```
+
+**Response 200**
+```json
+{ "id": "rec_1", "title": "Pasta", "minutes": 20, "createdAt": "2026-01-01T00:00:00.000Z" }
+```
+
+**Errors**: same shape as `POST /data` above (`{ "error": "..." }`), same status codes. A
+ZIP/GitHub export's self-host server (`server/index.ts`) answers the identical routes, mapped by
+hand (no Express there) in `cloudhike/self-host.ts` `SERVER_INDEX`.
+
+---
+
 ### `GET /api/backend-providers/:provider/connect`
 Start linking the creator's account on `provider` (e.g. `cloudhike`), an OAuth-like flow.
 **Always a redirect**, not JSON. (Was `GET /api/cloudhike/connect`.)
@@ -675,12 +718,18 @@ Download the full project as a standalone, runnable Expo project in a `.zip` arc
   - `Content-Type: application/zip`
   - `Content-Disposition: attachment; filename="<project-slug>.zip"`
   - `Cache-Control: no-store`
-- **Connected apps**: if the project's backend is connected (any provider), `lib/backend/index.ts` is the
-  one that calls `/api/app-runtime/[projectId]/data` (with `lib/backend/config.ts` holding the endpoint
-  and app key), and the zip also contains the provider's self-host files: `server/` (a self-host server), `server/.env.example`,
+- **Connected apps generated since the state-management redesign**: the stored project already has
+  `lib/api.ts`/`lib/api-config.ts` and screens calling the REST routes above (connecting a backend
+  converts them -- see `docs/architecture.md` §6), so the zip just contains those files as stored;
+  nothing is swapped at export time. It still includes the provider's self-host files: `server/`
+  (a self-host server answering the same REST routes, `cloudhike/self-host.ts`), `server/.env.example`,
   `.env.example` and a README section with step-by-step instructions for running either way.
-  Not connected: unchanged (on-device storage). `GET/POST /api/projects/[projectId]/github*` export the
-  same file set.
+- **Connected apps generated before the redesign**: if the project still carries a legacy
+  `lib/backend/index.ts` and its backend is connected (any provider), `lib/backend/index.ts` is
+  swapped at export time for the one that calls the legacy `/api/app-runtime/[projectId]/data`
+  route (with `lib/backend/config.ts` holding the endpoint and app key); the zip gets the same
+  self-host files as above. `GET/POST /api/projects/[projectId]/github*` export the same file set
+  either way.
 
 ---
 

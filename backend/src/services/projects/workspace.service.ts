@@ -6,6 +6,7 @@ import type { AgentPhase } from "@app/shared/agent/types"
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
 import { backendInfo, getBackend } from "../app-backend/app-backend"
 import { providerStatuses } from "../app-backend/backend.service"
+import { withBackend } from "../app-project/with-backend"
 
 const PHASES: AgentPhase[] = ["draft", "planning", "awaiting_approval", "generating", "ready"]
 const normalizePhase = (s: string | null): AgentPhase => (PHASES.includes(s as AgentPhase) ? (s as AgentPhase) : "draft")
@@ -40,6 +41,11 @@ export async function getWorkspaceData(userId: string, projectId: string) {
   ])
 
   const doc = readAppDoc(project.previewScreens)
+  // withBackend() only swaps anything in for apps generated before the
+  // backend-conversion redesign (agent/backend-conversion.ts): once an app
+  // has been converted, its stored files already call lib/api.ts for real
+  // (the Code tab shows exactly what's running), so this is a no-op.
+  const { files } = await withBackend(project.id, doc.files ?? {})
   const data = {
     id: project.id,
     name: project.name,
@@ -51,7 +57,7 @@ export async function getWorkspaceData(userId: string, projectId: string) {
     screens: doc.screens,
     themes: doc.themes ?? null,
     dataModel: doc.data ?? null,
-    files: doc.files ?? {},
+    files,
     backend: doc.backend,
     backendInfo: backendInfo(backendRow),
     backendProviders,
