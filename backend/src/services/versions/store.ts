@@ -2,7 +2,8 @@ import { randomBytes } from "node:crypto"
 import { and, desc, eq, inArray } from "drizzle-orm"
 
 import { appSnapshots, db, projects } from "@/db"
-import { readAppDoc, type AppDoc } from "@app/shared/app-runtime/app-doc"
+import { projectFilesFromDoc, readAppDoc, type AppDoc } from "@app/shared/app-runtime/app-doc"
+import { pruneProject } from "@app/shared/app-project/prune"
 import { selectPrune, versionsToCommit } from "./plan"
 
 const newId = () => `snap-${Date.now()}-${randomBytes(4).toString("hex")}`
@@ -24,6 +25,12 @@ export type CommitOpts = {
  * existing doc) first gets that doc committed as version 1.
  */
 export async function commitSnapshot(projectId: string, doc: AppDoc, opts: CommitOpts): Promise<{ version: number }> {
+  // Every path that persists a new version (a build, an edit, a repair, a
+  // restore) funnels through here, so this is the one place that needs to
+  // drop package.json/app.json entries for capabilities nothing in the
+  // project imports -- the code tab and every export read the same stored
+  // doc, so there's nowhere else pruning could drift out of sync from.
+  if (doc.files) doc = { ...doc, files: pruneProject(doc.files, projectFilesFromDoc(doc)) }
   return db.transaction(async (tx) => {
     const [project] = await tx
       .select({ currentVersion: projects.currentVersion, previewScreens: projects.previewScreens, userId: projects.userId })

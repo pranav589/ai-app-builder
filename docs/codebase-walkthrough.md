@@ -185,7 +185,7 @@ flowchart TD
 | `lib/verify/run.ts` | `runChange` — the state machine: write → verify → repair (≤3 rounds) → commit |
 | `lib/agent/generation-guard.ts` | If a regeneration attempt fails entirely, keeps the previously-working version of that screen instead of leaving it broken. Also decides which extra files a screen keeps: new parts it was split into (`components/<screen-id>/…`, `lib/` helpers) and, on a rebuild, side files earlier builds and edits stored |
 | `lib/agent/repair-cap.ts` | Caps how many repair attempts a single runtime crash can trigger, project-wide |
-| `lib/versions/store.ts` | `commitSnapshot` — on success, writes a new `app_snapshots` row and updates `projects.preview_screens` / `current_version` |
+| `lib/versions/store.ts` | `commitSnapshot` — prunes `package.json`/`app.json` to what's actually imported (`shared/app-project/prune.ts` `pruneProject`), then on success writes a new `app_snapshots` row and updates `projects.preview_screens` / `current_version` |
 
 **How to explain it to someone technical**: "This is the single most important
 design decision in the codebase. Early on, the AI just wrote files directly and the
@@ -240,6 +240,7 @@ flowchart TD
 | `lib/app-project/icons.ts` | Shared icon vocabulary so the AI picks from a known set instead of guessing icon names |
 | `lib/app-project/templates.ts` | Boilerplate platform files (theme, backend config) written into every new project |
 | `lib/app-project/project.ts` | `compileForPreview`, `checkFile`, `ALLOWED_PACKAGES`, `autoImport` — browser-side compile step and import allow-list |
+| `lib/app-project/prune.ts` | `pruneProject` — drops `package.json` deps / `app.json` plugins for optional capability packages (camera roll, location, biometrics, notifications, clipboard, sharing, linking, blur, gradients, glass, symbols) nothing in the project imports. Called from `commitSnapshot` on every new version |
 | `lib/app-runtime/app-doc.ts` | `AppDoc` — the full project document shape (screens/files/themes/data/manifest) stored in the DB |
 | `lib/app-runtime/data-model.ts` | `DataModel` — collections/fields shape for a project's data |
 | `lib/app-runtime/theme.ts` | `AppTheme` / `ThemePackage` + fallback theme generation |

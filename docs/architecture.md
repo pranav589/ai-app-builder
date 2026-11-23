@@ -166,7 +166,7 @@ flowchart TD
     Render -->|fail| Repair
     Repair["Repair prompt\n(<=3 rounds, feeds diagnostics back to model)"] -->|retry| Parse
     Repair -->|exhausted| Fail["Run fails / falls back\n(generation-guard keeps last good screen)"]
-    Commit["commitSnapshot()\nlib/versions/store.ts"] --> Done["New app_snapshots row,\nprojects.preview_screens updated"]
+    Commit["commitSnapshot()\nlib/versions/store.ts\n(also prunes package.json/app.json\nto packages actually imported)"] --> Done["New app_snapshots row,\nprojects.preview_screens updated"]
 ```
 
 Why this exists: earlier versions of this product let the model write files directly
@@ -195,6 +195,18 @@ Supporting pieces:
   reduce-motion setting. `@/kit`'s `Button`, `Card` and `ProgressBar` are built on it.
   `lib/app-project/platform-kits.ts` is the one place both kits are added to a build
   and resynced into older projects on every edit (`platformKitUpdates`).
+- **`shared/app-project/prune.ts`** — the generated `package.json`/`app.json` template
+  (`lib/app-project/templates.ts`) lists every optional capability an app could need
+  (camera roll, location, biometrics, notifications, clipboard, sharing, linking, blur,
+  gradients, glass, symbols). `pruneProject` drops whichever of those nothing in the
+  project imports, plus the matching `app.json` plugin. `commitSnapshot`
+  (`lib/versions/store.ts`) calls it on every new version — build, edit, repair, or
+  restore — so the code tab and every export (ZIP, GitHub, device build, web deploy)
+  always see the same, already-pruned files. Core packages the platform modules always
+  need (`@/kit`'s `Button`/`Card` use `@/motion`'s `PressableScale` unconditionally, so
+  Reanimated, worklets, gesture-handler, vector-icons and safe-area-context are needed
+  by nearly every app) are left alone rather than pruned per-screen-import, since that
+  would rarely fire for a real app and risks a false removal that breaks the build.
 - **Reanimated in the preview** — device builds get the worklets Babel plugin from
   `babel-preset-expo` automatically; the preview compiles with Sucrase instead, where
   Reanimated only subscribes to the shared values listed in a hook's dependency array.
