@@ -1,0 +1,1 @@
+ALTER TABLE "app_backends" ADD COLUMN "app_key" text;

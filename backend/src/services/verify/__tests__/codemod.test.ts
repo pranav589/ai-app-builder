@@ -1,0 +1,263 @@
+import { describe, expect, it } from "vitest"
+import { applyElementEdit as apply, parseEid } from "@/lib/verify/codemod"
+
+/** The edited code, or null when the codemod refused. */
+const applyElementEdit = (...args: Parameters<typeof apply>) => {
+  const r = apply(...args)
+  return "code" in r ? r.code : null
+}
+
+describe("parseEid", () => {
+  it("splits file, line and tag", () => {
+    expect(parseEid("app/(tabs)/home.tsx:42:Text")).toEqual({ file: "app/(tabs)/home.tsx", line: 42, tag: "Text" })
+  })
+
+  it("rejects a malformed eid", () => {
+    expect(parseEid("not-an-eid")).toBeNull()
+    expect(parseEid("app/home.tsx:Text")).toBeNull()
+  })
+})
+
+describe("applyElementEdit", () => {
+  it("returns null when no element matches the line and tag", () => {
+    const code = `export default function Home() {\n  return <Text>Hi</Text>\n}\n`
+    expect(applyElementEdit(code, { line: 99, tag: "Text" }, { text: "Hey" })).toBeNull()
+    expect(applyElementEdit(code, { line: 2, tag: "View" }, { text: "Hey" })).toBeNull()
+  })
+
+  it("replaces a plain text child", () => {
+    const code = `export default function Home() {\n  return <Text>Hi</Text>\n}\n`
+    const out = applyElementEdit(code, { line: 2, tag: "Text" }, { text: "Hello there" })
+    expect(out).toContain("<Text>Hello there</Text>")
+  })
+
+  it("inserts text into an element with no children", () => {
+    const code = `export default function Home() {\n  return <Text></Text>\n}\n`
+    const out = applyElementEdit(code, { line: 2, tag: "Text" }, { text: "Hi" })
+    expect(out).toContain("<Text>Hi</Text>")
+  })
+
+  it("refuses a text edit when the children are dynamic, rather than dropping it silently", () => {
+    const code = `export default function Home({ title }) {\n  return <Text style={{ fontSize: 14 }}>{title}</Text>\n}\n`
+    expect(applyElementEdit(code, { line: 2, tag: "Text" }, { text: "Hi", from: "Welcome", style: { fontSize: "18px" } })).toBeNull()
+    expect(applyElementEdit(code, { line: 2, tag: "Text" }, { style: { fontSize: "18px" } })).toContain("fontSize: 18")
+  })
+
+  it("writes a numeric React Native style (no unit) for a pixel value, but keeps a color quoted", () => {
+    const code = `export default function Home() {\n  return <Text style={{ fontSize: 14 }}>Hi</Text>\n}\n`
+    const out = applyElementEdit(code, { line: 2, tag: "Text" }, { style: { fontSize: "22px", color: "#112233" } })
+    expect(out).toContain("fontSize: 22")
+    expect(out).toContain(`color: "#112233"`)
+  })
+
+  it("overwrites an existing style property", () => {
+    const code = `export default function Home() {\n  return <Text style={{ color: "red", fontSize: 14 }}>Hi</Text>\n}\n`
+    const out = applyElementEdit(code, { line: 2, tag: "Text" }, { style: { color: "blue" } })
+    expect(out).toContain(`color: "blue"`)
+    expect(out).toContain("fontSize: 14")
+    expect(out).not.toContain("red")
+  })
+
+  it("adds a new style property to an existing object", () => {
+    const code = `export default function Home() {\n  return <Text style={{ color: "red" }}>Hi</Text>\n}\n`
+    const out = applyElementEdit(code, { line: 2, tag: "Text" }, { style: { fontWeight: "700" } })
+    expect(out).toContain(`color: "red"`)
+    expect(out).toContain(`fontWeight: "700"`)
+  })
+
+  it("adds a style prop to an element that had none", () => {
+    const code = `export default function Home() {\n  return <Text>Hi</Text>\n}\n`
+    const out = applyElementEdit(code, { line: 2, tag: "Text" }, { style: { color: "blue" } })
+    expect(out).toContain(`<Text style={{ color: "blue" }}>Hi</Text>`)
+  })
+
+  it("wraps a StyleSheet-referencing style prop in an array instead of guessing its contents", () => {
+    const code = `export default function Home() {\n  return <Text style={styles.title}>Hi</Text>\n}\n`
+    const out = applyElementEdit(code, { line: 2, tag: "Text" }, { style: { color: "blue" } })
+    expect(out).toContain(`style={[styles.title, { color: "blue" }]}`)
+  })
+
+  it("handles a self-closing element", () => {
+    const code = `export default function Home() {\n  return <View style={{ padding: 8 }} />\n}\n`
+    const out = applyElementEdit(code, { line: 2, tag: "View" }, { style: { padding: "12px" } })
+    expect(out).toContain(`padding: 12`)
+  })
+
+  it("returns null when there is nothing to change", () => {
+    const code = `export default function Home() {\n  return <Text>Hi</Text>\n}\n`
+    expect(applyElementEdit(code, { line: 2, tag: "Text" }, {})).toBeNull()
+  })
+
+  it("picks the element whose current text matches when a line has several of the same tag", () => {
+    const code = `export default function Home() {
+  return <Row><Text>One</Text><Text>Two</Text></Row>
+}
+`
+    const out = applyElementEdit(code, { line: 2, tag: "Text" }, { text: "Second", from: "Two" })
+    expect(out).toContain("<Text>One</Text><Text>Second</Text>")
+  })
+
+  it("refuses (never guesses) when several elements on the line can't be told apart", () => {
+    const code = `export default function Home() {
+  return <Row><Text>Same</Text><Text>Same</Text></Row>
+}
+`
+    expect(applyElementEdit(code, { line: 2, tag: "Text" }, { text: "X", from: "Same" })).toBeNull()
+    expect(applyElementEdit(code, { line: 2, tag: "Text" }, { style: { color: "red" } })).toBeNull()
+  })
+
+  it("refuses when the current text doesn't match what was tapped (stale eid)", () => {
+    const code = `export default function Home() {
+  return <Text>Profile</Text>
+}
+`
+    expect(applyElementEdit(code, { line: 2, tag: "Text" }, { text: "Hi", from: "Settings" })).toBeNull()
+  })
+
+  it("edits a kit component's text prop (e.g. a Button label) by its current value", () => {
+    const code = `export default function Home() {
+  return <Button label="Save" onPress={save} variant="primary" />
+}
+`
+    const out = applyElementEdit(code, { line: 2, tag: "Button" }, { text: "Save changes", from: "Save" })
+    expect(out).toContain(`<Button label="Save changes" onPress={save} variant="primary" />`)
+  })
+
+  it("refuses a prop text edit when the prop is dynamic", () => {
+    const code = `export default function Home({ n }) {
+  return <Stat label="Steps" value={n} />
+}
+`
+    expect(applyElementEdit(code, { line: 2, tag: "Stat" }, { text: "9", from: "1200" })).toBeNull()
+    expect(applyElementEdit(code, { line: 2, tag: "Stat" }, { text: "Walked", from: "Steps" })).toContain(`label="Walked"`)
+  })
+
+  it("keeps the line count when replacing multi-line text, so eids below stay valid", () => {
+    const code = `export default function Home() {
+  return (
+    <Text>
+      Hello
+    </Text>
+  )
+}
+`
+    const out = applyElementEdit(code, { line: 3, tag: "Text" }, { text: "Bye", from: "Hello" })!
+    expect(out).toContain("<Text>\n      Bye\n    </Text>")
+    expect(out.split("\n").length).toBe(code.split("\n").length)
+  })
+
+  it("escapes text that isn't valid bare JSX", () => {
+    const code = `export default function Home() {
+  return <Text>Hi</Text>
+}
+`
+    expect(applyElementEdit(code, { line: 2, tag: "Text" }, { text: "a {b} <c>", from: "Hi" })).toContain(`<Text>{"a {b} <c>"}</Text>`)
+  })
+
+  it("accepts the lone element on the line when the runtime name differs from the source tag (an alias)", () => {
+    const code = `export default function Home() {
+  return <RNText>Hi</RNText>
+}
+`
+    expect(applyElementEdit(code, { line: 2, tag: "Text" }, { text: "Yo", from: "Hi" })).toContain("<RNText>Yo</RNText>")
+  })
+
+  it("appends a style property after a trailing comma without breaking syntax", () => {
+    const code = `export default function Home() {
+  return <Text style={{ color: "red", }}>Hi</Text>
+}
+`
+    expect(applyElementEdit(code, { line: 2, tag: "Text" }, { style: { fontWeight: "700" } })).toContain(`{{ color: "red", fontWeight: "700", }}`)
+  })
+
+  it("writes spacing, opacity and percentage sizes the way React Native wants them", () => {
+    const code = `export default function Home() {
+  return <View style={{ flex: 1 }} />
+}
+`
+    const out = applyElementEdit(code, { line: 2, tag: "View" }, { style: { paddingTop: "12px", opacity: "0.5", width: "100%", height: "48px", gap: "8px" } })
+    expect(out).toContain("paddingTop: 12")
+    expect(out).toContain("opacity: 0.5")
+    expect(out).toContain(`width: "100%"`)
+    expect(out).toContain("height: 48")
+    expect(out).toContain("gap: 8")
+  })
+
+  it("refuses a style key that isn't on the editable list, since the key is written as code", () => {
+    const code = `export default function Home() {
+  return <View />
+}
+`
+    expect(applyElementEdit(code, { line: 2, tag: "View" }, { style: { "color: 1, onPress": "x" } })).toBeNull()
+    expect(applyElementEdit(code, { line: 2, tag: "View" }, { style: { position: "absolute" } })).toBeNull()
+  })
+
+  describe("theme colors", () => {
+    const edit = { style: { backgroundColor: "theme:primarySoft:#e8eefd" } }
+
+    it("writes a token through the useTheme() variable the component already has", () => {
+      const code = `import { useTheme } from "@/theme"\nexport default function Home() {\n  const t = useTheme()\n  return <View style={{ flex: 1 }} />\n}\n`
+      const out = applyElementEdit(code, { line: 4, tag: "View" }, edit)
+      expect(out).toContain("backgroundColor: t.colors.primarySoft")
+      expect(out).not.toContain("#e8eefd")
+    })
+
+    it("adds the hook on the component's opening line, so no line numbers move", () => {
+      const code = `import { useTheme } from "@/theme"\nexport default function Home() {\n  return <View />\n}\n`
+      const out = applyElementEdit(code, { line: 3, tag: "View" }, edit)!
+      expect(out).toContain("function Home() { const theme = useTheme();")
+      expect(out).toContain("backgroundColor: theme.colors.primarySoft")
+      expect(out.split("\n")).toHaveLength(code.split("\n").length)
+    })
+
+    it("falls back to the hex when the theme can't be reached from the file", () => {
+      const code = `export default function Home() {\n  return <View />\n}\n`
+      const out = applyElementEdit(code, { line: 2, tag: "View" }, edit)
+      expect(out).toContain(`backgroundColor: "#e8eefd"`)
+    })
+
+    it("only accepts known tokens on color properties", () => {
+      const code = `import { useTheme } from "@/theme"\nexport default function Home() {\n  const t = useTheme()\n  return <View />\n}\n`
+      expect(applyElementEdit(code, { line: 4, tag: "View" }, { style: { backgroundColor: "theme:nope:#111111" } })).toContain(`"theme:nope:#111111"`)
+      expect(applyElementEdit(code, { line: 4, tag: "View" }, { style: { gap: "theme:primary:#111111" } })).not.toContain("colors.primary")
+    })
+  })
+
+  it("writes a shadow offset as an object and a corner radius as a number", () => {
+    const code = `export default function Home() {\n  return <View />\n}\n`
+    const out = applyElementEdit(code, { line: 2, tag: "View" }, { style: { shadowOffset: "0,4", shadowOpacity: "0.12", borderTopLeftRadius: "8px", flexGrow: "1" } })
+    expect(out).toContain("shadowOffset: { width: 0, height: 4 }")
+    expect(out).toContain("shadowOpacity: 0.12")
+    expect(out).toContain("borderTopLeftRadius: 8")
+    expect(out).toContain("flexGrow: 1")
+  })
+
+  describe("image source replacement", () => {
+    it("updates existing source={{ uri: '...' }}", () => {
+      const code = `export default function Home() {\n  return <Image source={{ uri: "https://old.com/img.jpg" }} style={{ width: 100 }} />\n}\n`
+      const out = applyElementEdit(code, { line: 2, tag: "Image" }, { imageSrc: "https://ik.imagekit.io/demo/new.jpg" })
+      expect(out).toContain(`source={{ uri: "https://ik.imagekit.io/demo/new.jpg" }}`)
+      expect(out).not.toContain("old.com")
+      expect(out).toContain("style={{ width: 100 }}")
+    })
+
+    it("updates string literal source='...'", () => {
+      const code = `export default function Home() {\n  return <Image source="https://old.com/img.jpg" />\n}\n`
+      const out = applyElementEdit(code, { line: 2, tag: "Image" }, { imageSrc: "https://ik.imagekit.io/demo/new.jpg" })
+      expect(out).toContain(`source={{ uri: "https://ik.imagekit.io/demo/new.jpg" }}`)
+    })
+
+    it("updates ExpoImage component source", () => {
+      const code = `export default function Home() {\n  return <ExpoImage source={{ uri: "https://old.com/img.jpg" }} contentFit="cover" />\n}\n`
+      const out = applyElementEdit(code, { line: 2, tag: "ExpoImage" }, { imageSrc: "https://ik.imagekit.io/demo/transformed.jpg?tr=e-removedotbg" })
+      expect(out).toContain(`source={{ uri: "https://ik.imagekit.io/demo/transformed.jpg?tr=e-removedotbg" }}`)
+      expect(out).toContain(`contentFit="cover"`)
+    })
+
+    it("adds source attribute if none exists", () => {
+      const code = `export default function Home() {\n  return <Image style={{ width: 100 }} />\n}\n`
+      const out = applyElementEdit(code, { line: 2, tag: "Image" }, { imageSrc: "https://ik.imagekit.io/demo/new.jpg" })
+      expect(out).toContain(`<Image source={{ uri: "https://ik.imagekit.io/demo/new.jpg" }} style={{ width: 100 }} />`)
+    })
+  })
+})

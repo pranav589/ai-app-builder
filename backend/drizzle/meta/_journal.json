@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1795105359399,
+      "tag": "0000_smiling_magma",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795156546282,
+      "tag": "0001_equal_vulcan",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795170286025,
+      "tag": "0002_exotic_black_tarantula",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795178173597,
+      "tag": "0003_wild_jack_flag",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795199975546,
+      "tag": "0004_zippy_vanisher",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795244108712,
+      "tag": "0005_red_the_captain",
+      "breakpoints": true
+    }
+  ]
+}

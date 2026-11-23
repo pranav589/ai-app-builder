@@ -7,3 +7,15 @@
 7. expo skills- https://expo.dev/expo-skills
 8. Langgraph with workflow parallel
 9. Adding a screen not working. AI says its added, but not showing
+10. One case, i had screen screens (Tasks, add tasks and settings screen). I asked to add a profile screen and a bottom tab with Tasks and profile as ttems.ab i It removed all other screens and added profile screen and bottom tab with Tasks and profile as tab itemem.
+    It created a plan and all the screens were recreated again. The issue is, it changed the UI of tasks screen. It shouldnt have changed the UI and also it shouldnt have taken seetings and add tasks screen to recreation. (proj-1794996710365-de5a10   version28)
+11. in canvas editor, when we make changes, it should happen realtime which is happening current. But the canvas-edit api should be called only after done button is clicked.
+12. Good readme generation
+    Also in  ecommerce app, there is no home screen, still index screen says to redirect to home screen. It results in unmatched route isssue in mobile phones
+13. Unwanted packages removal in exported app
+13. How to reduce the exported apps size (apk,etc)?
+14. How to install new library/packages?
+15. Suppose we select supabase as provider, add direct supabase code in the geenerated app rather than our server calling supabase.
+16. Notifications.
+17. Ask to create complex apps.
+18. Keyboard awareness to the apps
