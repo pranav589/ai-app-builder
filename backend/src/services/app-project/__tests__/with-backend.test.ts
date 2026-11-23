@@ -57,4 +57,14 @@ describe("withBackend", () => {
     const r = await withBackend("p1", files)
     expect(r).toEqual({ files, provider: null })
   })
+
+  it("adds axios and react-query to package.json only once a backend is connected", async () => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://builder.example.com"
+    const files = { "package.json": JSON.stringify({ dependencies: { react: "19.3.0" } }) }
+    const r = await withBackend("p1", files)
+    const pkg = JSON.parse(r.files["package.json"])
+    expect(pkg.dependencies.axios).toBeTruthy()
+    expect(pkg.dependencies["@tanstack/react-query"]).toBeTruthy()
+    expect(pkg.dependencies.react).toBe("19.3.0")
+  })
 })

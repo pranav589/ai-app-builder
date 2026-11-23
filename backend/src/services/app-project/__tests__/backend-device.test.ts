@@ -16,6 +16,8 @@ import { transform } from "sucrase"
 import * as React from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
+import { create as zustandCreate } from "zustand"
+import { createJSONStorage, persist } from "zustand/middleware"
 
 import { backendDevice, themeDevice } from "@/lib/app-project/templates"
 
@@ -41,7 +43,8 @@ function loadBackendModule(seed: { hash: string; collections: Record<string, unk
   }
 
   const fakeRequire = (spec: string) => {
-    if (spec === "react") return React
+    if (spec === "zustand") return { create: zustandCreate }
+    if (spec === "zustand/middleware") return { persist, createJSONStorage }
     if (spec === "@react-native-async-storage/async-storage") return { default: asyncStorage, __esModule: true }
     if (spec === "@/data/seed.json") return { default: seed, __esModule: true }
     throw new Error(`unexpected require: ${spec}`)

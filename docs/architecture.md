@@ -275,22 +275,29 @@ flowchart LR
     Row --> Generated["Generated app code calls\nlib/backend (AppBackend interface)"]
 ```
 
-Generated apps never call a provider directly. They call a small `AppBackend`
-interface (`lib/backend/types.ts`) with implementations for local/in-device storage
-(`local-backend.ts`) and a connected provider reached through our server (`server-backend.ts`),
-selected by `createBackend()` (`lib/backend/index.ts`). This keeps generated app code
-backend-agnostic and makes "preview without a backend" vs. "connected to a real
-backend" a configuration switch rather than two codepaths.
+Generated apps never call a provider directly. They call the same `@/lib/backend` hooks
+(`useCollection`, `useRecord`, `useSetting`, `useUser`, plus `db`/`kv`/`auth`/`storage`) regardless
+of whether a backend is connected; only `lib/backend/index.ts`'s own implementation differs
+(`backendDevice()` locally, `backendRemote()` once connected -- see below). This keeps generated
+app code backend-agnostic and makes "preview without a backend" vs. "connected to a real
+backend" a file swap rather than two codepaths the AI has to choose between.
 
 Provisioning is the provider's job. For CloudHike, `lib/app-backend/cloudhike/provision.ts` runs a
 "backend engineer" AI loop that calls CloudHike's MCP tools (create project, deploy services) in a
 tagged-reply protocol similar to the main orchestrator's.
 
 **Built apps (APK, Expo Go preview, web deploy, ZIP/GitHub export) use the same backend.**
-The stored project files always carry the on-device `lib/backend` (local storage). At output
+The stored project files always carry the on-device `lib/backend`: a Zustand store persisted to
+AsyncStorage (`lib/app-project/templates.ts` `backendDevice()`) rather than a bespoke
+`useSyncExternalStore` pub-sub, so the state lives in one recognizable place. At output
 time `lib/app-project/with-backend.ts` checks whether the project's backend is ready
-and, if so, swaps in `lib/app-project/backend-remote.ts`'s version (same hooks, HTTP calls) plus a
-`lib/backend/config.ts` holding the endpoint and a per-project public app key. The swap is applied
+and, if so, swaps in `lib/app-project/backend-remote.ts`'s version (same hooks, but Axios +
+React Query instead) plus a `lib/backend/config.ts` holding the endpoint and a per-project public
+app key, and adds `axios`/`@tanstack/react-query` to the exported `package.json` at the same time
+(`withRemoteBackendDeps`) -- a disconnected app's dependencies stay untouched. The remote module
+creates its own `QueryClient` and passes it explicitly to every `useQuery`/`useMutation` call
+(`useQuery(options, queryClient)`) rather than relying on a `QueryClientProvider` in context, so it
+drops in without the root layout needing to know a backend is connected. The swap is applied
 to the output, not stored, because the stored files are regenerated on every plan change and a
 disconnect must be able to revoke the key. A device bundle can't hold database credentials, so
 those calls go to a server that does:

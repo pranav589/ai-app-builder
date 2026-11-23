@@ -1,17 +1,21 @@
 // @vitest-environment jsdom
 //
 // Mounts the generated remote backend (the one an app gets once its creator
-// connected a backend provider) under a real React root with a fake server behind
-// fetch, the same way backend-device.test.ts does for the local one: hooks
-// must show server data, reflect writes at once, and carry the app key and the
-// signed-in user's session on every call.
+// connected a backend provider) under a real React root, the same way
+// backend-device.test.ts does for the local one: hooks must show server
+// data, reflect writes at once, and carry the app key and the signed-in
+// user's session on every call. Axios and React Query are faked at the
+// boundary this generated module actually calls (axios.create/.post), not
+// at the network layer, since the point of this test is the generated
+// code's own request/cache logic, not Axios's or React Query's internals.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { transform } from "sucrase"
 import * as React from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { act } from "react"
+import { QueryClient, focusManager, useMutation, useQuery } from "@tanstack/react-query"
 
-import { backendConfig, backendRemote, remoteBackendFiles } from "../backend-remote"
+import { backendConfig, backendRemote, remoteBackendFiles, withRemoteBackendDeps } from "../backend-remote"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -22,51 +26,27 @@ type Backend = {
   auth: { signIn: (i: { email: string; password: string }) => Promise<unknown> }
 }
 type Call = { op: string; headers: Record<string, string>; body: Record<string, unknown> }
-type FetchInit = { headers: Record<string, string>; body: string }
 
 const KEY = "app-key-123"
 const ENDPOINT = "https://builder.example/api/app-runtime/p1/data"
-
-function loadBackend(): Backend {
-  const { code } = transform(backendRemote("p1"), { transforms: ["typescript", "imports"], production: true, filePath: "lib/backend/index.ts" })
-  const stored = new Map<string, string>()
-  const asyncStorage = {
-    getItem: async (k: string) => stored.get(k) ?? null,
-    setItem: async (k: string, v: string) => void stored.set(k, v),
-    removeItem: async (k: string) => void stored.delete(k),
-  }
-  const fakeRequire = (spec: string) => {
-    if (spec === "react") return React
-    if (spec === "react-native") return { AppState: { currentState: "active" } }
-    if (spec === "@react-native-async-storage/async-storage") return { default: asyncStorage, __esModule: true }
-    if (spec === "@/data/seed.json") return { default: { user: { name: "Sample User" } }, __esModule: true }
-    if (spec === "./config") return { API_URL: ENDPOINT, APP_KEY: KEY }
-    throw new Error(`unexpected require: ${spec}`)
-  }
-  const mod = { exports: {} as Backend }
-  new Function("require", "module", "exports", code)(fakeRequire, mod, mod.exports)
-  return mod.exports
-}
 
 /** A stand-in for the backend route: tasks live in memory, sign-in returns a token. */
 function fakeServer() {
   const calls: Call[] = []
   const tasks: Rec[] = [{ id: "t1", title: "Existing" }]
   let user: { id: string; name: string; email: string } | null = null
-  let version = 1
   const handle = (body: Record<string, unknown>, headers: Record<string, string>): { status: number; json: unknown } => {
     if (headers["x-app-key"] !== KEY) return { status: 403, json: { error: "This app isn't connected to a backend." } }
     switch (body.op) {
-      case "snapshot": {
-        const collections = Object.fromEntries((body.collections as string[]).map((c) => [c, c === "tasks" ? tasks : []]))
-        return { status: 200, json: { result: { collections, settings: {}, user: headers["x-app-session"] === "tok" ? user : null, version } } }
-      }
-      case "version":
-        return { status: 200, json: { result: version } }
+      case "list":
+        return { status: 200, json: { result: body.collection === "tasks" ? tasks : [] } }
+      case "settings":
+        return { status: 200, json: { result: {} } }
+      case "auth.current":
+        return { status: 200, json: { result: headers["x-app-session"] === "tok" ? user : null } }
       case "insert": {
         const rec = { ...(body.values as object), id: `t${tasks.length + 1}` } as Rec
         tasks.unshift(rec)
-        version++
         return { status: 200, json: { result: rec } }
       }
       case "auth.signIn":
@@ -76,14 +56,57 @@ function fakeServer() {
         return { status: 400, json: { error: "Unknown operation." } }
     }
   }
-  const fetchMock = vi.fn(async (url: string, init: FetchInit) => {
-    expect(url).toBe(ENDPOINT)
-    const body = JSON.parse(init.body) as Record<string, unknown>
-    calls.push({ op: String(body.op), headers: init.headers, body })
-    const r = handle(body, init.headers)
-    return { ok: r.status < 400, status: r.status, json: async () => r.json }
-  })
-  return { calls, fetchMock }
+  return { calls, tasks, handle }
+}
+
+/** A minimal stand-in for the Axios instance the generated module creates and calls (.post), driven by `server`. */
+function fakeAxios(server: ReturnType<typeof fakeServer>) {
+  class FakeAxiosError extends Error {
+    response?: { status: number; data: unknown }
+  }
+  let defaultHeaders: Record<string, string> = {}
+  const instance = {
+    post: async (_url: string, body: Record<string, unknown>, config: { headers: Record<string, string> }) => {
+      const headers = { ...defaultHeaders, ...config.headers }
+      server.calls.push({ op: String(body.op), headers, body })
+      const r = server.handle(body, headers)
+      if (r.status >= 400) {
+        const e = new FakeAxiosError("Request failed")
+        e.response = { status: r.status, data: r.json }
+        throw e
+      }
+      return { data: r.json, status: r.status }
+    },
+  }
+  return {
+    create: (config: { baseURL: string; headers: Record<string, string> }) => {
+      defaultHeaders = config.headers
+      return instance
+    },
+    isAxiosError: (e: unknown): e is InstanceType<typeof FakeAxiosError> => e instanceof FakeAxiosError,
+  }
+}
+
+function loadBackend(server: ReturnType<typeof fakeServer>): Backend {
+  const { code } = transform(backendRemote("p1"), { transforms: ["typescript", "imports"], production: true, filePath: "lib/backend/index.ts" })
+  const stored = new Map<string, string>()
+  const asyncStorage = {
+    getItem: async (k: string) => stored.get(k) ?? null,
+    setItem: async (k: string, v: string) => void stored.set(k, v),
+    removeItem: async (k: string) => void stored.delete(k),
+  }
+  const fakeRequire = (spec: string) => {
+    if (spec === "react-native") return { AppState: { addEventListener: () => {}, currentState: "active" } }
+    if (spec === "@react-native-async-storage/async-storage") return { default: asyncStorage, __esModule: true }
+    if (spec === "axios") return { default: fakeAxios(server), __esModule: true }
+    if (spec === "@tanstack/react-query") return { QueryClient, focusManager, useQuery, useMutation }
+    if (spec === "@/data/seed.json") return { default: { user: { name: "Sample User" } }, __esModule: true }
+    if (spec === "./config") return { API_URL: ENDPOINT, APP_KEY: KEY }
+    throw new Error(`unexpected require: ${spec}`)
+  }
+  const mod = { exports: {} as Backend }
+  new Function("require", "module", "exports", code)(fakeRequire, mod, mod.exports)
+  return mod.exports
 }
 
 const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 30))))
@@ -95,7 +118,6 @@ describe("backendRemote() under a real React root", () => {
 
   beforeEach(() => {
     server = fakeServer()
-    vi.stubGlobal("fetch", server.fetchMock)
     container = document.createElement("div")
     document.body.appendChild(container)
     root = createRoot(container)
@@ -104,11 +126,10 @@ describe("backendRemote() under a real React root", () => {
   afterEach(() => {
     act(() => root.unmount())
     container.remove()
-    vi.unstubAllGlobals()
   })
 
   it("shows the collection from the server, sending the app key", async () => {
-    const backend = loadBackend()
+    const backend = loadBackend(server)
     function Probe() {
       const { data, loading } = backend.useCollection("tasks")
       return React.createElement("div", null, loading ? "loading" : data.map((t) => t.title).join(","))
@@ -117,13 +138,13 @@ describe("backendRemote() under a real React root", () => {
     await settle()
 
     expect(container.textContent).toBe("Existing")
-    const snapshot = server.calls.find((c) => c.op === "snapshot")!
-    expect(snapshot.body.collections).toEqual(["tasks"])
-    expect(snapshot.headers["x-app-key"]).toBe(KEY)
+    const call = server.calls.find((c) => c.op === "list")!
+    expect(call.body.collection).toBe("tasks")
+    expect(call.headers["x-app-key"]).toBe(KEY)
   })
 
-  it("two hooks mounted together are served by at most two snapshot requests, the last asking for both", async () => {
-    const backend = loadBackend()
+  it("two different collections are fetched independently, each with its own list call", async () => {
+    const backend = loadBackend(server)
     function Probe() {
       backend.useCollection("tasks")
       backend.useCollection("notes")
@@ -131,13 +152,13 @@ describe("backendRemote() under a real React root", () => {
     }
     await act(async () => void root.render(React.createElement(Probe)))
     await settle()
-    const snapshots = server.calls.filter((c) => c.op === "snapshot")
-    expect(snapshots.at(-1)!.body.collections).toEqual(["tasks", "notes"])
-    expect(snapshots.length).toBeLessThanOrEqual(2)
+    const collections = server.calls.filter((c) => c.op === "list").map((c) => c.body.collection)
+    expect(collections).toContain("tasks")
+    expect(collections).toContain("notes")
   })
 
   it("shows an inserted record straight away", async () => {
-    const backend = loadBackend()
+    const backend = loadBackend(server)
     function Probe() {
       const { data, insert } = backend.useCollection("tasks")
       return React.createElement("button", { onClick: () => void insert({ title: "New task" }) }, data.map((t) => t.title).join(","))
@@ -154,7 +175,7 @@ describe("backendRemote() under a real React root", () => {
   })
 
   it("after signing in, calls carry the user's session and useUser reflects it", async () => {
-    const backend = loadBackend()
+    const backend = loadBackend(server)
     function Probe() {
       const { user, signedIn } = backend.useUser()
       return React.createElement("div", null, signedIn ? `in:${user.name}` : `out:${user.name}`)
@@ -170,16 +191,17 @@ describe("backendRemote() under a real React root", () => {
     expect(server.calls.at(-1)!.headers["x-app-session"]).toBe("tok")
   })
 
-  it("a backend refusal doesn't crash the screen; it stays on its loading state", async () => {
+  it("a backend refusal doesn't crash the screen; it shows no data instead", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {})
-    server.fetchMock.mockImplementation(async () => ({ ok: false, status: 403, json: async () => ({ error: "nope" }) }))
-    const backend = loadBackend()
+    server.handle = () => ({ status: 403, json: { error: "nope" } })
+    const backend = loadBackend(server)
     function Probe() {
-      return React.createElement("div", null, backend.useCollection("tasks").loading ? "loading" : "ready")
+      const { data, loading } = backend.useCollection("tasks")
+      return React.createElement("div", null, loading ? "loading" : `ready:${data.length}`)
     }
     await act(async () => void root.render(React.createElement(Probe)))
     await settle()
-    expect(container.textContent).toBe("loading")
+    expect(container.textContent).toBe("ready:0")
   })
 })
 
@@ -194,5 +216,19 @@ describe("backendConfig / remoteBackendFiles", () => {
     const files = remoteBackendFiles("p1", "https://x/data", "k1")
     expect(Object.keys(files).sort()).toEqual(["lib/backend/config.ts", "lib/backend/index.ts"])
     expect(files["lib/backend/index.ts"]).toContain('"app:p1:session"')
+  })
+})
+
+describe("withRemoteBackendDeps", () => {
+  it("adds axios and react-query to an existing package.json's dependencies", () => {
+    const pkg = JSON.stringify({ name: "x", dependencies: { react: "19.3.0" } })
+    const out = JSON.parse(withRemoteBackendDeps(pkg))
+    expect(out.dependencies.react).toBe("19.3.0")
+    expect(out.dependencies.axios).toBeTruthy()
+    expect(out.dependencies["@tanstack/react-query"]).toBeTruthy()
+  })
+
+  it("leaves malformed input untouched instead of throwing", () => {
+    expect(withRemoteBackendDeps("not json")).toBe("not json")
   })
 })

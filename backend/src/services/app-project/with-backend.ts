@@ -4,7 +4,7 @@ import { lanIPv4Stable } from "@/lib/device/lan"
 import { providerFor } from "@/lib/app-backend/registry"
 import type { FileMap } from "@app/shared/verify/types"
 import type { BackendProvider } from "@/lib/app-backend/types"
-import { remoteBackendFiles } from "./backend-remote"
+import { remoteBackendFiles, withRemoteBackendDeps } from "./backend-remote"
 
 // Every output of a project (APK, Expo Go preview, web deploy, ZIP, GitHub)
 // starts from the stored files, whose lib/backend is the on-device one. When
@@ -42,5 +42,7 @@ export async function withBackend(projectId: string, files: FileMap): Promise<Wi
   if (!row || row.status !== "ready" || !row.envEnc) return { files, provider: null }
   const appKey = await ensureAppKey(row)
   const endpoint = `${await builderUrl()}/api/app-runtime/${encodeURIComponent(projectId)}/data`
-  return { files: { ...files, ...remoteBackendFiles(projectId, endpoint, appKey) }, provider: providerFor(row) }
+  const swapped: FileMap = { ...files, ...remoteBackendFiles(projectId, endpoint, appKey) }
+  if (swapped["package.json"]) swapped["package.json"] = withRemoteBackendDeps(swapped["package.json"])
+  return { files: swapped, provider: providerFor(row) }
 }

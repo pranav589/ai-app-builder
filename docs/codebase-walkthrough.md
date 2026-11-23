@@ -238,7 +238,7 @@ flowchart TD
 | `lib/app-project/motion.ts` | `@/motion` — the motion kit (`Reveal`, `Stagger`, `PressableScale`, `AnimatedNumber`, `Skeleton`, `ParallaxScroll`, `SwipeRow`, `Sheet`, `SegmentedTabs`, `useMotion`) and the per-project `motion/level.ts` file |
 | `lib/app-project/platform-kits.ts` | `PLATFORM_KIT_FILES` (both kits' sources), `platformKitUpdates` (resyncs them into older projects on every edit), and the props references the prompts embed |
 | `lib/app-project/icons.ts` | Shared icon vocabulary so the AI picks from a known set instead of guessing icon names |
-| `lib/app-project/templates.ts` | Boilerplate platform files (theme, backend config) written into every new project |
+| `lib/app-project/templates.ts` | Boilerplate platform files written into every new project: theme, data, and `backendDevice()` -- the on-device `lib/backend`, a Zustand store persisted to AsyncStorage |
 | `lib/app-project/project.ts` | `compileForPreview`, `checkFile`, `ALLOWED_PACKAGES`, `autoImport` — browser-side compile step and import allow-list |
 | `lib/app-project/prune.ts` | `pruneProject` — drops `package.json` deps / `app.json` plugins for optional capability packages (camera roll, location, biometrics, notifications, clipboard, sharing, linking, blur, gradients, glass, symbols) nothing in the project imports. Called from `commitSnapshot` on every new version |
 | `lib/app-runtime/app-doc.ts` | `AppDoc` — the full project document shape (screens/files/themes/data/manifest) stored in the DB |
@@ -479,8 +479,8 @@ flowchart TD
 | `lib/app-backend/cloudhike/self-host.ts`, `backend-readme.ts` | The `server/` folder and README section a ZIP/GitHub export of a CloudHike-backed app gets |
 | `routes/backend-providers.routes.ts`, `controllers/backend.controller.ts` | `/api/backend-providers/:provider/{connect,callback}` plus the generic `/api/projects/:id/backend*` handlers |
 | `app/api/app-runtime/[projectId]/data/route.ts` | Public, CORS-enabled route built apps call with their app key |
-| `lib/app-project/with-backend.ts` | At output time (APK, QR preview, web deploy, ZIP, GitHub), swaps the on-device `lib/backend` for the remote one when a backend is connected, and answers which provider |
-| `lib/app-project/backend-remote.ts` | The generated remote `lib/backend` module (same hooks as the local one, over HTTP) and its `config.ts` |
+| `lib/app-project/with-backend.ts` | At output time (APK, QR preview, web deploy, ZIP, GitHub), swaps the on-device `lib/backend` for the remote one when a backend is connected, adds `axios`/`@tanstack/react-query` to `package.json` at the same time, and answers which provider |
+| `lib/app-project/backend-remote.ts` | The generated remote `lib/backend` module -- same hooks as the local one, but implemented with Axios + a standalone React Query `QueryClient` passed explicitly to every hook -- and its `config.ts` |
 | `middleware/requireProjectOwner.ts` | Ownership check used by backend-related routes |
 | `lib/crypto/secret-box.ts` | Symmetric encryption for stored tokens/secrets |
 | `lib/backend/types.ts` | `AppBackend` — the interface generated app code calls (db/kv/storage/auth) |
