@@ -13,7 +13,7 @@ import type { ChangeSet, Diagnostic, FileMap, Workspace } from "@app/shared/veri
 export function workspaceFromDoc(doc: AppDoc): Workspace {
   const files: FileMap = { ...(doc.files ?? {}) }
   for (const s of doc.screens) if (s.path && s.code !== undefined) files[s.path] = s.code
-  return { files, manifest: doc.manifest }
+  return { files, manifest: doc.manifest, connected: doc.backend.provider !== "local" }
 }
 
 /**
@@ -148,7 +148,7 @@ export function applyChangeSet(base: Workspace, cs: ChangeSet): { ws?: Workspace
   }
 
   if (manifest && cs.manifestPatch.length) {
-    const generated = compileManifest(manifest)
+    const generated = compileManifest(manifest, { connected: base.connected })
     for (const [path, code] of Object.entries(generated)) {
       if (files[path] !== code) changed.add(path)
       files[path] = code

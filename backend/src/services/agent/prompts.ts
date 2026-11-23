@@ -175,7 +175,7 @@ Return the JSON object now.`
 export const TECH_RULES = `TECH STACK (strict; current as of Expo SDK 58)
 - Expo SDK 58, React Native 0.88 (New Architecture), React 19.3, TypeScript 6 (strict), Expo Router 58 (file-based routing). React Compiler is ON.
 - Function components and hooks only. Follow the Rules of React so the React Compiler can optimize: render is pure, never mutate props, state or objects created in an earlier render, never read or write ref.current during render. Don't add useMemo/useCallback/React.memo for performance; the compiler handles it. Keep hooks at the top level of components.
-- Allowed imports ONLY: React Native core components and APIs, these packages: ${ALLOWED_PACKAGES.join(", ")}, the platform modules "@/theme", "@/lib/backend" and "@/motion", and project files via "@/..." paths. Nothing else (no react-native-svg, no @react-navigation/*, no other npm packages).
+- Allowed imports ONLY: React Native core components and APIs, these packages: ${ALLOWED_PACKAGES.join(", ")}, the platform modules "@/theme" and "@/motion", and project files via "@/..." paths. Nothing else (no react-native-svg, no @react-navigation/*, no other npm packages).
 
 MODERN API CHOICES (use these, avoid the legacy ones)
 - Tappables: Pressable only (never TouchableOpacity/TouchableHighlight/TouchableWithoutFeedback). Use the style callback ({ pressed }) for feedback.
@@ -196,7 +196,10 @@ APP RULES
 - Colors ONLY from the theme (useTheme / createStyles). Never write hex/rgb colors except "#fff"/"#000" and rgba(0,0,0,a) / rgba(255,255,255,a) for shadows, scrims and tiny details. Never call StyleSheet.create with colors at module level: use createStyles so theme switching works live.
 - createStyles((t) => ({ ... })) must end with "as const" on the returned object: createStyles((t) => ({ title: { fontWeight: "600" } }) as const). Without it, TypeScript widens values like fontWeight, textAlign or flexDirection to plain string, and the strict type check rejects them against React Native's narrower style types (fontWeight only accepts "normal" | "bold" | "100".."900", not string).
 - Navigation: router.push("/screen-id"), router.push({ pathname: "/screen-id", params: { id } }), router.back(), router.replace(...) from "expo-router"; read params with useLocalSearchParams<{ id?: string }>(). Every screen id is a URL: "/" + id. Groups like (tabs) never appear in URLs.
-- Data: read and write only through "@/lib/backend" hooks, so data persists and every screen stays in sync.
+- State: no backend is connected yet, so there's nowhere to send a network call (no fetch/axios in app code) — everything lives in state.
+  - A piece of data several screens read or write (a shared list, a cart, settings), or that would otherwise mean passing props down more than ~2 levels: a Zustand store under "stores/<name>.ts" (e.g. stores/useTasksStore.ts), persisted with zustand/middleware's persist + createJSONStorage(() => AsyncStorage) so it survives a reload. Seed its initial state from "@/data/seed.json"; type records from "@/data/types".
+  - Anything scoped to one screen (or cheaply passed one or two levels via props): plain useState in that screen, not a store.
+  - Never build your own pub/sub, context-based store, or manual AsyncStorage read/write loop: Zustand's persist already does that.
 - Native features through Expo modules, but only the ones a screen's purpose actually calls for — each import pulls a real native capability and permission into the app, so reach for expo-image-picker, expo-location, expo-local-authentication, expo-notifications, expo-clipboard or expo-sharing only when a key element genuinely needs photo/file picking, location, biometric lock, push reminders, copy-to-clipboard or the OS share sheet, never speculatively "in case it's useful." expo-haptics is the one exception, light enough to use freely (light impact on key taps, selection on toggles and pickers, success notification after saving). Share from react-native and Alert.alert for confirmations (destructive ones with style "destructive") don't need an import decision either.
 
 PLATFORM MODULES

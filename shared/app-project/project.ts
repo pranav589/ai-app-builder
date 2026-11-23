@@ -50,10 +50,14 @@ export const ALLOWED_PACKAGES = [
   "react-native-reanimated",
   "react-native-worklets",
   "react-native-screens",
+  "zustand",
+  "zustand/middleware",
+  "axios",
+  "@tanstack/react-query",
 ]
 
 /** Project modules the platform owns; generated code imports them, never rewrites them. */
-export const PLATFORM_MODULES = ["@/theme", "@/lib/backend"]
+export const PLATFORM_MODULES = ["@/theme"]
 
 export const isCodeFile = (path: string) => /\.(tsx|ts|jsx|js)$/.test(path)
 
@@ -82,7 +86,6 @@ const NAMED_IMPORTS: Record<string, string[]> = {
   ],
   "expo-router": ["router", "useRouter", "useLocalSearchParams", "useGlobalSearchParams", "Stack", "Tabs", "Link", "Redirect", "useFocusEffect", "useNavigation", "usePathname", "useSegments", "Slot"],
   "@/theme": ["useTheme", "createStyles", "useThemeSwitcher", "ThemeProvider", "spacing"],
-  "@/lib/backend": ["useCollection", "useRecord", "useSetting", "useUser"],
   "@expo/vector-icons": ["Ionicons"],
   "react-native-safe-area-context": ["SafeAreaView", "useSafeAreaInsets", "SafeAreaProvider"],
   "expo-linear-gradient": ["LinearGradient"],
@@ -98,6 +101,9 @@ const NAMED_IMPORTS: Record<string, string[]> = {
   ],
   "react-native-gesture-handler": ["GestureDetector", "GestureHandlerRootView", "usePanGesture", "useTapGesture", "useLongPressGesture"],
   "react-native-worklets": ["scheduleOnRN"],
+  zustand: ["create"],
+  "zustand/middleware": ["persist", "createJSONStorage"],
+  "@tanstack/react-query": ["useQuery", "useMutation", "useQueryClient", "QueryClient", "QueryClientProvider"],
 }
 const NAMESPACE_IMPORTS: Record<string, string> = {
   Haptics: "expo-haptics",
@@ -109,8 +115,6 @@ const NAMESPACE_IMPORTS: Record<string, string> = {
   Sharing: "expo-sharing",
   React: "react",
 }
-// The backend's plain objects are only matched when used as objects (db.insert(...)).
-const BACKEND_OBJECTS = ["db", "kv", "auth", "storage"]
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
@@ -172,7 +176,6 @@ export function autoImport(code: string, local: ProjectExports = {}): string {
       if (n === "Animated" && usesReanimated) defaults.push([n, "react-native-reanimated"])
       else add(mod, n)
     }
-  for (const n of BACKEND_OBJECTS) if (new RegExp(`(?<![\\w$.])${n}\\.\\w`).test(body) && !declared(n)) add("@/lib/backend", n)
   const namespaces = Object.entries(NAMESPACE_IMPORTS).filter(([n]) => new RegExp(`(?<![\\w$.])${n}\\.`).test(body) && !declared(n))
   const known = new Set([...Object.values(NAMED_IMPORTS).flat(), ...Object.keys(NAMESPACE_IMPORTS)])
   for (const [n, exp] of Object.entries(local)) {

@@ -118,8 +118,13 @@ describe("checkFile", () => {
     expect(problems.some((p) => p.includes("does not resolve to a file"))).toBe(true)
   })
 
-  it("allows the two platform modules without resolving them", () => {
-    const code = `import { useTheme } from "@/theme"\nimport { useCollection } from "@/lib/backend"\nexport default function Home() { return null }`
+  it("allows the platform module without resolving it", () => {
+    const code = `import { useTheme } from "@/theme"\nexport default function Home() { return null }`
+    expect(checkFile("app/home.tsx", code, files)).toEqual([])
+  })
+
+  it("allows zustand, axios and react-query, the packages the AI uses for state and data", () => {
+    const code = `import { create } from "zustand"\nimport axios from "axios"\nimport { useQuery } from "@tanstack/react-query"\nexport default function Home() { return null }`
     expect(checkFile("app/home.tsx", code, files)).toEqual([])
   })
 

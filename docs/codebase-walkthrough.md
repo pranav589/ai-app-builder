@@ -176,11 +176,11 @@ flowchart TD
 | `lib/verify/protocol.ts` | Parses the model's tagged reply into a `ChangeSet` |
 | `lib/verify/workspace.ts` | `applyChangeSet` — actually applies a `ChangeSet` to an in-memory `Workspace`; converts to/from the DB's `AppDoc` shape |
 | `lib/verify/ownership.ts` | `isAppOwned` / `isPlatformOwned` — decides which files the AI is even allowed to touch |
-| `lib/verify/pipeline.ts` | `verifyChange` / `verifyWorkspace` — runs the gates below *in order*, cheapest first, serialized by a lock (the render gate needs exclusive use of a shared DOM) |
+| `lib/verify/pipeline.ts` | `verifyChange` / `verifyWorkspace` — runs the gates below *in order*, cheapest first, serialized by a lock (the render gate needs exclusive use of a shared DOM). Takes an optional `extraGates` list appended after the fixed four; only the backend-conversion run passes one (`uiFreezeGate`) |
 | `lib/verify/gates/parse.ts` | Gate 1: is the code syntactically valid / in the expected file shape |
 | `lib/verify/gates/policy.ts` | Gate 2: ownership rules, allowed imports, line-count limits |
 | `lib/verify/gates/typecheck.ts` | Gate 3: a **real** `tsc` LanguageService check against `vendor/type-bundle` (a pinned, isolated `node_modules`) |
-| `lib/verify/gates/render.ts` | Gate 4: headless **jsdom mount of the actual preview bundle** — not a mock, the same code that renders in the browser |
+| `lib/verify/gates/render.ts` | Gate 4: headless **jsdom mount of the actual preview bundle** — not a mock, the same code that renders in the browser. `handleHttp` answers a connected screen's `@/lib/api` calls (the same `"http"` RPC the real preview host answers) from the same in-memory snapshot the legacy `db`/`kv` ops mutate |
 | `lib/verify/gates/bundle.ts` | A Metro-bundle-reachability gate, written but currently unused (would matter for a future "publish" feature) |
 | `lib/verify/run.ts` | `runChange` — the state machine: write → verify → repair (≤3 rounds) → commit |
 | `lib/agent/generation-guard.ts` | If a regeneration attempt fails entirely, keeps the previously-working version of that screen instead of leaving it broken. Also decides which extra files a screen keeps: new parts it was split into (`components/<screen-id>/…`, `lib/` helpers) and, on a rebuild, side files earlier builds and edits stored |
@@ -238,7 +238,7 @@ flowchart TD
 | `lib/app-project/motion.ts` | `@/motion` — the motion kit (`Reveal`, `Stagger`, `PressableScale`, `AnimatedNumber`, `Skeleton`, `ParallaxScroll`, `SwipeRow`, `Sheet`, `SegmentedTabs`, `useMotion`) and the per-project `motion/level.ts` file |
 | `lib/app-project/platform-kits.ts` | `PLATFORM_KIT_FILES` (both kits' sources), `platformKitUpdates` (resyncs them into older projects on every edit), and the props references the prompts embed |
 | `lib/app-project/icons.ts` | Shared icon vocabulary so the AI picks from a known set instead of guessing icon names |
-| `lib/app-project/templates.ts` | Boilerplate platform files written into every new project: theme, data, and `backendDevice()` -- the on-device `lib/backend`, a Zustand store persisted to AsyncStorage |
+| `lib/app-project/templates.ts` | Boilerplate platform files written into every new project: `package.json`/`app.json`, theme, and `data/{seed.json,schema.json,types.ts}`. No longer writes a `lib/backend` module -- data is the AI's own Zustand stores (`stores/`) or `useState`, per `agent/prompts.ts` TECH_RULES |
 | `lib/app-project/project.ts` | `compileForPreview`, `checkFile`, `ALLOWED_PACKAGES`, `autoImport` — browser-side compile step and import allow-list |
 | `lib/app-project/prune.ts` | `pruneProject` — drops `package.json` deps / `app.json` plugins for optional capability packages (camera roll, location, biometrics, notifications, clipboard, sharing, linking, blur, gradients, glass, symbols) nothing in the project imports. Called from `commitSnapshot` on every new version |
 | `lib/app-runtime/app-doc.ts` | `AppDoc` — the full project document shape (screens/files/themes/data/manifest) stored in the DB |
@@ -304,7 +304,8 @@ flowchart TD
 | `lib/preview/element-names.ts` | Human-readable naming for selected elements |
 | `preview-runtime/bridge.ts` | Frame-side message handling + small reactive stores |
 | `preview-runtime/router.tsx` | Expo-Router-like file-based router shim (the largest file in the runtime) |
-| `preview-runtime/modules.ts` | Dynamic module resolution + a dev JSX factory that stamps every element with `data-eid="file:line:Tag"` so it can be targeted by the inspector/codemod |
+| `preview-runtime/modules.ts` | Dynamic module resolution + a dev JSX factory that stamps every element with `data-eid="file:line:Tag"` so it can be targeted by the inspector/codemod. `zustand`, `axios` and `@tanstack/react-query` are real packages here (not stand-ins); `@/lib/api` (once connected) redirects to `shims/api.ts`, the same way `@/lib/backend` redirects to `shims/backend.ts` for a legacy app |
+| `preview-runtime/shims/api.ts` | `@/lib/api` in the preview: `api.get/post/patch/put/delete` send an `"http"` RPC to the host instead of a real HTTP call, answered the same way every other data call is (`app-runtime.tsx` `handleRpc`'s `"http"` case) |
 | `preview-runtime/inspect.ts` | Hover/select/tap highlighting, optimistic local preview of an edit before it's committed |
 | `preview-runtime/shims/*.ts` | React Native / Expo API stand-ins (native, ui, theme, backend) that run inside the sandboxed iframe |
 | `scripts/build-preview.mjs` | esbuild-bundles all of `preview-runtime/` into the single `public/preview/runtime.js` every iframe loads (runs automatically before `dev`/`build`) |
@@ -467,20 +468,25 @@ flowchart TD
 | `lib/app-backend/registry.ts` | `getProvider(id)` / `providerFor(row)`: the one place providers are listed |
 | `lib/app-backend/contract.ts` | `AppServices` (data/auth/upload) and `AppBackendError`: the provider-neutral contract the op dispatcher runs on. No imports (a copy ships in exports) |
 | `lib/app-backend/app-ops.ts` | The one `{ op }` dispatcher (list/insert/auth.*/upload/...) shared by the preview route, the public route and the self-host server |
-| `lib/app-backend/backend.service.ts` | What the routes do (status, disconnect, preview/runtime data calls, file serving, schema sync after builds), via the row's provider |
+| `lib/app-backend/backend.service.ts` | What the routes do (status, disconnect, preview/runtime data calls, file serving, schema sync after builds), via the row's provider. `disconnectBackend` also runs `convertBackend(null, projectId, "disconnect")` (best-effort) after flipping the doc back to local |
 | `lib/app-backend/app-backend.ts` | The `app_backends` row and the app doc's `backend` field: `getBackend`, `saveBackend`, `setDocBackend`, `readEnv`/`sealEnv`, `backendInfo`, `ensureAppKey` |
 | `lib/app-backend/connect-state.ts` | Signed state cookie pinning a provider's account-link redirect to one user, app and provider |
 | `lib/app-backend/rate-limit.ts` | In-memory per-key rate limiter for the public route |
 | `lib/app-backend/cloudhike/index.ts` | The CloudHike `BackendProvider` adapter, wiring the files below |
 | `lib/app-backend/cloudhike/connect.ts`, `config.ts` | CloudHike Connect: authorize URL, code exchange, the encrypted stored token (`cloudhike_connections`) |
 | `lib/app-backend/cloudhike/mcp.ts` | Client for CloudHike's MCP server (the protocol used to actually provision resources) |
-| `lib/app-backend/cloudhike/provision.ts` | A dedicated "backend engineer" AI agent — runs its own tagged-reply loop calling CloudHike MCP tools to create a project and deploy services |
+| `lib/app-backend/cloudhike/provision.ts` | A dedicated "backend engineer" AI agent — runs its own tagged-reply loop calling CloudHike MCP tools to create a project and deploy services. `runBackendSetup` calls `convertBackend(run, projectId, "connect")` right after `setDocBackend` points the doc at CloudHike |
+| `lib/agent/backend-conversion.ts` | `convertBackend(run, projectId, direction)` — the AI rewrite between Zustand/useState and Axios+React Query on connect/disconnect. `pickTargets` (exported for its own tests) finds the files to convert; recompiles the root layout for the new `connected` state *before* verifying (a converted screen's `useQuery` needs `QueryClientProvider` in context during that very check); runs `runChange` with its own model/prompt and the `uiFreezeGate`; commits one version either way, even on a repair-budget failure (soft message, not a throw) |
+| `lib/verify/conversion-prompts.ts`, `conversion-coder.ts` | The conversion's own system prompt (`CONVERSION_INSTRUCTIONS`, much narrower than `VERIFIED_CODER_INSTRUCTIONS`) and its own `Agent`/`ModelAdapter` (the fast model, like the backend-setup agent) |
+| `lib/verify/gates/ui-freeze.ts` | `uiFreezeGate` — a `Gate` (see `pipeline.ts`'s `extraGates`) only the conversion run adds: parses each changed file's JSX tree and `createStyles(...)` call with the real TypeScript AST and blocks the reply if either differs from before the change |
+| `lib/app-project/api-client.ts` | `apiClientFiles()` — the connected app's `lib/api.ts` (Axios instance + `QueryClient`, close to `frontend/lib/api-client.ts`'s own shape) and `lib/api-config.ts` (endpoint + app key, `EXPO_PUBLIC_*` overridable). `withApiClientDeps` adds axios/react-query to `package.json` |
+| `routes/app-runtime.routes.ts`, `controllers/app-runtime.controller.ts` | The REST routes a connected app's `lib/api.ts` calls (`/collections/:name[/:id]`, `/settings[/:key]`, `/auth/*`, `/uploads`), each mapped onto the legacy `{ op }` dispatcher through `handleRuntimeDataOp` so the app-key check/rate limit/`declaredOnly` are shared; the legacy `POST /data` route is unchanged alongside them |
 | `lib/app-backend/cloudhike/app-data.ts` | CloudHike's `AppServices`: Postgres tables/queries, S3 uploads, CloudHike Auth calls, schema sync. No builder-only imports (a copy ships in exports) |
 | `lib/app-backend/cloudhike/self-host.ts`, `backend-readme.ts` | The `server/` folder and README section a ZIP/GitHub export of a CloudHike-backed app gets |
 | `routes/backend-providers.routes.ts`, `controllers/backend.controller.ts` | `/api/backend-providers/:provider/{connect,callback}` plus the generic `/api/projects/:id/backend*` handlers |
 | `app/api/app-runtime/[projectId]/data/route.ts` | Public, CORS-enabled route built apps call with their app key |
-| `lib/app-project/with-backend.ts` | At output time (APK, QR preview, web deploy, ZIP, GitHub), swaps the on-device `lib/backend` for the remote one when a backend is connected, adds `axios`/`@tanstack/react-query` to `package.json` at the same time, and answers which provider |
-| `lib/app-project/backend-remote.ts` | The generated remote `lib/backend` module -- same hooks as the local one, but implemented with Axios + a standalone React Query `QueryClient` passed explicitly to every hook -- and its `config.ts` |
+| `lib/app-project/with-backend.ts` | Legacy swap, kept for apps generated before the state-management redesign: at output time (APK, QR preview, web deploy, ZIP, GitHub), swaps a stored on-device `lib/backend` for the remote one when a backend is connected, adds `axios`/`@tanstack/react-query` to `package.json` at the same time, and answers which provider. New apps have no `lib/backend` for it to swap |
+| `lib/app-project/backend-remote.ts` | The legacy generated remote `lib/backend` module -- Axios + a standalone React Query `QueryClient` passed explicitly to every hook -- and its `config.ts`; only still generated by `with-backend.ts` above for a pre-redesign project |
 | `middleware/requireProjectOwner.ts` | Ownership check used by backend-related routes |
 | `lib/crypto/secret-box.ts` | Symmetric encryption for stored tokens/secrets |
 | `lib/backend/types.ts` | `AppBackend` — the interface generated app code calls (db/kv/storage/auth) |
@@ -1332,11 +1338,11 @@ same screen code feels calm in a finance app and playful in a kids' app.
 ```tsx
 import * as React from "react"
 import { Screen, Section, ListItem, EmptyState } from "@/kit"
-import { useCollection } from "@/lib/backend"
+import { useRecipesStore } from "@/stores/useRecipesStore"
 import { go } from "@/lib/nav"
 
 export default function Home() {
-  const { data: recipes } = useCollection("recipes")
+  const recipes = useRecipesStore((s) => s.recipes)
 
   return (
     <Screen>

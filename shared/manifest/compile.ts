@@ -71,26 +71,30 @@ export function useParams<S extends ScreenId>(_screen: S): ScreenParams[S] exten
 
 // ---------------------------------------------------------------- app/_layout.tsx, app/(tabs)/_layout.tsx, app/index.tsx
 
-function rootLayoutFile(m: AppManifest): string {
+function rootLayoutFile(m: AppManifest, connected: boolean): string {
   const modals = Object.keys(m.screens)
     .filter((id) => m.screens[id].presentation === "modal")
     .sort()
+  const stack = `<Stack screenOptions={{ headerShown: false }}>
+${modals.map((id) => `            <Stack.Screen name="${id}" options={{ presentation: "modal" }} />`).join("\n")}
+          </Stack>`
   // GestureHandlerRootView: on a device, gesture-handler only recognizes
   // gestures (@/motion's SwipeRow and Sheet, app code's usePanGesture) under
   // one, and a production bundle ignores them silently without it.
+  // QueryClientProvider only once a backend is connected: that's the only
+  // time any screen uses React Query (lib/api.ts, written by the
+  // backend-conversion step alongside the connected screens themselves).
   return `${GENERATED_HEADER}import { Stack } from "expo-router"
 import { GestureHandlerRootView } from "react-native-gesture-handler"
 import { SafeAreaProvider } from "react-native-safe-area-context"
 import { ThemeProvider } from "@/theme"
-
+${connected ? `import { QueryClientProvider } from "@tanstack/react-query"\nimport { queryClient } from "@/lib/api"\n` : ""}
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
         <SafeAreaProvider>
-          <Stack screenOptions={{ headerShown: false }}>
-${modals.map((id) => `            <Stack.Screen name="${id}" options={{ presentation: "modal" }} />`).join("\n")}
-          </Stack>
+          ${connected ? `<QueryClientProvider client={queryClient}>\n          ${stack}\n          </QueryClientProvider>` : stack}
         </SafeAreaProvider>
       </ThemeProvider>
     </GestureHandlerRootView>
@@ -154,9 +158,9 @@ function toDataModel(m: AppManifest): DataModel {
 /** Paths this compiler writes; nothing else may write them (lib/verify/ownership.ts). */
 export const COMPILER_PATHS = ["app/_layout.tsx", "app/(tabs)/_layout.tsx", "app/index.tsx", "lib/nav.ts", "data/types.ts"]
 
-export function compileManifest(m: AppManifest): FileMap {
+export function compileManifest(m: AppManifest, opts: { connected?: boolean } = {}): FileMap {
   const out: FileMap = {
-    "app/_layout.tsx": rootLayoutFile(m),
+    "app/_layout.tsx": rootLayoutFile(m, !!opts.connected),
     "app/index.tsx": indexFile(m),
     "lib/nav.ts": navFile(m),
     "data/types.ts": generateDataTypes(toDataModel(m)),

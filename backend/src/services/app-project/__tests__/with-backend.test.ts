@@ -67,4 +67,12 @@ describe("withBackend", () => {
     expect(pkg.dependencies["@tanstack/react-query"]).toBeTruthy()
     expect(pkg.dependencies.react).toBe("19.3.0")
   })
+
+  it("leaves files untouched once a project has already been converted to lib/api.ts", async () => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://builder.example.com"
+    const files = { "lib/api.ts": "real client", "lib/api-config.ts": "real config" }
+    const r = await withBackend("p1", files)
+    expect(r.files).toEqual(files)
+    expect(r.provider).not.toBeNull()
+  })
 })

@@ -8,12 +8,13 @@
 //
 // Scoped to the packages that are purely opt-in from AI-written screen code.
 // The rest of the template (reanimated, worklets, gesture-handler,
-// vector-icons, safe-area-context, async-storage) back the platform modules
-// every app always has (@/kit, @/motion, @/theme, @/lib/backend) -- @/kit's
-// Button and Card use @/motion's PressableScale unconditionally, so any app
-// using @/kit (effectively all of them) needs @/motion's own deps too.
-// Pruning those based on "is it imported" would never fire for a real app
-// and risks a false negative that breaks the build, so they're left alone.
+// vector-icons, safe-area-context, async-storage, zustand) back the platform
+// modules every app always has (@/kit, @/motion, @/theme) or the state every
+// app keeps somewhere (zustand/async-storage) -- @/kit's Button and Card use
+// @/motion's PressableScale unconditionally, so any app using @/kit
+// (effectively all of them) needs @/motion's own deps too. Pruning those
+// based on "is it imported" would never fire for a real app and risks a
+// false negative that breaks the build, so they're left alone.
 
 import { importsOf, isCodeFile, type ProjectFiles } from "./project"
 
@@ -32,6 +33,11 @@ const OPTIONAL_PACKAGES: Record<string, { plugin?: string }> = {
   "expo-clipboard": {},
   "expo-sharing": {},
   "expo-linking": {},
+  // Added to the stored project only once a backend is connected (the
+  // backend-conversion step's lib/api.ts, agent/backend-conversion.ts), and
+  // not needed again once a disconnect converts every screen back off them.
+  axios: {},
+  "@tanstack/react-query": {},
 }
 
 function packageRoot(spec: string): string {
@@ -47,6 +53,12 @@ export function usedPackageRoots(files: ProjectFiles): Set<string> {
     for (const spec of importsOf(code)) {
       if (spec.startsWith(".") || spec.startsWith("@/")) continue
       out.add(packageRoot(spec))
+      // The tab layout's NativeTabs.Trigger.Icon "md" prop (agent/prompts.ts)
+      // needs expo-symbols installed natively on Android even though no file
+      // ever writes `import ... from "expo-symbols"` -- it's pulled in by
+      // expo-router/native-tabs itself, so usage has to be inferred here or
+      // every tabbed app ships broken on Android once pruned.
+      if (spec === "expo-router/native-tabs") out.add("expo-symbols")
     }
   }
   return out

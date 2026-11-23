@@ -16,7 +16,7 @@ export type Verdict = {
   failedAt?: GateName
 }
 
-type Gate = (ws: Workspace, changed?: string[], key?: string, base?: Workspace) => GateResult | Promise<GateResult>
+export type Gate = (ws: Workspace, changed?: string[], key?: string, base?: Workspace) => GateResult | Promise<GateResult>
 
 const GATES: Gate[] = [parseGate, policyGate, typecheckGate, renderGate]
 
@@ -37,9 +37,9 @@ const GATES: Gate[] = [parseGate, policyGate, typecheckGate, renderGate]
  * instead of rebuilding it (and so an unrelated project's checks never
  * invalidate it). Omit it only for one-off checks (tests, a single eval task).
  */
-export async function verifyWorkspace(ws: Workspace, changed?: string[], key?: string, base?: Workspace): Promise<Verdict> {
+export async function verifyWorkspace(ws: Workspace, changed?: string[], key?: string, base?: Workspace, extraGates: Gate[] = []): Promise<Verdict> {
   const results: GateResult[] = []
-  for (const gate of GATES) {
+  for (const gate of [...GATES, ...extraGates]) {
     const r = await gate(ws, changed, key, base)
     results.push(r)
     if (!r.ok) return { ok: false, ws, changed: changed ?? [], results, failedAt: r.gate }
@@ -52,20 +52,20 @@ export async function verifyWorkspace(ws: Workspace, changed?: string[], key?: s
 // model calls run in parallel.
 let lock: Promise<unknown> = Promise.resolve()
 
-export function verifyChange(base: Workspace, cs: ChangeSet, key?: string): Promise<Verdict> {
-  const next = lock.then(() => verifyChangeNow(base, cs, key))
+export function verifyChange(base: Workspace, cs: ChangeSet, key?: string, extraGates?: Gate[]): Promise<Verdict> {
+  const next = lock.then(() => verifyChangeNow(base, cs, key, extraGates))
   lock = next.catch(() => {})
   return next
 }
 
-async function verifyChangeNow(base: Workspace, cs: ChangeSet, key?: string): Promise<Verdict> {
+async function verifyChangeNow(base: Workspace, cs: ChangeSet, key?: string, extraGates?: Gate[]): Promise<Verdict> {
   const t0 = performance.now()
   const applied = applyChangeSet(base, cs)
   if (!applied.ws) {
     const gate = applied.diagnostics[0]?.gate ?? "policy"
     return { ok: false, changed: applied.changed, failedAt: gate, results: [{ gate, ok: false, ms: performance.now() - t0, diagnostics: applied.diagnostics }] }
   }
-  return verifyWorkspace(applied.ws, applied.changed, key, base)
+  return verifyWorkspace(applied.ws, applied.changed, key, base, extraGates)
 }
 
 /** Blocking diagnostics as text, for the repair prompt and for logs. */

@@ -140,6 +140,55 @@ function makeSnapshot(ws: Workspace): Snapshot {
 }
 
 /** Mutates `snap` and returns the RPC's result, mirroring lib/backend/index.ts's device semantics closely enough to exercise a screen's data flow. */
+/** Same convention as backend/src/routes/app-runtime.routes.ts and app-runtime.tsx's handleRpc. */
+function matchHttpPath(pattern: string, path: string): Record<string, string> | null {
+  const pParts = pattern.split("/").filter(Boolean)
+  const uParts = path.split("/").filter(Boolean)
+  if (pParts.length !== uParts.length) return null
+  const params: Record<string, string> = {}
+  for (let i = 0; i < pParts.length; i++) {
+    if (pParts[i].startsWith(":")) params[pParts[i].slice(1)] = decodeURIComponent(uParts[i])
+    else if (pParts[i] !== uParts[i]) return null
+  }
+  return params
+}
+
+/** A connected screen's @/lib/api calls (axios -> "http" RPC, see shims/api.ts) answered from the same in-memory snapshot the legacy "db" and "kv" ops above mutate, so a mounted screen using useQuery/useMutation sees real (if fake) data instead of hanging forever. */
+function handleHttp(snap: Snapshot, method: string, args: Record<string, unknown>): unknown {
+  const httpMethod = String(args.method ?? "GET").toUpperCase()
+  const url = String(args.url ?? "")
+  const data = args.data as Record<string, unknown> | undefined
+  let p: Record<string, string> | null
+  if (httpMethod === "GET" && (p = matchHttpPath("/collections/:name", url))) return snap.collections[p.name] ?? []
+  if (httpMethod === "POST" && (p = matchHttpPath("/collections/:name", url))) {
+    const rec: Rec = { ...data, id: newId(), createdAt: new Date().toISOString() }
+    snap.collections[p.name] = [rec, ...(snap.collections[p.name] ?? [])]
+    return rec
+  }
+  if (httpMethod === "GET" && (p = matchHttpPath("/collections/:name/:id", url))) return (snap.collections[p.name] ?? []).find((r) => r.id === p!.id) ?? null
+  if (httpMethod === "PATCH" && (p = matchHttpPath("/collections/:name/:id", url))) {
+    const rows = snap.collections[p.name] ?? []
+    const i = rows.findIndex((r) => r.id === p!.id)
+    if (i === -1) throw new Error("That item no longer exists.")
+    rows[i] = { ...rows[i], ...data, id: p.id, updatedAt: new Date().toISOString() }
+    return rows[i]
+  }
+  if (httpMethod === "DELETE" && (p = matchHttpPath("/collections/:name/:id", url))) {
+    snap.collections[p.name] = (snap.collections[p.name] ?? []).filter((r) => r.id !== p!.id)
+    return null
+  }
+  if (httpMethod === "GET" && url === "/settings") return snap.settings
+  if (httpMethod === "PUT" && (p = matchHttpPath("/settings/:key", url))) {
+    snap.settings[p.key] = data?.value
+    return null
+  }
+  if (httpMethod === "GET" && url === "/auth/me") return snap.user
+  if (httpMethod === "POST" && (url === "/auth/sign-up" || url === "/auth/sign-in")) return { token: "render-gate", user: snap.user ?? { name: "Sample User", email: "sample@example.com" } }
+  if (httpMethod === "POST" && url === "/uploads") return { url: String(data?.dataUrl ?? "") }
+  // /auth/sign-out, /auth/reset-password: no-ops, same as auth.* below.
+  return null
+}
+
 function handleRpc(snap: Snapshot, method: string, args: Record<string, unknown>): unknown {
   const collection = typeof args.collection === "string" ? args.collection : ""
   switch (method) {
@@ -161,6 +210,8 @@ function handleRpc(snap: Snapshot, method: string, args: Record<string, unknown>
     case "kv.set":
       snap.settings[String(args.key)] = args.value
       return null
+    case "http":
+      return handleHttp(snap, method, args)
     default:
       // auth.*, storage.upload, theme.set, ui.*: no-ops. Not meaningful headless, and never block a mount.
       return null

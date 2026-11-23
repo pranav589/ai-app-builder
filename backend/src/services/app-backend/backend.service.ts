@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm"
 import { appBackends, db, projects, type AppBackendRow } from "@/db"
 import type { BackendProviderStatus } from "@app/shared/app-backend/providers"
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
+import { convertBackend } from "../agent/backend-conversion"
 import { activeRun } from "../agent/run-store"
 import { backendInfo, getBackend, readEnv, setDocBackend } from "./app-backend"
 import { appOpFailure, runAppOp } from "./app-ops"
@@ -34,6 +35,11 @@ export async function disconnectBackend(userId: string, projectId: string, forge
   const row = await getBackend(projectId)
   await db.delete(appBackends).where(eq(appBackends.projectId, projectId))
   await setDocBackend(projectId, { provider: "local" })
+
+  // Switches the app's screens back to local stores/useState, same version
+  // commit that drops lib/api.ts and un-wraps the root layout. Best-effort:
+  // the disconnect itself already went through above either way.
+  await convertBackend(null, projectId, "disconnect").catch((e) => console.error("backend-conversion (disconnect) failed", projectId, e))
 
   if (forgetAccount && row) await providerFor(row).connect.forget(userId)
 }

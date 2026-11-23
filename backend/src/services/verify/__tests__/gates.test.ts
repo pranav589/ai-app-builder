@@ -45,8 +45,14 @@ describe("policyGate", () => {
     expect(r.diagnostics.some((d) => d.code === "import_not_resolved")).toBe(true)
   })
 
-  it("allows the platform modules", () => {
-    const code = `import { useTheme } from "@/theme"\nimport { useCollection } from "@/lib/backend"\nexport default function Home() { return null }`
+  it("allows the platform module", () => {
+    const code = `import { useTheme } from "@/theme"\nexport default function Home() { return null }`
+    const r = policyGate(ws({ "app/home.tsx": code }))
+    expect(r.ok).toBe(true)
+  })
+
+  it("allows zustand and react-query, used for state and (once connected) data", () => {
+    const code = `import { create } from "zustand"\nimport { useQuery } from "@tanstack/react-query"\nexport default function Home() { return null }`
     const r = policyGate(ws({ "app/home.tsx": code }))
     expect(r.ok).toBe(true)
   })

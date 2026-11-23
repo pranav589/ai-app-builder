@@ -78,12 +78,26 @@ const model: DataModel = { hash: seed.hash, settings: seed.settings, user: seed.
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-headers": "content-type, x-app-key, x-app-session",
-  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
 }
 
 function send(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { ...CORS, "content-type": "application/json", "cache-control": "no-store" })
   res.end(JSON.stringify(body))
+}
+
+// A tiny path matcher, since this server has no router library: "/collections/:name/:id"
+// against "/collections/tasks/t1" gives { name: "tasks", id: "t1" }; a non-match is null.
+function match(pattern: string, pathname: string): Record<string, string> | null {
+  const pParts = pattern.split("/").filter(Boolean)
+  const uParts = pathname.split("/").filter(Boolean)
+  if (pParts.length !== uParts.length) return null
+  const params: Record<string, string> = {}
+  for (let i = 0; i < pParts.length; i++) {
+    if (pParts[i].startsWith(":")) params[pParts[i].slice(1)] = decodeURIComponent(uParts[i])
+    else if (pParts[i] !== uParts[i]) return null
+  }
+  return params
 }
 
 function readBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
@@ -119,18 +133,8 @@ async function serveFile(res: ServerResponse, key: string) {
   }
 }
 
-const server = createServer(async (req, res) => {
-  const url = new URL(req.url || "/", PUBLIC_URL)
-  if (req.method === "OPTIONS") {
-    res.writeHead(204, CORS)
-    return res.end()
-  }
-  if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true })
-  if (req.method === "GET" && url.pathname.startsWith("/files/")) return serveFile(res, decodeURIComponent(url.pathname.slice("/files/".length)))
-  if (req.method !== "POST" || url.pathname !== "/data") return send(res, 404, { error: "Not found." })
-  if (!sameKey(String(req.headers["x-app-key"] || ""), APP_KEY)) return send(res, 403, { error: "Wrong app key. EXPO_PUBLIC_APP_KEY must match APP_KEY in server/.env." })
-
-  const body = await readBody(req)
+/** Runs one { op, ...args } call, the same as the hosted /api/app-runtime route does. */
+async function callOp(req: IncomingMessage, body: Record<string, unknown> | null): Promise<{ status: number; body: { result: unknown } | { error: string } }> {
   try {
     const result = await runAppOp(
       {
@@ -141,11 +145,52 @@ const server = createServer(async (req, res) => {
       },
       body
     )
-    send(res, 200, { result })
+    return { status: 200, body: { result } }
   } catch (e) {
     const failure = appOpFailure(e, String(body?.op))
-    send(res, failure.status, { error: failure.error })
+    return { status: failure.status, body: { error: failure.error } }
   }
+}
+
+const server = createServer(async (req, res) => {
+  const url = new URL(req.url || "/", PUBLIC_URL)
+  const method = req.method || "GET"
+  if (method === "OPTIONS") {
+    res.writeHead(204, CORS)
+    return res.end()
+  }
+  if (method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true })
+  if (method === "GET" && url.pathname.startsWith("/files/")) return serveFile(res, decodeURIComponent(url.pathname.slice("/files/".length)))
+  if (!sameKey(String(req.headers["x-app-key"] || ""), APP_KEY)) return send(res, 403, { error: "Wrong app key. EXPO_PUBLIC_APP_KEY must match APP_KEY in server/.env." })
+
+  const body = await readBody(req)
+  // Legacy: a pre-redesign exported app's lib/backend still calls this one endpoint.
+  if (method === "POST" && url.pathname === "/data") {
+    const { status, body: out } = await callOp(req, body)
+    return send(res, status, out)
+  }
+
+  // REST routes: what a connected app's lib/api.ts actually calls -- see docs/api-reference.md.
+  let p: Record<string, string> | null
+  let opBody: Record<string, unknown> | null = null
+  if (method === "GET" && (p = match("/collections/:name", url.pathname))) opBody = { op: "list", collection: p.name }
+  else if (method === "POST" && (p = match("/collections/:name", url.pathname))) opBody = { op: "insert", collection: p.name, values: body }
+  else if (method === "GET" && (p = match("/collections/:name/:id", url.pathname))) opBody = { op: "get", collection: p.name, id: p.id }
+  else if (method === "PATCH" && (p = match("/collections/:name/:id", url.pathname))) opBody = { op: "update", collection: p.name, id: p.id, patch: body }
+  else if (method === "DELETE" && (p = match("/collections/:name/:id", url.pathname))) opBody = { op: "remove", collection: p.name, id: p.id }
+  else if (method === "GET" && url.pathname === "/settings") opBody = { op: "settings" }
+  else if (method === "PUT" && (p = match("/settings/:key", url.pathname))) opBody = { op: "setSetting", key: p.key, value: (body as { value?: unknown } | null)?.value }
+  else if (method === "POST" && url.pathname === "/auth/sign-up") opBody = { op: "auth.signUp", ...body }
+  else if (method === "POST" && url.pathname === "/auth/sign-in") opBody = { op: "auth.signIn", ...body }
+  else if (method === "POST" && url.pathname === "/auth/sign-out") opBody = { op: "auth.signOut" }
+  else if (method === "POST" && url.pathname === "/auth/reset-password") opBody = { op: "auth.resetPassword", ...body }
+  else if (method === "GET" && url.pathname === "/auth/me") opBody = { op: "auth.current" }
+  else if (method === "POST" && url.pathname === "/uploads") opBody = { op: "upload", dataUrl: (body as { dataUrl?: unknown } | null)?.dataUrl }
+
+  if (!opBody) return send(res, 404, { error: "Not found." })
+  const { status, body: out } = await callOp(req, opBody)
+  // REST style: the bare result, not the { result } envelope /data answers with.
+  send(res, status, "error" in out ? out : out.result)
 })
 
 // Creates the tables for your data model and fills the empty ones with sample data. Safe to run on every start.

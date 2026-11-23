@@ -3,13 +3,13 @@
 // stop re-deriving spacing/color boilerplate by hand. One real source file,
 // used in three places:
 //   - the device project: platformFiles() writes KIT_SOURCE to KIT_PATH,
-//     alongside theme/index.tsx and lib/backend/index.ts;
+//     alongside theme/index.tsx;
 //   - the preview: KIT_PATH is a normal project file, so the existing
 //     Sucrase-compiled module loader (preview-runtime/modules.ts
 //     resolvePath) resolves "@/kit" to it like any other project file —
 //     no separate preview shim needed, since the kit has no device-specific
-//     behavior (unlike @/theme and @/lib/backend, which talk to different
-//     backends in each environment);
+//     behavior (unlike @/theme, which talks to a different storage key per
+//     environment);
 //   - the type checker: KIT_PATH is part of the same Workspace FileMap the
 //     tsc gate already checks (lib/verify/gates/typecheck.ts), so it is
 //     type-checked for free, no separate vendor/type-bundle entry needed.

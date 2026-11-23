@@ -41,12 +41,10 @@ export async function getWorkspaceData(userId: string, projectId: string) {
   ])
 
   const doc = readAppDoc(project.previewScreens)
-  // The stored lib/backend is always the on-device one (with-backend.ts never
-  // persists the connected version, so a disconnect can revoke the key
-  // without resyncing every project). The code tab reads live, though, not
-  // an export, so without this it would show Zustand/local even once a
-  // backend is actually connected and the app is really calling it over
-  // Axios + React Query -- exactly the mismatch that prompted this.
+  // withBackend() only swaps anything in for apps generated before the
+  // backend-conversion redesign (agent/backend-conversion.ts): once an app
+  // has been converted, its stored files already call lib/api.ts for real
+  // (the Code tab shows exactly what's running), so this is a no-op.
   const { files } = await withBackend(project.id, doc.files ?? {})
   const data = {
     id: project.id,

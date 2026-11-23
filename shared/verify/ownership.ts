@@ -16,8 +16,8 @@ export function isCompilerOwned(path: string): boolean {
   return COMPILER_PATH.test(path)
 }
 
-/** Screen files under app/ (other than compiler-owned layouts), components/**, lib/** except platform/compiler paths. */
+/** Screen files under app/ (other than compiler-owned layouts), components/**, lib/**, stores/** except platform/compiler paths. */
 export function isAppOwned(path: string): boolean {
   if (isPlatformOwned(path) || isCompilerOwned(path)) return false
-  return path.startsWith("app/") || path.startsWith("components/") || path.startsWith("lib/")
+  return path.startsWith("app/") || path.startsWith("components/") || path.startsWith("lib/") || path.startsWith("stores/")
 }

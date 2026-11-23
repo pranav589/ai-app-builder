@@ -9,6 +9,8 @@ export type JsonPatchOp = { op: "add" | "replace"; path: string; value: unknown 
 export interface Workspace {
   manifest?: unknown
   files: FileMap
+  /** Whether this app has a backend connected (vs. "local"); the compiled root layout wraps in QueryClientProvider only when true. */
+  connected?: boolean
 }
 
 export type FileChange =
@@ -24,7 +26,7 @@ export interface ChangeSet {
   files: FileChange[]
 }
 
-export type GateName = "manifest" | "parse" | "policy" | "tsc" | "render" | "bundle"
+export type GateName = "manifest" | "parse" | "policy" | "tsc" | "render" | "bundle" | "uiFreeze"
 
 export interface Diagnostic {
   gate: GateName
