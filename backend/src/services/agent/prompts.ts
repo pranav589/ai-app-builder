@@ -3,7 +3,7 @@ import { describeDataModel, type DataModel } from "@app/shared/app-runtime/data-
 import { THEME_COLOR_KEYS, THEME_TOKEN_DOCS, type AppTheme } from "@app/shared/app-runtime/theme"
 import { ALLOWED_PACKAGES, screenHref, screenPath } from "@app/shared/app-project/project"
 import { PLATFORM_API_DOCS } from "@/lib/app-project/templates"
-import { MOTION_PROPS_REFERENCE } from "@/lib/app-project/platform-kits"
+import { KIT_PROPS_REFERENCE, MOTION_PROPS_REFERENCE } from "@/lib/app-project/platform-kits"
 import { ICON_VOCABULARY } from "@app/shared/app-project/icons"
 import { IMAGE_LIBRARY_CATEGORIES } from "@app/shared/image-library/categories"
 import { MAX_SCREENS } from "./protocol"
@@ -64,7 +64,7 @@ The JSON must be valid (double quotes, no comments, no trailing commas) and foll
 
 Planning rules:
 - If the person asks for a specific number of screens (e.g. "a single screen", "two screens"), plan exactly that many; fit the core loop into them (sheets, sections, inline forms).
-- Otherwise plan 4 to 8 screens for a typical app (never more than ${MAX_SCREENS}). Cover the core loop end to end: entry (onboarding or sign-in only when the app really needs accounts), the main screen, the key detail/create flows, and settings or profile when relevant. Do not pad with screens that add nothing.
+- Otherwise size the plan to what the app actually needs, never more than ${MAX_SCREENS}: a genuinely single-purpose tool or utility is often correctly 1-3 screens; a typical app is 4-8. Cover the core loop end to end: entry (onboarding or sign-in only when the app really needs accounts), the main screen, the key detail/create flows, and settings or profile when relevant. Do not pad with screens, settings, or onboarding steps that add nothing just to look more complete.
 - Order screens in the order a new user meets them; this is also the build order.
 - Use mobile-native patterns: bottom tab bar for 3-5 top-level sections, stacks for detail views, sheets for quick create/edit.
 - presentation: "tab" for each top-level section in the bottom tab bar (either 0 or 3-5 tab screens), "stack" for screens pushed on top (details, onboarding, sign-in, settings sub-pages), "modal" for create/edit flows that slide up as a sheet.
@@ -197,7 +197,7 @@ APP RULES
 - createStyles((t) => ({ ... })) must end with "as const" on the returned object: createStyles((t) => ({ title: { fontWeight: "600" } }) as const). Without it, TypeScript widens values like fontWeight, textAlign or flexDirection to plain string, and the strict type check rejects them against React Native's narrower style types (fontWeight only accepts "normal" | "bold" | "100".."900", not string).
 - Navigation: router.push("/screen-id"), router.push({ pathname: "/screen-id", params: { id } }), router.back(), router.replace(...) from "expo-router"; read params with useLocalSearchParams<{ id?: string }>(). Every screen id is a URL: "/" + id. Groups like (tabs) never appear in URLs.
 - Data: read and write only through "@/lib/backend" hooks, so data persists and every screen stays in sync.
-- Native features through Expo modules: expo-haptics (light impact on key taps, selection on toggles and pickers, success notification after saving), expo-image-picker, expo-location, expo-local-authentication, expo-notifications, expo-clipboard, Share from react-native, Alert.alert for confirmations (destructive ones with style "destructive").
+- Native features through Expo modules, but only the ones a screen's purpose actually calls for — each import pulls a real native capability and permission into the app, so reach for expo-image-picker, expo-location, expo-local-authentication, expo-notifications, expo-clipboard or expo-sharing only when a key element genuinely needs photo/file picking, location, biometric lock, push reminders, copy-to-clipboard or the OS share sheet, never speculatively "in case it's useful." expo-haptics is the one exception, light enough to use freely (light impact on key taps, selection on toggles and pickers, success notification after saving). Share from react-native and Alert.alert for confirmations (destructive ones with style "destructive") don't need an import decision either.
 
 PLATFORM MODULES
 ${PLATFORM_API_DOCS}`
@@ -215,7 +215,7 @@ export const CRAFT_RULES = `CRAFT (it must feel like a top App Store app in 2026
 
 export const MOTION_RULES = `MOTION (it should feel alive and physical, like a premium 2026 app; scaled to the app's motion level)
 - Motion level (motion/level.ts, picked with the design): "subtle" = calm utility (entrance reveals, press springs, count-ups, skeletons); "expressive" = polished consumer app (also staggered lists, one signature moment per screen, swipe rows, sheets, sliding segmented tabs); "bold" = playful, brand-led (also parallax hero headers and bigger, bouncier movement). "@/motion" already scales distance, springs and timing to the level and honors the system reduce-motion setting: use it first.
-- @/kit's Button, Card (with onPress) and ProgressBar animate already. From "@/motion": PressableScale for custom tappable tiles and chips; Reveal with index={index} in a FlatList renderItem (or Stagger for a short fixed list); AnimatedNumber for stats and totals; Skeleton blocks shaped like the content while loading; SwipeRow for row actions; Sheet for quick in-screen pickers and forms; SegmentedTabs for 2-4 filters; ParallaxScroll for detail and profile screens with a hero image or gradient.
+- @/kit's Button, Card (with onPress) and ProgressBar animate already, at no extra cost. Beyond that, reach for a "@/motion" primitive only where the screen's own design or spec calls for it, not on every screen by default: PressableScale for custom tappable tiles and chips; Reveal with index={index} in a FlatList renderItem (or Stagger for a short fixed list) when a list's entrance is worth calling out; AnimatedNumber for a stat or total that's a focal point; Skeleton blocks shaped like the content while loading; SwipeRow for row actions the spec actually asks for; Sheet for quick in-screen pickers and forms; SegmentedTabs for 2-4 filters; ParallaxScroll for a detail or profile screen with a hero image or gradient. A plain settings list or a simple form doesn't need any of these.
 - Follow the screen spec's motion literally: if it asks for a swipe-left reveal, wrap each row in SwipeRow with those actions (a long-press or a menu is not a substitute); if it asks for a bottom sheet, a stretchy header or sliding tabs, use Sheet, ParallaxScroll or SegmentedTabs. Put a SwipeRow's destructive action behind the same confirmation you would give a button.
 - Bespoke animation: Reanimated (import Animated, { useSharedValue, useAnimatedStyle, withSpring } from "react-native-reanimated"; always import Animated explicitly, React Native's own Animated is the legacy API) and gesture hooks from "react-native-gesture-handler" (usePanGesture, useTapGesture, useLongPressGesture with <GestureDetector gesture={...}>). Take springs and durations from useMotion(). Read and write shared values with .get() and .set(), never during render.
 - Every useAnimatedStyle, useDerivedValue, useAnimatedProps and useAnimatedReaction call ends with a dependency array of the shared values and props it reads: useAnimatedStyle(() => ({ opacity: progress.get() }), [progress]). The verifier rejects calls without one.
@@ -229,6 +229,9 @@ ${TECH_RULES}
 ${CRAFT_RULES}
 
 ${MOTION_RULES}
+
+THE COMPONENT KIT ("@/kit", platform-owned: import it, never write it). Its props, verbatim:
+${KIT_PROPS_REFERENCE}
 
 THE MOTION KIT ("@/motion", platform-owned: import it, never write it). Its props, verbatim:
 ${MOTION_PROPS_REFERENCE}
@@ -253,7 +256,7 @@ What to write:
      </NativeTabs.Trigger>
    </NativeTabs>
    One Trigger per tab screen, in plan order. Choose icons ONLY from this list of "sf (sf selected) / md" names: ${ICON_VOCABULARY}.
-3. components/*.tsx: 6-10 focused, reusable, polished components the screens need, matching the design direction, for example: Screen (safe-area page with optional scroll and large title), TopBar (back button, title, trailing action), Button (primary/secondary/ghost/destructive, sizes, loading, icon), Card, ListRow (grouped inset style), TextField (label, error), SegmentedControl, Chip, EmptyState, Avatar, StatCard or ProgressBar. Each file has named exports, typed props, and styles from createStyles. Keep each file focused and compact. Build tappable components on PressableScale and moving ones on the "@/motion" primitives (a SegmentedControl can wrap SegmentedTabs) so every screen inherits the motion.
+3. components/*.tsx: only components that earn their place — something at least two screens will reuse, or a bespoke primitive "@/kit" (above) has no equivalent for (e.g. a branded TopBar, a domain-specific card). A screen that's well served by Screen, Button, Card, ListItem, TextField, Toggle, EmptyState, Stat, Badge and the rest of "@/kit" needs no new component at all. For a small, simple app this can be 0-3 files; for a larger one with real shared patterns (a custom TopBar, a grouped-list row style, a domain card), up to around 6-8. Each file has named exports, typed props, and styles from createStyles. Keep each file focused and compact. Build tappable components on PressableScale and moving ones on the "@/motion" primitives (a SegmentedControl can wrap SegmentedTabs) so every screen inherits the motion.
 Don't write screens, app/index.tsx, theme or backend files: they exist already.`
 
 export function shellPrompt(plan: AppPlan, theme: AppTheme) {
