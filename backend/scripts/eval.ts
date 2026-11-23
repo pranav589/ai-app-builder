@@ -39,6 +39,7 @@ import { parseReply } from "@/lib/verify/protocol"
 import type { GateName, Workspace } from "@app/shared/verify/types"
 import { isAppOwned } from "@app/shared/verify/ownership"
 import { workspaceFromDoc } from "@/lib/verify/workspace"
+import { withCurrentPlatform } from "@/lib/agent/verify-glue"
 import { legacyCheck } from "../eval/legacy-check"
 import { CEILING_TASKS, TASKS, type Task } from "../eval/tasks"
 
@@ -72,7 +73,8 @@ if (!manifestOrNull) {
   process.exit(1)
 }
 const manifest: AppManifest = manifestOrNull
-const base: Workspace = workspaceFromDoc({ ...fixture.doc, manifest })
+// Same kit resync the real edit path applies (verified-edit.ts), so tasks can use @/kit and @/motion as the prompt says.
+const base: Workspace = withCurrentPlatform(workspaceFromDoc({ ...fixture.doc, manifest }))
 const ready = fixture.doc.screens.filter((s) => s.state === "ready" && s.code && s.path)
 const appFiles = Object.entries(base.files)
   .filter(([p]) => isAppOwned(p))

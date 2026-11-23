@@ -17,6 +17,65 @@ const FORBIDDEN: { re: RegExp; code: string; message: string }[] = [
 
 const lineOf = (code: string, index: number) => code.slice(0, index).split("\n").length
 
+// Reanimated hooks whose callback re-runs when shared values change, with the
+// argument count that includes the dependency array. On device the worklets
+// Babel plugin finds the shared values a callback reads; the preview compiles
+// with Sucrase, so on web Reanimated only learns them from the dependency
+// array, and without one the animation silently freezes after its first frame.
+const REACTIVE_HOOKS: Record<string, number> = { useAnimatedStyle: 2, useAnimatedProps: 2, useDerivedValue: 2, useAnimatedReaction: 3 }
+const LAYOUT_PROP = /\b(width|height|top|left|right|bottom|margin\w*|padding\w*)\s*:/
+
+/** The top-level arguments of the call whose "(" is at `open`, as source text (comments already stripped). */
+function callArgs(code: string, open: number): string[] {
+  const args: string[] = []
+  let depth = 0
+  let start = open + 1
+  for (let i = open; i < code.length; i++) {
+    const c = code[i]
+    if (c === '"' || c === "'" || c === "`") {
+      for (i++; i < code.length && code[i] !== c; i++) if (code[i] === "\\") i++
+    } else if (c === "(" || c === "[" || c === "{") depth++
+    else if (c === ")" || c === "]" || c === "}") {
+      if (--depth === 0) {
+        args.push(code.slice(start, i))
+        break
+      }
+    } else if (c === "," && depth === 1) {
+      args.push(code.slice(start, i))
+      start = i + 1
+    }
+  }
+  return args.map((a) => a.trim()).filter(Boolean)
+}
+
+function reanimatedDiagnostics(file: string, body: string): Diagnostic[] {
+  const out: Diagnostic[] = []
+  for (const m of body.matchAll(new RegExp(`\\b(${Object.keys(REACTIVE_HOOKS).join("|")})\\s*(?:<[^>()]*>)?\\s*\\(`, "g"))) {
+    const hook = m[1]
+    const args = callArgs(body, m.index + m[0].length - 1)
+    const line = lineOf(body, m.index)
+    if (args.length < REACTIVE_HOOKS[hook])
+      out.push({
+        gate: "policy",
+        code: "reanimated_deps",
+        severity: "error",
+        file,
+        line,
+        message: `${hook} needs a dependency array as its last argument listing the shared values and props it reads, e.g. ${hook === "useAnimatedReaction" ? "useAnimatedReaction(() => progress.value, (v) => { ... }, [progress])" : `${hook}(() => ({ opacity: progress.value }), [progress])`}. Without it the animation freezes in the web preview.`,
+      })
+    if (hook === "useAnimatedStyle" && args[0] && LAYOUT_PROP.test(args[0]))
+      out.push({
+        gate: "policy",
+        code: "animated_layout_prop",
+        severity: "warning",
+        file,
+        line,
+        message: "Animate transform and opacity (translateX/Y, scale) rather than width/height/top/margin/padding: layout props re-run layout on every frame.",
+      })
+  }
+  return out
+}
+
 /**
  * Only checks the files this change touched (`changed`); a project built
  * before this gate existed can have unrelated files that would never pass
@@ -70,6 +129,7 @@ export function policyGate(ws: Workspace, changed?: string[], _key?: string, bas
       const m = f.re.exec(body)
       if (m) diagnostics.push({ gate: "policy", code: f.code, severity: "error", file, line: lineOf(body, m.index), message: f.message })
     }
+    diagnostics.push(...reanimatedDiagnostics(file, body))
 
     const literal = [...body.matchAll(/["'`](#[0-9a-fA-F]{3,8})["'`]|(rgba?\([^)]*\))/g)].filter(
       (m) => !/#(fff|ffffff|000|000000)\b/i.test(m[1] ?? "") && !/rgba?\(\s*(0\s*,\s*0\s*,\s*0|255\s*,\s*255\s*,\s*255)\b/.test(m[2] ?? "")

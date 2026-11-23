@@ -82,6 +82,7 @@ The architecture is cleanly separated into three npm workspaces:
 | Verified-code gateway | `backend/src/services/verify/**` | `ChangeSet` application, gates, bounded repair, commit |
 | App manifest | `shared/manifest/**` | Zod-validated structural model (screens/nav/collections) compiled deterministically into layout/nav/type files |
 | Platform kit | `backend/src/services/app-project/kit.ts` | Typed component vocabulary (`@/kit`) the AI is restricted to |
+| Motion kit | `backend/src/services/app-project/motion.ts`, `platform-kits.ts` | Animation primitives (`@/motion`) on Reanimated 4 + gesture-handler 3, scaled to a per-app motion level |
 | Preview runtime | `frontend/preview-runtime/` + `shared/preview/**` | Sandboxed iframe runtime: file-based router, RN/Expo shims, element inspector |
 | Device preview | `backend/src/services/device/**` | Exports a project as a real Expo project, runs a local Metro lane, QR-to-Expo-Go |
 | Project Export (ZIP & GitHub) | `backend/src/services/github/**`, `backend/src/services/app-project/zip-export.ts` | Exports runnable Expo project as ZIP or pushes directly to GitHub with real-time SSE progress |
@@ -185,6 +186,21 @@ Supporting pieces:
 - **`lib/app-project/kit.ts`** (`@/kit`) — a constrained, typed component vocabulary
   (Screen/Stack/Text/Button/Card/etc.) the model is steered toward, instead of raw
   React Native primitives, to reduce the space of mistakes it can make.
+- **`lib/app-project/motion.ts`** (`@/motion`) — the motion kit: `Reveal`, `Stagger`,
+  `PressableScale`, `AnimatedNumber`, `Skeleton`, `ParallaxScroll`, `SwipeRow`, `Sheet`,
+  `SegmentedTabs` and `useMotion()`, built on Reanimated 4 and gesture-handler 3. Its
+  springs, distances and timing come from the app's **motion level** (`subtle` /
+  `expressive` / `bold`), which the foundation step picks into `ThemePackage.motion`
+  and `platformFiles` writes to `motion/level.ts`; everything honours the system
+  reduce-motion setting. `@/kit`'s `Button`, `Card` and `ProgressBar` are built on it.
+  `lib/app-project/platform-kits.ts` is the one place both kits are added to a build
+  and resynced into older projects on every edit (`platformKitUpdates`).
+- **Reanimated in the preview** — device builds get the worklets Babel plugin from
+  `babel-preset-expo` automatically; the preview compiles with Sucrase instead, where
+  Reanimated only subscribes to the shared values listed in a hook's dependency array.
+  So the policy gate rejects `useAnimatedStyle` / `useDerivedValue` /
+  `useAnimatedProps` / `useAnimatedReaction` calls without one (`reanimated_deps`):
+  otherwise the animation would freeze silently in the preview, past every other gate.
 - **`lib/verify/router.ts`** — a fast classifier that skips full planning for small
   edits (e.g. "make the button blue"), routing straight to a targeted `ChangeSet`.
 - **`lib/verify/codemod.ts`** — canvas tap-to-edit applies AST-level codemods with
@@ -216,8 +232,10 @@ flowchart LR
    elements via a `postMessage` protocol (`lib/preview/protocol.ts`). The iframe side
    runs `preview-runtime/`, a single bundled file (`public/preview/runtime.js`, built
    by `scripts/build-preview.mjs`) that includes an Expo-Router-like file-based router,
-   React Native/Expo API shims, and a dev JSX factory that stamps every element with a
-   `data-eid` for the inspector and codemod targeting.
+   React Native/Expo API shims, the real web builds of `react-native-reanimated`,
+   `react-native-worklets` and `react-native-gesture-handler` (resolved with `.web.js`
+   first and `react-native` aliased to `react-native-web`), and a dev JSX factory that
+   stamps every element with a `data-eid` for the inspector and codemod targeting.
 2. **Render gate** — the *same* preview bundle is mounted headless in jsdom as part of
    the verified-code pipeline (§4), so "does it render" is checked with the real
    runtime, not a mock.

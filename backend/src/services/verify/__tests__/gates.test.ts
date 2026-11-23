@@ -82,6 +82,45 @@ describe("policyGate", () => {
     expect(r.ok).toBe(true)
   })
 
+  describe("Reanimated dependency arrays", () => {
+    const screen = (hook: string) =>
+      `import Animated, { useSharedValue, useAnimatedStyle, useDerivedValue, useAnimatedReaction } from "react-native-reanimated"\nexport default function Home() {\n  const p = useSharedValue(0)\n  ${hook}\n  return null\n}`
+
+    it("blocks useAnimatedStyle without a dependency array, at its line", () => {
+      const r = policyGate(ws({ "app/home.tsx": screen(`const s = useAnimatedStyle(() => ({ opacity: p.value, transform: [{ scale: p.value }] }))`) }))
+      const d = r.diagnostics.find((d) => d.code === "reanimated_deps")
+      expect(r.ok).toBe(false)
+      expect(d?.line).toBe(4)
+      expect(d?.message).toContain("useAnimatedStyle")
+    })
+
+    it("passes hooks that list their dependencies, including multi-line and generic calls", () => {
+      const hooks = [
+        `const s = useAnimatedStyle(() => ({ opacity: p.value }), [p])`,
+        `const s = useAnimatedStyle(\n    () => {\n      return { opacity: p.value }\n    },\n    [p],\n  )`,
+        `const d = useDerivedValue<number>(() => p.value * 2, [p])`,
+        `useAnimatedReaction(() => p.value, (v) => { console.log("a, b", v) }, [p])`,
+      ]
+      for (const h of hooks) expect(policyGate(ws({ "app/home.tsx": screen(h) })).ok, h).toBe(true)
+    })
+
+    it("counts a trailing comma as no argument", () => {
+      const r = policyGate(ws({ "app/home.tsx": screen(`const s = useAnimatedStyle(() => ({ opacity: p.value }),)`) }))
+      expect(r.diagnostics.some((d) => d.code === "reanimated_deps")).toBe(true)
+    })
+
+    it("blocks useAnimatedReaction with only its two callbacks", () => {
+      const r = policyGate(ws({ "app/home.tsx": screen(`useAnimatedReaction(() => p.value, (v) => {})`) }))
+      expect(r.diagnostics.some((d) => d.code === "reanimated_deps")).toBe(true)
+    })
+
+    it("warns (but doesn't block) on animating layout props", () => {
+      const r = policyGate(ws({ "app/home.tsx": screen(`const s = useAnimatedStyle(() => ({ width: p.value * 100 }), [p])`) }))
+      expect(r.diagnostics.find((d) => d.code === "animated_layout_prop")?.severity).toBe("warning")
+      expect(r.ok).toBe(true)
+    })
+  })
+
   it("ignores violations in files this change didn't touch", () => {
     const tooLong = "export default function Old() {\n" + "  const x = 1\n".repeat(300) + "}\n"
     const edited = `import { View } from "react-native"\nexport default function Home() {\n  return <View />\n}\n`

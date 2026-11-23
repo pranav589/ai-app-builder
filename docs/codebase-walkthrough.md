@@ -183,7 +183,7 @@ flowchart TD
 | `lib/verify/gates/render.ts` | Gate 4: headless **jsdom mount of the actual preview bundle** — not a mock, the same code that renders in the browser |
 | `lib/verify/gates/bundle.ts` | A Metro-bundle-reachability gate, written but currently unused (would matter for a future "publish" feature) |
 | `lib/verify/run.ts` | `runChange` — the state machine: write → verify → repair (≤3 rounds) → commit |
-| `lib/agent/generation-guard.ts` | If a regeneration attempt fails entirely, keeps the previously-working version of that screen instead of leaving it broken |
+| `lib/agent/generation-guard.ts` | If a regeneration attempt fails entirely, keeps the previously-working version of that screen instead of leaving it broken. Also decides which extra files a screen keeps: new parts it was split into (`components/<screen-id>/…`, `lib/` helpers) and, on a rebuild, side files earlier builds and edits stored |
 | `lib/agent/repair-cap.ts` | Caps how many repair attempts a single runtime crash can trigger, project-wide |
 | `lib/versions/store.ts` | `commitSnapshot` — on success, writes a new `app_snapshots` row and updates `projects.preview_screens` / `current_version` |
 
@@ -235,6 +235,8 @@ flowchart TD
 | `lib/manifest/migrate.ts` | `fromLegacy` / `ensureManifest` / `syncManifest` — builds/refreshes a manifest from the older `AppPlan` + `AppDoc` shape |
 | `lib/manifest/compile.ts` | `compileManifest` — deterministically **generates** `app/_layout.tsx`, the tabs layout, `lib/nav.ts`, `data/types.ts` from the manifest. This output is never AI-written. |
 | `lib/app-project/kit.ts` | `@/kit` — the typed component library the AI is steered toward: `Screen`, `Stack`, `Text`, `Button`, `Card`, etc. |
+| `lib/app-project/motion.ts` | `@/motion` — the motion kit (`Reveal`, `Stagger`, `PressableScale`, `AnimatedNumber`, `Skeleton`, `ParallaxScroll`, `SwipeRow`, `Sheet`, `SegmentedTabs`, `useMotion`) and the per-project `motion/level.ts` file |
+| `lib/app-project/platform-kits.ts` | `PLATFORM_KIT_FILES` (both kits' sources), `platformKitUpdates` (resyncs them into older projects on every edit), and the props references the prompts embed |
 | `lib/app-project/icons.ts` | Shared icon vocabulary so the AI picks from a known set instead of guessing icon names |
 | `lib/app-project/templates.ts` | Boilerplate platform files (theme, backend config) written into every new project |
 | `lib/app-project/project.ts` | `compileForPreview`, `checkFile`, `ALLOWED_PACKAGES`, `autoImport` — browser-side compile step and import allow-list |
@@ -1065,7 +1067,13 @@ A fixed rule list, in order:
 3. **Every `app/*` file needs a default export.**
 4. **Forbidden APIs** — `fetch(`, `XMLHttpRequest`/`WebSocket`, `eval(`/
    `new Function(` are blocked outright (checked with comments stripped first).
-5. **Hardcoded colors** — more than 2 hex/rgba literals (excluding pure black/white)
+5. **Reanimated dependency arrays** — `useAnimatedStyle`, `useDerivedValue`,
+   `useAnimatedProps` and `useAnimatedReaction` must end with a dependency array
+   (`reanimated_deps`). On device the worklets Babel plugin finds the shared values a
+   callback reads; the Sucrase-compiled preview can't, so without the array the
+   animation freezes after its first frame. Animating layout props (width, height,
+   margins…) inside `useAnimatedStyle` is a *warning* (`animated_layout_prop`).
+6. **Hardcoded colors** — more than 2 hex/rgba literals (excluding pure black/white)
    is a *warning*, not a blocker, nudging the model toward theme tokens without
    failing the build over it.
 
@@ -1305,7 +1313,17 @@ scratch on every single screen.
 `Button` (`variant`: primary/secondary/ghost/danger), `IconButton`, `ListItem`,
 `Stat`, `ProgressBar`, `TextField`, `Toggle`, `EmptyState`, `Badge`, `Icon`,
 `Section`, `Divider`. Every one of them reads from `useTheme()` — *none* of them
-accepts a raw color prop as their primary styling mechanism.
+accepts a raw color prop as their primary styling mechanism. `Button` and a tappable
+`Card` spring on press and `ProgressBar` springs to its value, through the motion kit.
+
+**Its sibling, `@/motion`** (`lib/app-project/motion.ts`), does the same for
+animation: `Reveal` / `Stagger` (entrances, staggered list rows), `PressableScale`,
+`AnimatedNumber` (count-ups), `Skeleton`, `ParallaxScroll` (stretchy hero header with a
+fading title bar), `SwipeRow` (swipe-to-reveal actions), `Sheet` (draggable bottom
+sheet), `SegmentedTabs` (sliding selection pill) and `useMotion()` for raw Reanimated
+code. All of them read the app's motion level from `motion/level.ts` (picked by the
+foundation step: `subtle`, `expressive` or `bold`) and respect reduce-motion, so the
+same screen code feels calm in a finance app and playful in a kids' app.
 
 **What AI-generated screen code actually looks like**, using only this vocabulary
 (the real "Recipes" list screen for the example app used throughout this doc):

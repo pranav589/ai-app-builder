@@ -50,6 +50,11 @@ const options = {
   // real preview iframe and in the render gate's jsdom alike, since both load this
   // same built file.
   define: { "process.env.NODE_ENV": '"production"', __DEV__: "false", global: "globalThis" },
+  // Reanimated and gesture-handler import "react-native" and ship *.web.js
+  // variants (gesture-handler's DOM event handling lives only there); without
+  // these they'd resolve to native code that can't run in a browser.
+  alias: { "react-native": "react-native-web" },
+  resolveExtensions: [".web.tsx", ".web.ts", ".web.js", ".tsx", ".ts", ".jsx", ".js", ".json"],
   loader: { ".json": "json" },
   logLevel: "info",
 }

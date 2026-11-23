@@ -3,10 +3,11 @@ import { db, deviceBuilds, projects } from "@/db"
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
 import { DeviceDepsMissingError } from "./export"
 import { deviceLaneStatus, MetroPortBusyError, startDeviceLane, stopDeviceLane } from "./lane"
-import { cancelDeviceBuild, startDeviceBuild } from "./build"
+import { cancelDeviceBuild, isDeviceBuildRunning, startDeviceBuild } from "./build"
 import { lanIPv4 } from "./lan"
 import { buildDeviceManifest, type DeviceManifestPlatform } from "./manifest"
 import { workspaceFromDoc } from "../verify/workspace"
+import { withCurrentPlatform } from "../agent/verify-glue"
 
 export function publicDeviceHost(reqHost?: string, backendPort = 4000): string {
   if (process.env.NODE_ENV === "production") return reqHost || "localhost:4000"
@@ -38,7 +39,7 @@ export async function startMetroLane(userId: string, projectId: string) {
     .limit(1)
   if (!project) return null
 
-  const workspace = workspaceFromDoc(readAppDoc(project.previewScreens))
+  const workspace = withCurrentPlatform(workspaceFromDoc(readAppDoc(project.previewScreens)))
   try {
     return await startDeviceLane(projectId, workspace.files)
   } catch (e) {
@@ -79,9 +80,11 @@ export async function getDeviceBuildStatus(userId: string, projectId: string, re
   if (!build) return { status: "none" as const }
 
   const host = publicDeviceHost(reqHost, backendPort)
+  // A row left "building" by a server restart has no process to finish it.
+  const orphaned = build.status === "building" && !isDeviceBuildRunning(projectId)
   return {
-    status: build.status,
-    error: build.error,
+    status: orphaned ? ("failed" as const) : build.status,
+    error: orphaned ? "The build was interrupted because the server restarted. Build again." : build.error,
     stale: build.status === "ready" && build.builtVersion !== project.currentVersion,
     manifestUrl: build.status === "ready" ? `exp://${host}/api/device/${projectId}/manifest` : null,
   }
@@ -95,7 +98,7 @@ export async function triggerDeviceBuild(userId: string, projectId: string, reqH
     .limit(1)
   if (!project) return null
 
-  const workspace = workspaceFromDoc(readAppDoc(project.previewScreens))
+  const workspace = withCurrentPlatform(workspaceFromDoc(readAppDoc(project.previewScreens)))
   try {
     await startDeviceBuild({
       projectId,

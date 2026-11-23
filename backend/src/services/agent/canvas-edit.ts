@@ -1,5 +1,3 @@
-
-import { KIT_PATH, KIT_SOURCE } from "@/lib/app-project/kit"
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
 import { ensureManifest } from "@app/shared/manifest/migrate"
 import type { ElementEdit } from "@app/shared/preview/protocol"
@@ -9,7 +7,7 @@ import { formatDiagnostics, verifyChange } from "@/lib/verify/pipeline"
 import { docFromWorkspace, workspaceFromDoc } from "@/lib/verify/workspace"
 import { commitSnapshot } from "@/lib/versions/store"
 import { latestPlan, loadProject } from "./history"
-import { withCurrentKit } from "./verify-glue"
+import { withCurrentPlatform } from "./verify-glue"
 
 /** An edit the codemod couldn't place, with why. The rest of the batch is still saved. */
 export type CanvasEditFailure = { eid: string; error: string }
@@ -32,16 +30,15 @@ export async function applyCanvasEdits(projectId: string, edits: ElementEdit[], 
   const doc = readAppDoc(project.previewScreens)
   const manifest = ensureManifest(doc, await latestPlan(projectId))
   if (!manifest) return { error: "This project isn't built yet.", failed: [] }
-  // kit/index.tsx is a pure constant (unlike theme/backend, nothing about it
-  // is per-project), so a project built before a kit fix landed can safely
-  // pick it up here instead of waiting for a full rebuild. Reported back as
-  // `extraFiles` (even when the edits fail) so the running preview picks it
-  // up right away: an eid pointing inside kit/index.tsx, from a stale copy
-  // that didn't forward data-eid to its own elements, is exactly the bug this
-  // resync fixes for the *next* tap.
-  const stale = doc.files?.[KIT_PATH] !== KIT_SOURCE
-  const extraFiles = stale ? { [KIT_PATH]: KIT_SOURCE } : undefined
-  const ws = withCurrentKit(workspaceFromDoc({ ...doc, manifest }))
+  // Platform files are resynced here too (see withCurrentPlatform), and the
+  // ones that changed are reported back as `extraFiles` (even when the edits
+  // fail) so the running preview picks them up right away: an eid pointing
+  // inside kit/index.tsx, from a stale copy that didn't forward data-eid to
+  // its own elements, is exactly the bug this resync fixes for the *next* tap.
+  const stored = workspaceFromDoc({ ...doc, manifest })
+  const ws = withCurrentPlatform(stored)
+  const updates = Object.fromEntries(Object.entries(ws.files).filter(([p, code]) => stored.files[p] !== code))
+  const extraFiles = Object.keys(updates).length ? updates : undefined
 
   // Edits to the same file apply one after another. The codemod never adds
   // or removes lines, so the later edits' eids still point at their elements.

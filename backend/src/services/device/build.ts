@@ -107,6 +107,9 @@ function runExportCli(cwd: string, outDir: string, run: Run): Promise<void> {
  * `currentVersion` is `projects.currentVersion` at the moment of the request, stored
  * once the build is ready so the UI can tell "built" from "built, but now stale".
  */
+/** Whether this process is running a build for `projectId` right now (builds never outlive the process that started them). */
+export const isDeviceBuildRunning = (projectId: string) => runs.has(projectId)
+
 export async function startDeviceBuild(opts: {
   projectId: string
   userId: string
@@ -115,8 +118,11 @@ export async function startDeviceBuild(opts: {
 }): Promise<void> {
   const { projectId, userId, files, currentVersion } = opts
 
-  const [existing] = await db.select({ status: deviceBuilds.status }).from(deviceBuilds).where(eq(deviceBuilds.projectId, projectId)).limit(1)
-  if (existing?.status === "building") return
+  // Only a build this process is running counts as in progress. A row still
+  // saying "building" with no run here was orphaned by a server restart (dev's
+  // `node --watch` restarts on every backend edit): no process will ever
+  // finish it, so it must not block a new build.
+  if (isDeviceBuildRunning(projectId)) return
 
   await db
     .insert(deviceBuilds)

@@ -75,19 +75,25 @@ function rootLayoutFile(m: AppManifest): string {
   const modals = Object.keys(m.screens)
     .filter((id) => m.screens[id].presentation === "modal")
     .sort()
+  // GestureHandlerRootView: on a device, gesture-handler only recognizes
+  // gestures (@/motion's SwipeRow and Sheet, app code's usePanGesture) under
+  // one, and a production bundle ignores them silently without it.
   return `${GENERATED_HEADER}import { Stack } from "expo-router"
+import { GestureHandlerRootView } from "react-native-gesture-handler"
 import { SafeAreaProvider } from "react-native-safe-area-context"
 import { ThemeProvider } from "@/theme"
 
 export default function RootLayout() {
   return (
-    <ThemeProvider>
-      <SafeAreaProvider>
-        <Stack screenOptions={{ headerShown: false }}>
-${modals.map((id) => `          <Stack.Screen name="${id}" options={{ presentation: "modal" }} />`).join("\n")}
-        </Stack>
-      </SafeAreaProvider>
-    </ThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider>
+        <SafeAreaProvider>
+          <Stack screenOptions={{ headerShown: false }}>
+${modals.map((id) => `            <Stack.Screen name="${id}" options={{ presentation: "modal" }} />`).join("\n")}
+          </Stack>
+        </SafeAreaProvider>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   )
 }
 `

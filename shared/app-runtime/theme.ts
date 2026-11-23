@@ -35,11 +35,19 @@ export type AppTheme = {
   radius: ThemeRadius
 }
 
+export const MOTION_LEVELS = ["subtle", "expressive", "bold"] as const
+export type MotionLevel = (typeof MOTION_LEVELS)[number]
+
+/** A model's motion level pick, or "expressive" (the consumer-app default) when it's missing or invalid. */
+export const asMotionLevel = (v: unknown): MotionLevel => (MOTION_LEVELS.find((l) => l === v) ?? "expressive")
+
 export type ThemePackage = {
   themes: AppTheme[]
   activeId: string
   /** Hash of the design direction the package was made from. */
   hash: string
+  /** How much motion the app uses, picked with its design. Packages made before motion levels existed have none: "subtle". */
+  motion?: MotionLevel
 }
 
 /** The theme a package's `activeId` points at, falling back to its first theme. */

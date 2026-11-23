@@ -29,8 +29,10 @@ export const KIT_SOURCE = `// Platform module: the screen component kit. Screens
 import * as React from "react"
 import { Pressable, ScrollView, Switch, Text as RNText, TextInput, View } from "react-native"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated"
 import { Ionicons } from "@expo/vector-icons"
 import { useTheme, type Theme } from "@/theme"
+import { PressableScale, useMotion } from "@/motion"
 
 // #region props
 export type IconName = React.ComponentProps<typeof Ionicons>["name"]
@@ -120,7 +122,7 @@ export function Text({ children, variant = "body", tone, align = "left", numberO
 export function Card({ children, onPress, padding = "lg", ...rest }: CardProps) {
   const t = useTheme()
   const style = { backgroundColor: t.colors.surface, borderRadius: t.radius.lg, borderWidth: 1, borderColor: t.colors.border, padding: t.spacing[padding], gap: t.spacing.sm }
-  if (onPress) return <Pressable {...rest} accessibilityRole="button" onPress={onPress} style={style}>{children}</Pressable>
+  if (onPress) return <PressableScale {...rest} haptic={false} onPress={onPress} style={style}>{children}</PressableScale>
   return <View {...rest} style={style}>{children}</View>
 }
 
@@ -129,15 +131,14 @@ export function Button({ label, onPress, variant = "primary", icon, disabled = f
   const bg = variant === "primary" ? t.colors.primary : variant === "danger" ? t.colors.danger : variant === "secondary" ? t.colors.surface : "transparent"
   const fg = variant === "primary" || variant === "danger" ? t.colors.onPrimary : t.colors.primary
   return (
-    <Pressable
+    <PressableScale
       {...rest}
-      accessibilityRole="button"
+      haptic={false}
       accessibilityLabel={label}
       disabled={disabled}
       onPress={onPress}
       style={{
         backgroundColor: bg,
-        opacity: disabled ? 0.5 : 1,
         borderRadius: t.radius.md,
         paddingVertical: t.spacing.md,
         paddingHorizontal: t.spacing.lg,
@@ -152,7 +153,7 @@ export function Button({ label, onPress, variant = "primary", icon, disabled = f
     >
       {icon ? <Ionicons name={icon} size={16} color={fg} /> : null}
       <RNText style={{ color: fg, fontSize: 16, fontWeight: "600" }}>{label}</RNText>
-    </Pressable>
+    </PressableScale>
   )
 }
 
@@ -193,12 +194,21 @@ export function Stat({ label, value, caption, size = "sm", tone, ...rest }: Stat
   )
 }
 
+// The fill slides in with translateX over the measured track width rather
+// than animating its width, so it never re-runs layout per frame.
 export function ProgressBar({ value, tone = "primary", ...rest }: ProgressBarProps) {
   const t = useTheme()
-  const pct = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0)) * 100
+  const m = useMotion()
+  const pct = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0))
+  const [width, setWidth] = React.useState(0)
+  const p = useSharedValue(m.reduced ? pct : 0)
+  React.useEffect(() => {
+    p.set(m.reduced ? pct : withSpring(pct, m.spring))
+  }, [p, pct, m.reduced, m.spring])
+  const fill = useAnimatedStyle(() => ({ transform: [{ translateX: (Math.min(1, p.get()) - 1) * width }] }), [p, width])
   return (
-    <View {...rest} accessibilityRole="progressbar" style={{ height: 8, borderRadius: t.radius.pill, backgroundColor: t.colors.border, overflow: "hidden" }}>
-      <View style={{ width: pct + "%", height: 8, backgroundColor: toneColor(tone, t.colors) }} />
+    <View {...rest} accessibilityRole="progressbar" onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={{ height: 8, borderRadius: t.radius.pill, backgroundColor: t.colors.border, overflow: "hidden" }}>
+      <Animated.View style={[{ height: 8, borderRadius: t.radius.pill, backgroundColor: toneColor(tone, t.colors), opacity: width ? 1 : 0 }, fill]} />
     </View>
   )
 }
@@ -279,13 +289,3 @@ export function Divider({ ...rest }: DividerProps) {
   return <View {...rest} style={{ height: 1, backgroundColor: t.colors.border }} />
 }
 `
-
-/** The "// #region props" .. "// #endregion props" slice of KIT_SOURCE, given to the coder verbatim as the kit's prop reference (no need to repeat implementation details in the prompt). */
-export const KIT_PROPS_REFERENCE = (() => {
-  const m = /\/\/ #region props\n([\s\S]*?)\/\/ #endregion props/.exec(KIT_SOURCE)
-  if (!m) throw new Error("KIT_SOURCE has no // #region props .. // #endregion props block")
-  return m[1].trimEnd()
-})()
-
-/** Every named export KIT_SOURCE defines (components and types), for projectExports-style listings and prompts. */
-export const KIT_EXPORTS = [...KIT_SOURCE.matchAll(/^export\s+(?:function|type|const)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1])

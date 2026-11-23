@@ -12,7 +12,7 @@ import { commitSnapshot } from "@/lib/versions/store"
 import { latestPlan, loadProject, saveMessage, setPhase } from "./history"
 import type { EditRequest } from "./protocol"
 import type { LiveRun } from "./registry"
-import { emitAttempts, verifyDebugFail, withCurrentKit } from "./verify-glue"
+import { emitAttempts, verifyDebugFail, withCurrentPlatform } from "./verify-glue"
 
 /**
  * The edit path: builds a Workspace from the AppDoc, runs the change
@@ -31,7 +31,7 @@ export async function runVerifiedEdit(run: LiveRun, projectId: string, edit: Edi
   const ready = doc.screens.filter((s) => s.state === "ready" && s.code && s.path)
   const manifest = ensureManifest(doc, await latestPlan(projectId))
   if (!manifest) return { needsPlan: true }
-  const ws = withCurrentKit(workspaceFromDoc({ ...doc, manifest }))
+  const ws = withCurrentPlatform(workspaceFromDoc({ ...doc, manifest }))
 
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "")
   const targetPaths = new Set<string>()

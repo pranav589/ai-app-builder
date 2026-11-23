@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
-import { DeviceDepsMissingError, exportExpoProject } from "@/lib/device/export"
+import { DeviceDepsMissingError, exportExpoProject, sharedDepsPackageJson } from "@/lib/device/export"
 
 let tmp: string
 
@@ -15,14 +15,26 @@ afterEach(() => {
   fs.rmSync(tmp, { force: true, recursive: true })
 })
 
+/** A fake shared install, as device:deps leaves it: node_modules plus the package.json it installed from. */
+function installSharedDeps(packageJson = sharedDepsPackageJson()) {
+  const dir = path.join(tmp, "_deps", "sdk-58")
+  fs.mkdirSync(path.join(dir, "node_modules"), { recursive: true })
+  fs.writeFileSync(path.join(dir, "package.json"), packageJson)
+  return path.join(dir, "node_modules")
+}
+
 describe("exportExpoProject", () => {
   it("refuses to export before the shared deps are installed", () => {
     expect(() => exportExpoProject("proj1", { "app/home.tsx": "export default function Home() {}\n" }, tmp)).toThrow(DeviceDepsMissingError)
   })
 
+  it("refuses to export against a shared install made from an older package list", () => {
+    installSharedDeps(`{ "dependencies": { "expo": "~58.0.25" } }`)
+    expect(() => exportExpoProject("proj1", { "app/home.tsx": "export default function Home() {}\n" }, tmp)).toThrow(/out of date/)
+  })
+
   it("writes every file plus babel/metro/.gitignore, and links node_modules to the shared install", () => {
-    const sdkNodeModules = path.join(tmp, "_deps", "sdk-58", "node_modules")
-    fs.mkdirSync(sdkNodeModules, { recursive: true })
+    const sdkNodeModules = installSharedDeps()
     fs.writeFileSync(path.join(sdkNodeModules, "marker.txt"), "shared\n")
 
     const outDir = exportExpoProject(
@@ -40,7 +52,7 @@ describe("exportExpoProject", () => {
   })
 
   it("gives each project its own Metro cache, so a shared node_modules can't serve another project's routes", () => {
-    fs.mkdirSync(path.join(tmp, "_deps", "sdk-58", "node_modules"), { recursive: true })
+    installSharedDeps()
     const a = exportExpoProject("proj-a", { "app/home.tsx": "" }, tmp)
     const b = exportExpoProject("proj-b", { "app/home.tsx": "" }, tmp)
     expect(fs.readFileSync(path.join(a, "metro.config.js"), "utf8")).toContain(`config.cacheVersion = "proj-a"`)
@@ -48,7 +60,7 @@ describe("exportExpoProject", () => {
   })
 
   it("drops a file from a previous export that the current workspace no longer has", () => {
-    fs.mkdirSync(path.join(tmp, "_deps", "sdk-58", "node_modules"), { recursive: true })
+    installSharedDeps()
     const first = exportExpoProject("proj1", { "app/old-screen.tsx": "export default function Old() {}\n" }, tmp)
     expect(fs.existsSync(path.join(first, "app/old-screen.tsx"))).toBe(true)
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { regenOutcome } from "@/lib/agent/generation-guard"
+import { regenOutcome, screenSideFiles, storedSideFiles } from "@/lib/agent/generation-guard"
 import type { GeneratedScreen } from "@app/shared/agent/types"
 
 const readyScreen: GeneratedScreen = { id: "home", name: "Home", state: "ready", path: "app/home.tsx", code: "old code" }
@@ -36,5 +36,27 @@ describe("regenOutcome", () => {
     const out = regenOutcome(errored, "app/home.tsx", "", "boom")
     expect(out.failed).toBe(true)
     expect(out.kept).toBe(false)
+  })
+})
+
+describe("screenSideFiles", () => {
+  const before = { "components/Button.tsx": "shell button", "theme/index.tsx": "theme" }
+
+  it("keeps the new component files a screen was split into, which it imports", () => {
+    const after = { ...before, "app/home.tsx": "screen", "components/home/HabitRow.tsx": "row", "lib/streaks.ts": "helper" }
+    const out = screenSideFiles("app/home.tsx", before, after, ["app/home.tsx", "components/home/HabitRow.tsx", "lib/streaks.ts"])
+    expect(out).toEqual({ "components/home/HabitRow.tsx": "row", "lib/streaks.ts": "helper" })
+  })
+
+  it("drops edits to files that already existed, other screens, and platform files", () => {
+    const after = { ...before, "components/Button.tsx": "changed", "app/other.tsx": "other", "theme/index.tsx": "changed" }
+    expect(screenSideFiles("app/home.tsx", before, after, ["components/Button.tsx", "app/other.tsx", "theme/index.tsx"])).toEqual({})
+  })
+})
+
+describe("storedSideFiles", () => {
+  it("keeps helper files through a rebuild, but not screens, shell or platform files", () => {
+    const files = { "components/home/HabitRow.tsx": "row", "lib/streaks.ts": "helper", "components/Button.tsx": "shell", "app/home.tsx": "screen", "kit/index.tsx": "kit" }
+    expect(storedSideFiles(files, (p) => /^components\/[\w-]+\.tsx?$/.test(p))).toEqual({ "components/home/HabitRow.tsx": "row", "lib/streaks.ts": "helper" })
   })
 })

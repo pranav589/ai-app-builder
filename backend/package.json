@@ -13,7 +13,8 @@
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:sql": "node --env-file=.env scripts/migrate-sql.mjs"
+    "db:sql": "node --env-file=.env scripts/migrate-sql.mjs",
+    "device:deps": "node --import tsx scripts/device-deps.ts"
   },
   "dependencies": {
     "@app/shared": "*",

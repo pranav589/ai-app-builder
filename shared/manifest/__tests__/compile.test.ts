@@ -41,6 +41,12 @@ describe("compileManifest", () => {
     expect(code).not.toContain("home")
   })
 
+  it("app/_layout.tsx wraps the app in GestureHandlerRootView, without which a device build ignores every gesture", () => {
+    const code = out["app/_layout.tsx"]
+    expect(code).toContain('import { GestureHandlerRootView } from "react-native-gesture-handler"')
+    expect(code.indexOf("<GestureHandlerRootView")).toBeLessThan(code.indexOf("<ThemeProvider>"))
+  })
+
   it("app/(tabs)/_layout.tsx lists tabs in manifest order with their icons", () => {
     const code = out["app/(tabs)/_layout.tsx"]
     const homeIdx = code.indexOf('name="home"')

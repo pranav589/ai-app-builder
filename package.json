@@ -21,6 +21,7 @@
     "db:push": "npm --workspace=backend run db:push",
     "db:studio": "npm --workspace=backend run db:studio",
     "db:sql": "npm --workspace=backend run db:sql",
+    "device:deps": "npm --workspace=backend run device:deps",
     "build:preview": "npm --workspace=frontend run build:preview",
     "watch:preview": "npm --workspace=frontend run watch:preview"
   },

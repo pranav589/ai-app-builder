@@ -1,18 +1,22 @@
-
-import { KIT_PATH, KIT_SOURCE } from "@/lib/app-project/kit"
+import { platformKitUpdates } from "@/lib/app-project/platform-kits"
+import { compileManifest } from "@app/shared/manifest/compile"
+import type { AppManifest } from "@app/shared/manifest/schema"
 import type { GateName, Workspace } from "@app/shared/verify/types"
 import type { LiveRun } from "./registry"
 
 /**
- * Unlike theme/backend (parameterized by appSlug/data, rebuilt by
- * runGeneration), kit/index.tsx is a pure constant with nothing per-project
- * about it. A project built before a kit fix lands keeps the stale copy in
- * its stored files otherwise, since edit paths read doc.files as persisted
- * and don't go through a full build; resync it to the current KIT_SOURCE on
- * every edit so a kit fix reaches every project immediately.
+ * Brings a stored project's platform-written files up to date before it's
+ * edited or exported: the kits (@/kit, @/motion; see platformKitUpdates) and
+ * the manifest compiler's output (layouts, nav, data types), which otherwise
+ * only regenerates when an edit patches the manifest. Neither is ever written
+ * by the AI, so a fix to either reaches every project on its next edit or
+ * device build.
  */
-export function withCurrentKit(ws: Workspace): Workspace {
-  return ws.files[KIT_PATH] === KIT_SOURCE ? ws : { ...ws, files: { ...ws.files, [KIT_PATH]: KIT_SOURCE } }
+export function withCurrentPlatform(ws: Workspace): Workspace {
+  const updates = platformKitUpdates(ws.files)
+  const manifest = ws.manifest as AppManifest | undefined
+  if (manifest) for (const [path, code] of Object.entries(compileManifest(manifest))) if (ws.files[path] !== code) updates[path] = code
+  return Object.keys(updates).length ? { ...ws, files: { ...ws.files, ...updates } } : ws
 }
 
 /** VERIFY_DEBUG_FAIL=<gate>:<n>, ignored in production: fails `gate` synthetically for a run's first `n` attempts. */

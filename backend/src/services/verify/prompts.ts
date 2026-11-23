@@ -4,8 +4,9 @@
 // reply here becomes a gated ChangeSet instead of a trusted file write.
 
 import { MANIFEST_ICON_NAMES } from "@app/shared/app-project/icons"
-import { KIT_PROPS_REFERENCE } from "@/lib/app-project/kit"
-import { CRAFT_RULES, TECH_RULES } from "@/lib/agent/prompts"
+import { KIT_PROPS_REFERENCE, MOTION_PROPS_REFERENCE } from "@/lib/app-project/platform-kits"
+import { CRAFT_RULES, MOTION_RULES, TECH_RULES } from "@/lib/agent/prompts"
+import type { MotionLevel } from "@app/shared/app-runtime/theme"
 import type { PlanScreen } from "@app/shared/agent/types"
 import { describeDataModel, type DataModel } from "@app/shared/app-runtime/data-model"
 import type { AppManifest } from "@app/shared/manifest/schema"
@@ -18,9 +19,15 @@ ${TECH_RULES}
 
 ${CRAFT_RULES}
 
+${MOTION_RULES}
+
 # The component kit
 Build screens out of "@/kit" (generated; never write it yourself) instead of raw View/Text boilerplate: it already has the right spacing, color tokens and type scale. Reach for a plain React Native component only for something the kit has no primitive for. Its props, verbatim:
 ${KIT_PROPS_REFERENCE}
+
+# The motion kit
+"@/motion" (generated; never write it yourself): the animation primitives MOTION refers to. Its props, verbatim:
+${MOTION_PROPS_REFERENCE}
 
 # Correctness rules the verifier enforces strictly
 - Every list (.map over an array) needs a stable "key" prop; never use the array index as the key if items can be added, removed or reordered.
@@ -96,7 +103,7 @@ export function verifiedNewScreenPrompt(
   spec: PlanScreen,
   screenId: string,
   path: string,
-  ctx: { manifest: AppManifest; data: DataModel; components: Record<string, string>; styleReference?: string; contracts?: string }
+  ctx: { manifest: AppManifest; data: DataModel; components: Record<string, string>; styleReference?: string; contracts?: string; motion: MotionLevel }
 ) {
   const { manifest } = ctx
   const screens = Object.entries(manifest.screens)
@@ -129,8 +136,9 @@ Purpose: ${spec.purpose}
 It must include:
 ${spec.keyElements.map((e) => `- ${e}`).join("\n") || "- the elements its purpose needs"}
 Navigates to: ${spec.navigatesTo.map((id) => `/${id}`).join(", ") || "nothing specific"}
+Motion level: ${ctx.motion} (see MOTION for what that calls for).
 
-Reply with <intent> and a single <file path="${path}">...</file> block only — no <manifest_patch> (the manifest already declares this screen), no <edit> or <delete>.
+Reply with <intent> and a <file path="${path}">...</file> block, plus a new <file> block for each part you split out of a long screen (under components/${screenId}/) — no <manifest_patch> (the manifest already declares this screen), no <edit> or <delete>, and no changes to existing files.
 
 Return the change now.`
 }

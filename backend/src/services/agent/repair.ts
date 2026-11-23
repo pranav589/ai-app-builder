@@ -11,7 +11,7 @@ import { docFromWorkspace, workspaceFromDoc } from "@/lib/verify/workspace"
 import { commitSnapshot } from "@/lib/versions/store"
 import { latestPlan, loadProject } from "./history"
 import type { LiveRun } from "./registry"
-import { emitAttempts, verifyDebugFail, withCurrentKit } from "./verify-glue"
+import { emitAttempts, verifyDebugFail, withCurrentPlatform } from "./verify-glue"
 
 export type RepairResult = { path: string; code: string; screenId?: string } | null
 
@@ -31,7 +31,7 @@ export async function repairFile(run: LiveRun, projectId: string, path: string, 
 
   const manifest = ensureManifest(doc, await latestPlan(projectId))
   if (!manifest) return null
-  const ws = withCurrentKit(workspaceFromDoc({ ...doc, manifest }))
+  const ws = withCurrentPlatform(workspaceFromDoc({ ...doc, manifest }))
   const exports = projectExports(ws.files)
   const prompt = verifiedEditPrompt(`In the running app, ${path} crashed with: "${message.slice(0, 500)}". Find the cause and fix it.`, selectFiles(ws, [path]), {
     manifest,

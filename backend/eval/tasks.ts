@@ -9,7 +9,7 @@
 // expected to end in a <question> for now. That's a real, honest baseline
 // number, not a bug in the harness.
 
-export type TaskCategory = "edit" | "screen" | "data" | "logic" | "layout" | "flow" | "ceiling"
+export type TaskCategory = "edit" | "screen" | "data" | "logic" | "layout" | "flow" | "motion" | "ceiling"
 export type Task = { category: TaskCategory; text: string }
 
 export const TASKS: Task[] = [
@@ -33,6 +33,12 @@ export const TASKS: Task[] = [
   { category: "layout", text: "Give each row a colored left accent bar: one color when complete or on target, another color otherwise." },
   { category: "flow", text: "Add a short onboarding screen shown before the main screen on first launch, with a short intro and a 'Get started' button." },
   { category: "flow", text: "Let the user edit an existing item: add an Edit action that opens a form prefilled with its current values and saves changes back." },
+  { category: "motion", text: "Let me swipe an item left to delete it, with a smooth animation." },
+  { category: "motion", text: "Make the rows on the main screen animate in one after another when it opens." },
+  { category: "motion", text: "Add a row of two or three summary numbers at the top of the main screen that count up when the screen opens." },
+  { category: "motion", text: "Add an All / Active / Done filter with a selection pill that slides between the options." },
+  { category: "motion", text: "While the list is loading, show shimmering placeholder rows shaped like the real ones." },
+  { category: "motion", text: "Add a bottom sheet that springs up from the main screen to create a new item, and closes when dragged down." },
 ]
 
 /** Requests the platform can't fully do yet. Good outcomes: a sensible fallback that passes, or a clear question. */
@@ -41,6 +47,5 @@ export const CEILING_TASKS: Task[] = [
   { category: "ceiling", text: "Send me a push notification every morning reminding me to check the app." },
   { category: "ceiling", text: "Let me take a photo and attach it to an item." },
   { category: "ceiling", text: "Sync my data to Google Sheets every night." },
-  { category: "ceiling", text: "Let me swipe an item left to delete it, with a smooth animation." },
   { category: "ceiling", text: "Make it better." },
 ]

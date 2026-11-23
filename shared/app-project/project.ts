@@ -47,6 +47,8 @@ export const ALLOWED_PACKAGES = [
   "expo-splash-screen",
   "@react-native-async-storage/async-storage",
   "react-native-gesture-handler",
+  "react-native-reanimated",
+  "react-native-worklets",
   "react-native-screens",
 ]
 
@@ -89,6 +91,13 @@ const NAMED_IMPORTS: Record<string, string[]> = {
   "expo-symbols": ["SymbolView"],
   "expo-glass-effect": ["GlassView", "GlassContainer", "isLiquidGlassAvailable"],
   "expo-status-bar": ["StatusBar"],
+  "react-native-reanimated": [
+    "useSharedValue", "useAnimatedStyle", "useDerivedValue", "useAnimatedScrollHandler", "useAnimatedReaction", "useReducedMotion",
+    "withSpring", "withTiming", "withDelay", "withRepeat", "withSequence", "interpolate", "interpolateColor", "Extrapolation", "runOnJS",
+    "FadeIn", "FadeOut", "FadeInDown", "FadeInUp", "FadeOutUp", "FadeOutDown", "ZoomIn", "ZoomOut", "SlideInRight", "SlideOutLeft", "LinearTransition",
+  ],
+  "react-native-gesture-handler": ["GestureDetector", "GestureHandlerRootView", "usePanGesture", "useTapGesture", "useLongPressGesture"],
+  "react-native-worklets": ["scheduleOnRN"],
 }
 const NAMESPACE_IMPORTS: Record<string, string> = {
   Haptics: "expo-haptics",
@@ -152,10 +161,19 @@ export function autoImport(code: string, local: ProjectExports = {}): string {
 
   const additions = new Map<string, string[]>()
   const add = (mod: string, name: string) => additions.set(mod, [...(additions.get(mod) ?? []), name])
-  for (const [mod, names] of Object.entries(NAMED_IMPORTS)) for (const n of names) if (used(n) && !declared(n)) add(mod, n)
+  // Reanimated's default export is also named Animated. In a file already
+  // using Reanimated, a missing Animated means Reanimated's: React Native's
+  // Animated.View would silently ignore Reanimated's animated styles.
+  const usesReanimated = /from\s*["']react-native-reanimated["']/.test(code)
+  const defaults: [string, string][] = []
+  for (const [mod, names] of Object.entries(NAMED_IMPORTS))
+    for (const n of names) {
+      if (!used(n) || declared(n)) continue
+      if (n === "Animated" && usesReanimated) defaults.push([n, "react-native-reanimated"])
+      else add(mod, n)
+    }
   for (const n of BACKEND_OBJECTS) if (new RegExp(`(?<![\\w$.])${n}\\.\\w`).test(body) && !declared(n)) add("@/lib/backend", n)
   const namespaces = Object.entries(NAMESPACE_IMPORTS).filter(([n]) => new RegExp(`(?<![\\w$.])${n}\\.`).test(body) && !declared(n))
-  const defaults: [string, string][] = []
   const known = new Set([...Object.values(NAMED_IMPORTS).flat(), ...Object.keys(NAMESPACE_IMPORTS)])
   for (const [n, exp] of Object.entries(local)) {
     if (known.has(n) || !used(n) || declared(n)) continue

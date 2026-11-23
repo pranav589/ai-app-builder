@@ -9,6 +9,7 @@ import type { ThemePackage } from "@app/shared/app-runtime/theme"
 import { screenHref, type ProjectFiles } from "@app/shared/app-project/project"
 
 import { slug } from "@app/shared/app-project/scaffold"
+import { MOTION_LEVEL_PATH, motionLevelSource } from "./motion"
 
 export { slug }
 
@@ -33,6 +34,10 @@ export function packageJson(name: string) {
       "react-native-safe-area-context": "~5.11.1",
       "react-native-screens": "~4.30.1",
       "react-native-gesture-handler": "~3.3.0",
+      // babel-preset-expo adds the worklets Babel plugin by itself whenever
+      // react-native-worklets is installed, so no babel.config.js is needed.
+      "react-native-reanimated": "4.7.1",
+      "react-native-worklets": "0.13.0",
       "@expo/vector-icons": "^15.0.2",
       "@react-native-async-storage/async-storage": "2.2.0",
       "expo-status-bar": "~58.0.5",
@@ -414,6 +419,7 @@ export function platformFiles(plan: AppPlan, themes: ThemePackage, data: DataMod
     "app/index.tsx": `import { Redirect } from "expo-router"\n\n// The app opens on its first screen.\nexport default function Index() {\n  return <Redirect href="${first ? screenHref(first) : "/"}" />\n}\n`,
     "theme/themes.json": json({ activeId: themes.activeId, themes: themes.themes }),
     "theme/index.tsx": themeDevice(appSlug),
+    [MOTION_LEVEL_PATH]: motionLevelSource(themes.motion ?? "subtle"),
     "lib/backend/index.ts": backendDevice(appSlug),
     "data/seed.json": json({
       hash: data.hash,

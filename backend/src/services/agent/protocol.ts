@@ -316,9 +316,9 @@ export const dataHash = (plan: AppPlan) =>
     s: plan.screens.map((s) => s.id).sort(),
   })
 
-export function parseFoundationJson(raw: string): { themes?: unknown; data?: unknown } | null {
+export function parseFoundationJson(raw: string): { themes?: unknown; motion?: unknown; data?: unknown } | null {
   const v = parseJsonLoose(raw)
-  return v && typeof v === "object" ? (v as { themes?: unknown; data?: unknown }) : null
+  return v && typeof v === "object" ? (v as { themes?: unknown; motion?: unknown; data?: unknown }) : null
 }
 
 /** Pulls one source file out of a model reply (drops prose and Markdown fences). */

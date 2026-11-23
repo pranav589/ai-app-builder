@@ -28,8 +28,12 @@ export const SDK_VERSION = "58.0.0"
 export const SDK_RUNTIME_VERSION = `exposdk:${SDK_VERSION}`
 
 export class DeviceDepsMissingError extends Error {
-  constructor() {
-    super(`The shared Expo dependencies aren't installed yet. Run "npm run device:deps" once, then try again.`)
+  constructor(outdated = false) {
+    super(
+      outdated
+        ? `The shared Expo dependencies are out of date with the packages generated apps use. Run "npm run device:deps" again, then try again.`
+        : `The shared Expo dependencies aren't installed yet. Run "npm run device:deps" once, then try again.`
+    )
   }
 }
 
@@ -52,6 +56,12 @@ function writeFile(file: string, content: string) {
 export function exportExpoProject(projectId: string, files: FileMap, deviceRoot = DEVICE_ROOT): string {
   const sdkDepsDir = path.join(deviceRoot, "_deps", "sdk-58")
   if (!fs.existsSync(path.join(sdkDepsDir, "node_modules"))) throw new DeviceDepsMissingError()
+  // The install only changes when device:deps reruns. Exporting against a stale
+  // one ships whatever versions npm resolved back then: a native module's JS
+  // (e.g. react-native-worklets) one patch off from the copy built into Expo Go
+  // crashes the app on launch, after the export itself succeeded.
+  const installed = fs.existsSync(path.join(sdkDepsDir, "package.json")) ? fs.readFileSync(path.join(sdkDepsDir, "package.json"), "utf8") : ""
+  if (installed !== sharedDepsPackageJson()) throw new DeviceDepsMissingError(true)
 
   // This writes a local dev export, never deployed output; turbopackIgnore
   // stops the build from tracing (and bundling) the whole project just

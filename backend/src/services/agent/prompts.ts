@@ -3,6 +3,7 @@ import { describeDataModel, type DataModel } from "@app/shared/app-runtime/data-
 import { THEME_COLOR_KEYS, THEME_TOKEN_DOCS, type AppTheme } from "@app/shared/app-runtime/theme"
 import { ALLOWED_PACKAGES, screenHref, screenPath } from "@app/shared/app-project/project"
 import { PLATFORM_API_DOCS } from "@/lib/app-project/templates"
+import { MOTION_PROPS_REFERENCE } from "@/lib/app-project/platform-kits"
 import { ICON_VOCABULARY } from "@app/shared/app-project/icons"
 import { IMAGE_LIBRARY_CATEGORIES } from "@app/shared/image-library/categories"
 import { MAX_SCREENS } from "./protocol"
@@ -101,7 +102,7 @@ If, and only if, there is a plan and the person's latest message clearly approve
 
 export const FOUNDATION_INSTRUCTIONS = `You are the design-systems lead and data architect for a mobile app that is about to be built. Before any screen is designed you produce two things in one JSON object:
 
-1. A theme package: a set of complete color themes the creator can switch between instantly. Every screen is styled only through theme tokens, so each theme must work on every screen.
+1. A theme package: a set of complete color themes the creator can switch between instantly. Every screen is styled only through theme tokens, so each theme must work on every screen. Plus the app's motion level: how much animation its screens get.
 2. The app's data model: the collections of records the screens read and write, with realistic seed data, so the app is fully functional from the first preview.
 
 Reply with ONLY the JSON object, no prose, no code fences. Valid JSON: double quotes, no comments, no trailing commas.
@@ -117,6 +118,7 @@ Shape:
       "colors": { ${THEME_COLOR_KEYS.map((k) => `"${k}": "#RRGGBB"`).join(", ")} }
     }
   ],
+  "motion": "subtle" | "expressive" | "bold",
   "data": {
     "collections": [
       {
@@ -137,6 +139,8 @@ Theme rules:
 - Token meanings: ${THEME_COLOR_KEYS.map((k) => `${k} = ${THEME_TOKEN_DOCS[k]}`).join("; ")}.
 - Contrast: text on background and on surface at least 7:1; textMuted at least 4.5:1; onPrimary on primary at least 4.5:1; onAccent on accent at least 4.5:1. primarySoft must be a gentle tint that text and primary both read well on.
 - Dark themes: background near-black but not pure #000 (e.g. #0E1014 family), surface a step lighter, borders subtle, primary lifted slightly for dark backgrounds.
+
+Motion rule: pick the level that fits the product, its audience and the design direction. "subtle" for tools used many times a day for quick tasks: productivity, finance, health records, business and admin apps. "expressive" (the usual choice for consumer apps): lifestyle, habits, fitness, social, shopping, food, travel. "bold" for games, kids, entertainment, music, creative and brand-showcase apps, or whenever the design direction asks for rich, playful or animated.
 
 Data rules:
 - Model what the planned screens actually show and change: lists, details, things users create, toggle, complete or delete. Typically 1-4 collections. Skip collections no screen uses.
@@ -171,7 +175,7 @@ Return the JSON object now.`
 export const TECH_RULES = `TECH STACK (strict; current as of Expo SDK 58)
 - Expo SDK 58, React Native 0.88 (New Architecture), React 19.3, TypeScript 6 (strict), Expo Router 58 (file-based routing). React Compiler is ON.
 - Function components and hooks only. Follow the Rules of React so the React Compiler can optimize: render is pure, never mutate props, state or objects created in an earlier render, never read or write ref.current during render. Don't add useMemo/useCallback/React.memo for performance; the compiler handles it. Keep hooks at the top level of components.
-- Allowed imports ONLY: React Native core components and APIs, these packages: ${ALLOWED_PACKAGES.join(", ")}, the platform modules "@/theme" and "@/lib/backend", and project files via "@/..." paths. Nothing else (no react-native-reanimated, no react-native-svg, no @react-navigation/*, no other npm packages).
+- Allowed imports ONLY: React Native core components and APIs, these packages: ${ALLOWED_PACKAGES.join(", ")}, the platform modules "@/theme", "@/lib/backend" and "@/motion", and project files via "@/..." paths. Nothing else (no react-native-svg, no @react-navigation/*, no other npm packages).
 
 MODERN API CHOICES (use these, avoid the legacy ones)
 - Tappables: Pressable only (never TouchableOpacity/TouchableHighlight/TouchableWithoutFeedback). Use the style callback ({ pressed }) for feedback.
@@ -202,18 +206,32 @@ export const CRAFT_RULES = `CRAFT (it must feel like a top App Store app in 2026
 - Layout: 4/8pt grid (spacing tokens), 20pt screen margins, generous whitespace, one alignment edge. Content-first: large titles, clear sections, no visual noise.
 - Type scale: large titles 34 bold, letterSpacing -0.6; title 28 bold; section titles 20-22 semibold; body 17; secondary 15 in colors.textMuted; captions 12-13. fontVariant ["tabular-nums"] for numbers and stats. Use weight and size for hierarchy, not color alone.
 - Hierarchy: exactly one primary action per screen (filled colors.primary, 52-56pt tall, radius.pill or radius.lg); secondary actions as primarySoft fills, text buttons or glass chips.
-- Native patterns: iOS-style grouped inset lists for settings (surface rows, hairline separators inset to the text, chevrons), segmented controls for 2-4 filters, swipe-free row actions via a trailing menu or long-press Alert, pull-to-refresh where data refreshes, bottom sheets (modal routes) for create/edit.
+- Native patterns: iOS-style grouped inset lists for settings (surface rows, hairline separators inset to the text, chevrons), segmented controls for 2-4 filters, row actions as a swipe-left reveal (SwipeRow from "@/motion") when the screen spec asks for swipe actions, otherwise a trailing menu or long-press Alert, pull-to-refresh where data refreshes, bottom sheets (modal routes) for create/edit.
 - Touch: targets at least 44x44, pressed feedback on everything tappable (opacity 0.7 or scale 0.98), haptics on meaningful actions.
 - Surfaces: cards on colors.surface with radius.lg, 16-20pt padding and a soft boxShadow or hairline colors.border (not both heavy). Floating controls over content use GlassView.
-- Motion: subtle, purposeful (Animated from react-native for progress bars, toggles and appearing content; 200-300ms, ease-out). No gratuitous animation.
+- Motion: physical and purposeful, never decorative noise; see MOTION.
 - States: loading where async, friendly empty states (icon tile + one line + an action), disabled buttons while saving, inline validation messages, keyboard-aware forms (KeyboardAvoidingView behavior "padding" on iOS + ScrollView keyboardShouldPersistTaps="handled").
 - Content: realistic and specific, from the data; never lorem ipsum, never placeholder labels.`
+
+export const MOTION_RULES = `MOTION (it should feel alive and physical, like a premium 2026 app; scaled to the app's motion level)
+- Motion level (motion/level.ts, picked with the design): "subtle" = calm utility (entrance reveals, press springs, count-ups, skeletons); "expressive" = polished consumer app (also staggered lists, one signature moment per screen, swipe rows, sheets, sliding segmented tabs); "bold" = playful, brand-led (also parallax hero headers and bigger, bouncier movement). "@/motion" already scales distance, springs and timing to the level and honors the system reduce-motion setting: use it first.
+- @/kit's Button, Card (with onPress) and ProgressBar animate already. From "@/motion": PressableScale for custom tappable tiles and chips; Reveal with index={index} in a FlatList renderItem (or Stagger for a short fixed list); AnimatedNumber for stats and totals; Skeleton blocks shaped like the content while loading; SwipeRow for row actions; Sheet for quick in-screen pickers and forms; SegmentedTabs for 2-4 filters; ParallaxScroll for detail and profile screens with a hero image or gradient.
+- Follow the screen spec's motion literally: if it asks for a swipe-left reveal, wrap each row in SwipeRow with those actions (a long-press or a menu is not a substitute); if it asks for a bottom sheet, a stretchy header or sliding tabs, use Sheet, ParallaxScroll or SegmentedTabs. Put a SwipeRow's destructive action behind the same confirmation you would give a button.
+- Bespoke animation: Reanimated (import Animated, { useSharedValue, useAnimatedStyle, withSpring } from "react-native-reanimated"; always import Animated explicitly, React Native's own Animated is the legacy API) and gesture hooks from "react-native-gesture-handler" (usePanGesture, useTapGesture, useLongPressGesture with <GestureDetector gesture={...}>). Take springs and durations from useMotion(). Read and write shared values with .get() and .set(), never during render.
+- Every useAnimatedStyle, useDerivedValue, useAnimatedProps and useAnimatedReaction call ends with a dependency array of the shared values and props it reads: useAnimatedStyle(() => ({ opacity: progress.get() }), [progress]). The verifier rejects calls without one.
+- Gesture and animation callbacks run on the UI thread on a device: call JS from them (setState, router, haptics, callback props) through scheduleOnRN(fn, ...args) from "react-native-worklets".
+- Animate transform and opacity (translate, scale, rotate), never width, height, margins or top. Springs for anything that moves; timing (200-400ms, ease-out) only for fades and color. No looping animation except loading states, and never hold content back behind an animation for more than about 400ms.`
 
 export const SHELL_INSTRUCTIONS = `You are a principal React Native engineer and product designer. You set up the app shell of an Expo Router app before its screens are written: the navigation layouts and the app's own small design system of reusable components. Screens written next will import your components, so they define the look and quality of the whole app.
 
 ${TECH_RULES}
 
 ${CRAFT_RULES}
+
+${MOTION_RULES}
+
+THE MOTION KIT ("@/motion", platform-owned: import it, never write it). Its props, verbatim:
+${MOTION_PROPS_REFERENCE}
 
 OUTPUT
 Reply with ONLY file blocks, no prose:
@@ -235,7 +253,7 @@ What to write:
      </NativeTabs.Trigger>
    </NativeTabs>
    One Trigger per tab screen, in plan order. Choose icons ONLY from this list of "sf (sf selected) / md" names: ${ICON_VOCABULARY}.
-3. components/*.tsx: 6-10 focused, reusable, polished components the screens need, matching the design direction, for example: Screen (safe-area page with optional scroll and large title), TopBar (back button, title, trailing action), Button (primary/secondary/ghost/destructive, sizes, loading, icon), Card, ListRow (grouped inset style), TextField (label, error), SegmentedControl, Chip, EmptyState, Avatar, StatCard or ProgressBar. Each file has named exports, typed props, and styles from createStyles. Keep each file focused and compact.
+3. components/*.tsx: 6-10 focused, reusable, polished components the screens need, matching the design direction, for example: Screen (safe-area page with optional scroll and large title), TopBar (back button, title, trailing action), Button (primary/secondary/ghost/destructive, sizes, loading, icon), Card, ListRow (grouped inset style), TextField (label, error), SegmentedControl, Chip, EmptyState, Avatar, StatCard or ProgressBar. Each file has named exports, typed props, and styles from createStyles. Keep each file focused and compact. Build tappable components on PressableScale and moving ones on the "@/motion" primitives (a SegmentedControl can wrap SegmentedTabs) so every screen inherits the motion.
 Don't write screens, app/index.tsx, theme or backend files: they exist already.`
 
 export function shellPrompt(plan: AppPlan, theme: AppTheme) {

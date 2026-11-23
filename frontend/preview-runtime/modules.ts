@@ -6,6 +6,9 @@
 import * as React from "react"
 import * as ReactDOM from "react-dom"
 import * as RNW from "react-native-web"
+import * as GestureHandler from "react-native-gesture-handler"
+import * as Reanimated from "react-native-reanimated"
+import * as Worklets from "react-native-worklets"
 
 import { isPlatformOwned } from "@app/shared/verify/ownership"
 import { dataStore, moduleStore } from "./bridge"
@@ -65,7 +68,9 @@ const PACKAGES: Record<string, () => unknown> = {
     const s = native.makeAsyncStorage(() => dataStore.get().settings)
     return withDefault(s, s)
   },
-  "react-native-gesture-handler": () => withDefault({ GestureHandlerRootView: ui.GestureHandlerRootView }),
+  "react-native-gesture-handler": () => withDefault(GestureHandler),
+  "react-native-reanimated": () => withDefault(Reanimated, Reanimated.default),
+  "react-native-worklets": () => withDefault(Worklets),
   "react-native-screens": () => withDefault({ enableScreens() {} }),
   // Platform-owned project modules: the preview versions talk to the host.
   "@/theme": () => withDefault(theme, theme),

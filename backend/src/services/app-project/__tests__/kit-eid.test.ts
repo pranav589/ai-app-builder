@@ -72,6 +72,9 @@ describe("canvas inspector eid through a @/kit component", () => {
       "react-native-safe-area-context": { useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) },
       "@expo/vector-icons": { Ionicons: () => null },
       "@/theme": theme.exports,
+      // Only Text renders here; Sucrase reads named imports lazily, so the animated components' imports can be empty.
+      "react-native-reanimated": {},
+      "@/motion": {},
     })
 
     const screenSource = `import { Text } from "@/kit"\n\nexport default function Home() {\n  return <Text variant="title">Hi there</Text>\n}\n`

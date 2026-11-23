@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest"
 import { normalizeDataModel } from "@app/shared/app-runtime/data-model"
 import { fallbackThemes } from "@app/shared/app-runtime/theme"
 import { platformFiles } from "@/lib/app-project/templates"
-import { KIT_EXPORTS, KIT_PATH, KIT_PROPS_REFERENCE, KIT_SOURCE } from "@/lib/app-project/kit"
+import { KIT_PATH, KIT_SOURCE } from "@/lib/app-project/kit"
+import { KIT_EXPORTS, KIT_PROPS_REFERENCE, PLATFORM_KIT_FILES } from "@/lib/app-project/platform-kits"
 import { typecheckGate } from "@/lib/verify/gates/typecheck"
 import { renderGate } from "@/lib/verify/gates/render"
 import type { AppPlan } from "@app/shared/agent/types"
@@ -31,7 +32,7 @@ const data = normalizeDataModel({ collections: [], settings: {}, user: { name: "
 
 function baseWorkspace(screenCode: string): Workspace {
   const files = platformFiles(plan, { themes: fallbackThemes(plan), activeId: "original", hash: "t" }, data)
-  return { files: { ...files, [KIT_PATH]: KIT_SOURCE, "app/home.tsx": screenCode } }
+  return { files: { ...files, ...PLATFORM_KIT_FILES, "app/home.tsx": screenCode } }
 }
 
 describe("KIT_SOURCE", () => {
@@ -54,7 +55,7 @@ describe("KIT_SOURCE", () => {
 
   it("type-checks cleanly on its own (no screen referencing it)", () => {
     const files = platformFiles(plan, { themes: fallbackThemes(plan), activeId: "original", hash: "t" }, data)
-    const ws: Workspace = { files: { ...files, [KIT_PATH]: KIT_SOURCE } }
+    const ws: Workspace = { files: { ...files, ...PLATFORM_KIT_FILES } }
     const r = typecheckGate(ws, undefined, "kit-test-standalone")
     expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   })

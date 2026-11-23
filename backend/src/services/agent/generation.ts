@@ -3,13 +3,13 @@ import { eq } from "drizzle-orm"
 import { db, messages } from "@/db"
 import { readAppDoc, type AppDoc } from "@app/shared/app-runtime/app-doc"
 import { emptyDataModel, normalizeDataModel, type DataModel } from "@app/shared/app-runtime/data-model"
-import { baseThemeFromPlan, fallbackThemes, normalizeThemes, type AppTheme, type ThemePackage } from "@app/shared/app-runtime/theme"
+import { asMotionLevel, baseThemeFromPlan, fallbackThemes, normalizeThemes, type AppTheme, type ThemePackage } from "@app/shared/app-runtime/theme"
 import { autoImport, checkFile, projectExports, screenPath, type ProjectFiles } from "@app/shared/app-project/project"
 import { undefinedNames } from "@/lib/app-project/analyze"
 import { applyHunks, parseEdits } from "@/lib/app-project/patch"
 import { ICONS } from "@app/shared/app-project/icons"
 import { platformFiles } from "@/lib/app-project/templates"
-import { KIT_PATH, KIT_SOURCE } from "@/lib/app-project/kit"
+import { PLATFORM_KIT_FILES } from "@/lib/app-project/platform-kits"
 import { compileManifest } from "@app/shared/manifest/compile"
 import { syncManifest } from "@app/shared/manifest/migrate"
 import { coderAdapter } from "@/lib/verify/coder"
@@ -17,7 +17,7 @@ import { MAX_REPAIRS, runChange } from "@/lib/verify/run"
 import { verifiedNewScreenPrompt } from "@/lib/verify/prompts"
 import { commitSnapshot } from "@/lib/versions/store"
 import { getAgents, heartbeat, streamText } from "./agents"
-import { regenOutcome } from "./generation-guard"
+import { regenOutcome, screenSideFiles, storedSideFiles } from "./generation-guard"
 import { latestPlan, loadProject, saveDoc, saveMessage, saveScreens, setPhase } from "./history"
 import { fillSeedImages } from "./seed-images"
 import {
@@ -77,7 +77,7 @@ async function buildFoundation(
   if (!themes) {
     const list = parsed?.themes ? normalizeThemes(parsed.themes, plan) : fallbackThemes(plan)
     const keep = doc.themes?.activeId
-    themes = { themes: list, activeId: list.some((t) => t.id === keep) ? keep! : list[0].id, hash: tHash }
+    themes = { themes: list, activeId: list.some((t) => t.id === keep) ? keep! : list[0].id, hash: tHash, motion: asMotionLevel(parsed?.motion) }
   }
   if (!data) {
     const fresh = parsed?.data ? normalizeDataModel(parsed.data, dHash) : emptyDataModel(dHash)
@@ -202,18 +202,21 @@ function templateShell(plan: AppPlan): ProjectFiles {
   const modals = plan.screens.filter((s) => s.presentation === "modal")
   const out: ProjectFiles = {
     "app/_layout.tsx": `import { Stack } from "expo-router"
+import { GestureHandlerRootView } from "react-native-gesture-handler"
 import { SafeAreaProvider } from "react-native-safe-area-context"
 import { ThemeProvider } from "@/theme"
 
 export default function RootLayout() {
   return (
-    <ThemeProvider>
-      <SafeAreaProvider>
-        <Stack screenOptions={{ headerShown: false }}>
-${modals.map((s) => `          <Stack.Screen name="${s.id}" options={{ presentation: "modal" }} />`).join("\n")}
-        </Stack>
-      </SafeAreaProvider>
-    </ThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider>
+        <SafeAreaProvider>
+          <Stack screenOptions={{ headerShown: false }}>
+${modals.map((s) => `            <Stack.Screen name="${s.id}" options={{ presentation: "modal" }} />`).join("\n")}
+          </Stack>
+        </SafeAreaProvider>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   )
 }
 `,
@@ -377,7 +380,7 @@ export async function runGeneration(run: LiveRun, projectId: string) {
           plan,
           designTheme,
           // Only the file paths matter for checking the shell's imports.
-          platformFiles(plan, { themes: [designTheme], activeId: designTheme.id, hash: "" }, doc.data ?? emptyDataModel()),
+          { ...platformFiles(plan, { themes: [designTheme], activeId: designTheme.id, hash: "" }, doc.data ?? emptyDataModel()), ...PLATFORM_KIT_FILES },
           screens.map((s) => s.path!),
           // Same design: keep the components (screens are built on them) and redo only the layouts.
           keepComponents
@@ -393,12 +396,13 @@ export async function runGeneration(run: LiveRun, projectId: string) {
   // Navigation and typed nav/data files come from the manifest compiler,
   // not the AI shell (Phase 6): the manifest is built once (or reused from
   // a previous edit) and recompiled on every build so it never drifts from
-  // the plan. The component kit (Phase 7) ships the same way: a platform
-  // file, not AI-written.
-  const platform = { ...platformFiles(plan, themes, data), [KIT_PATH]: KIT_SOURCE }
+  // the plan. The component and motion kits ship the same way: platform
+  // files, not AI-written.
+  const platform = { ...platformFiles(plan, themes, data), ...PLATFORM_KIT_FILES }
   const manifest = syncManifest({ ...doc, data }, plan)
   const generated = compileManifest(manifest)
-  let files: ProjectFiles = { ...platform, ...shellFiles, ...generated }
+  let sideFiles = storedSideFiles(doc.files ?? {}, (p) => SHELL_PATH.test(p))
+  let files: ProjectFiles = { ...platform, ...shellFiles, ...generated, ...sideFiles }
   await saveDoc(projectId, { ...doc, screens, themes, data, files, manifest, shellHash: sHash, componentsHash: cHash })
   run.emit({ type: "files", files })
 
@@ -458,6 +462,7 @@ export async function runGeneration(run: LiveRun, projectId: string) {
         components: components(),
         styleReference: reference?.slice(0, STYLE_REF_LIMIT),
         contracts,
+        motion: themes.motion ?? "subtle",
       })
       const result = await runChange({ files: allFiles }, prompt, coderAdapter, {
         debugFail: verifyDebugFail(),
@@ -480,6 +485,12 @@ export async function runGeneration(run: LiveRun, projectId: string) {
         console.warn(`[build ${projectId}] screen ${screenId}: ${error}`)
       } else {
         code = result.ws.files[path]
+        const extra = screenSideFiles(path, allFiles, result.ws.files, result.changed)
+        if (Object.keys(extra).length) {
+          sideFiles = { ...sideFiles, ...extra }
+          files = { ...files, ...extra }
+          run.emit({ type: "files", files })
+        }
         console.info(`[build ${projectId}] screen ${screenId}: verified in ${Date.now() - started}ms (${result.attempts.length} attempt${result.attempts.length === 1 ? "" : "s"})`)
       }
     } catch (e) {
@@ -514,7 +525,7 @@ export async function runGeneration(run: LiveRun, projectId: string) {
   console.info(`[build ${projectId}] ${todo.length} screens in ${Date.now() - tBuild}ms (concurrency ${SCREEN_CONCURRENCY})`)
 
   // The shell is kept; refresh only in case a later build changes it.
-  files = { ...platform, ...shellFiles, ...generated }
+  files = { ...platform, ...shellFiles, ...generated, ...sideFiles }
   const finalDoc: AppDoc = { ...doc, screens, themes, data, files, manifest, shellHash: sHash, componentsHash: cHash }
   const { version } = await commitSnapshot(projectId, finalDoc, {
     author: project.userId,

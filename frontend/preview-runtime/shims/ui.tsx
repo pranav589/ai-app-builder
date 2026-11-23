@@ -215,5 +215,3 @@ export function ExpoImage({ source, contentFit, placeholder: _p, transition: _t,
   const src = typeof source === "string" ? { uri: source } : source
   return <RN.Image {...rest} source={src as never} resizeMode={(FIT[contentFit ?? "cover"] ?? "cover") as never} style={style as never} />
 }
-
-export const GestureHandlerRootView = ({ style, ...rest }: { style?: unknown; [k: string]: unknown }) => <RN.View {...rest} style={[{ flex: 1 }, style]} />

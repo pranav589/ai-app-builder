@@ -36,6 +36,23 @@ describe("autoImport", () => {
     expect(out).toContain(`import Card from "@/components/card"`)
   })
 
+  it("imports a missing Animated from Reanimated when the file already uses Reanimated", () => {
+    const code = `import { useSharedValue } from "react-native-reanimated"\nexport default function Home() {\n  const x = useSharedValue(0)\n  return <Animated.View />\n}`
+    const out = autoImport(code)
+    expect(out).toContain(`import Animated from "react-native-reanimated"`)
+    expect(out).not.toContain(`import { Animated } from "react-native"`)
+  })
+
+  it("still imports React Native's Animated in a file without Reanimated", () => {
+    const code = `export default function Home() {\n  return <Animated.View />\n}`
+    expect(autoImport(code)).toContain(`import { Animated } from "react-native"`)
+  })
+
+  it("leaves an explicit Reanimated default import alone", () => {
+    const code = `import Animated, { useSharedValue } from "react-native-reanimated"\nexport default function Home() {\n  const x = useSharedValue(0)\n  return <Animated.View />\n}`
+    expect(autoImport(code)).toBe(code)
+  })
+
   it("never changes the line count, so preview eids match the stored file", () => {
     const cases = [
       `export default function Home() {
