@@ -67,8 +67,20 @@ export class ServerBackend implements AppBackend {
     for (const l of this.listeners) l(change)
   }
 
-  async init(_model: DataModel) {
-    await this.call("init")
+  // The server only acts on init when the data model changed, so asking again for
+  // the same model (effect re-runs, a pane toggling active) would be a wasted request.
+  private initialized: { hash: string; done: Promise<void> } | null = null
+
+  init(model: DataModel) {
+    if (this.initialized?.hash !== model.hash) {
+      const done = this.call("init").then(() => {})
+      const entry = { hash: model.hash, done }
+      this.initialized = entry
+      done.catch(() => {
+        if (this.initialized === entry) this.initialized = null
+      })
+    }
+    return this.initialized!.done
   }
 
   /** Everything the preview shows, in one request. */
@@ -81,21 +93,45 @@ export class ServerBackend implements AppBackend {
     return r
   }
 
+  // Every preview frame has its own React Query cache, so N frames on a screen
+  // that lists a collection ask for it N times at once; they can share one request.
+  // A write drops the entry so a list started after it is never answered by one started before.
+  private lists = new Map<string, Promise<AppRecord[]>>()
+
+  private list(collection: string) {
+    let p = this.lists.get(collection)
+    if (!p) {
+      p = this.call<AppRecord[]>("list", { collection })
+      this.lists.set(collection, p)
+      const forget = () => {
+        if (this.lists.get(collection) === p) this.lists.delete(collection)
+      }
+      p.then(forget, forget)
+    }
+    return p
+  }
+
   db = {
-    list: (collection: string) => this.call<AppRecord[]>("list", { collection }),
+    list: (collection: string) => this.list(collection),
     get: (collection: string, id: string) => this.call<AppRecord | null>("get", { collection, id }),
     insert: async (collection: string, values: Record<string, unknown>) => {
+      this.lists.delete(collection)
       const r = await this.call<AppRecord>("insert", { collection, values })
+      this.lists.delete(collection)
       this.emit({ type: "db", collection })
       return r
     },
     update: async (collection: string, id: string, patch: Record<string, unknown>) => {
+      this.lists.delete(collection)
       const r = await this.call<AppRecord>("update", { collection, id, patch })
+      this.lists.delete(collection)
       this.emit({ type: "db", collection })
       return r
     },
     remove: async (collection: string, id: string) => {
+      this.lists.delete(collection)
       await this.call("remove", { collection, id })
+      this.lists.delete(collection)
       this.emit({ type: "db", collection })
     },
   }

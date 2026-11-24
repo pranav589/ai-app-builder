@@ -493,7 +493,12 @@ export function useAgent({
     retry,
     dismissError: () => setError(null),
     backend,
-    setBackend,
+    /** Back on local storage: drops the backend and takes the rewritten code the server returned. */
+    applyDisconnect: (result: { files?: Record<string, string>; screens?: GeneratedScreen[] }) => {
+      setBackend(null)
+      if (result.files) setFiles(result.files)
+      if (result.screens) setScreens(result.screens)
+    },
     providers,
     refreshBackend,
     /** Sets up (or repairs) the app's backend on `provider`; progress streams into the chat. */

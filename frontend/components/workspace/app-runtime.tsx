@@ -176,7 +176,7 @@ export function AppRuntimeProvider({
     [post]
   )
 
-  const refresh = React.useCallback(async () => {
+  const load = React.useCallback(async () => {
     const names = new Set([...model.collections.map((c) => c.name), ...collections.current])
     // A remote backend loads everything in one request; the local one reads each part.
     const bulk = backend.snapshot ? await backend.snapshot([...names]) : null
@@ -192,6 +192,30 @@ export function AppRuntimeProvider({
     broadcast({ kind: "data", data: next })
   }, [backend, model, broadcast])
 
+  // Reloads overlap when writes land back to back; share the one in flight. A
+  // change reported while it runs may be missed by it, so that case reloads once more.
+  const loading = React.useRef<Promise<void> | null>(null)
+  const reloadAgain = React.useRef(false)
+  const refresh = React.useCallback(
+    (afterChange = true) => {
+      if (loading.current) {
+        if (afterChange) reloadAgain.current = true
+        return loading.current
+      }
+      const p = (async () => {
+        do {
+          reloadAgain.current = false
+          await load()
+        } while (reloadAgain.current)
+      })().finally(() => {
+        loading.current = null
+      })
+      loading.current = p
+      return p
+    },
+    [load]
+  )
+
   React.useEffect(() => () => (backend as { dispose?: () => void }).dispose?.(), [backend])
 
   // Seed (or reseed after a plan change) and load the data. Nobody's looking
@@ -202,7 +226,7 @@ export function AppRuntimeProvider({
     void backend
       .init(model)
       .then(() => {
-        if (alive) return refresh()
+        if (alive) return refresh(false)
       })
       .catch((e) => console.error("app backend failed to start", e))
     const off = backend.subscribe(() => void refresh().catch(() => {}))

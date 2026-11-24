@@ -31,7 +31,7 @@ import type { BackendInfo } from "@app/shared/agent/types"
 import type { BackendProviderId, BackendProviderStatus } from "@app/shared/app-backend/providers"
 import { apiClient, getApiErrorMessage } from "@/lib/api-client"
 import { slug } from "@app/shared/app-project/scaffold"
-import { BackendControl } from "./backend-connect"
+import { BackendControl, type DisconnectResult } from "./backend-connect"
 import { ExpoConnectDialog } from "./expo-connect-dialog"
 import { GithubPushDialog } from "./github-push-dialog"
 import { PublishDialog } from "./publish-dialog"
@@ -314,7 +314,7 @@ export function WorkspaceHeader({
   providers: BackendProviderStatus[]
   agentBusy: boolean
   onSetupBackend: (provider: BackendProviderId, services: string[]) => void
-  onBackendDisconnected: () => void
+  onBackendDisconnected: (result: DisconnectResult) => void
   onRefreshBackend: () => void
   initialIsPublic: boolean
   initialPublicSlug: string | null

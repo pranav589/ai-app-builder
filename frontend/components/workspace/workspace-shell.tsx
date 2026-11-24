@@ -367,7 +367,7 @@ export function WorkspaceShell({
         providers={agent.providers}
         agentBusy={agent.busy}
         onSetupBackend={agent.setupBackend}
-        onBackendDisconnected={() => agent.setBackend(null)}
+        onBackendDisconnected={agent.applyDisconnect}
         onRefreshBackend={agent.refreshBackend}
         initialIsPublic={project.isPublic}
         initialPublicSlug={project.publicSlug}

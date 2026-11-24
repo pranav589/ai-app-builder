@@ -7,7 +7,7 @@
 // frozen by the uiFreeze gate, so only how data is read and written changes.
 
 import { emptyDataModel } from "@app/shared/app-runtime/data-model"
-import { readAppDoc } from "@app/shared/app-runtime/app-doc"
+import { readAppDoc, type AppDoc } from "@app/shared/app-runtime/app-doc"
 import { importsOf, isCodeFile } from "@app/shared/app-project/project"
 import { isAppOwned } from "@app/shared/verify/ownership"
 import { compileManifest } from "@app/shared/manifest/compile"
@@ -51,7 +51,7 @@ export function pickTargets(files: Record<string, string>, direction: Conversion
  * connection itself still goes through, just with its screens unconverted,
  * since leaving the app on working local data beats leaving it half-broken.
  */
-export async function convertBackend(run: LiveRun | null, projectId: string, direction: ConversionDirection): Promise<{ converted: boolean; message?: string }> {
+export async function convertBackend(run: LiveRun | null, projectId: string, direction: ConversionDirection): Promise<{ converted: boolean; message?: string; doc?: AppDoc }> {
   const project = await loadProject(projectId)
   const doc = readAppDoc(project.previewScreens)
   if (!doc.manifest) return { converted: false, message: "This project isn't built yet." }
@@ -100,6 +100,14 @@ export async function convertBackend(run: LiveRun | null, projectId: string, dir
   // before calling this, so docFromWorkspace's spread carries it through
   // unchanged -- this never sets it itself.
   const updatedDoc = docFromWorkspace(doc, { files, manifest: doc.manifest })
-  await commitSnapshot(projectId, updatedDoc, { intent: direction === "connect" ? "Connected backend" : "Disconnected backend" })
-  return { converted: true, message }
+  const { doc: committedDoc } = await commitSnapshot(projectId, updatedDoc, { intent: direction === "connect" ? "Connected backend" : "Disconnected backend" })
+
+  // The client builds its preview and code tab from the event stream, not a
+  // fresh read of the commit, so without these it keeps the pre-conversion
+  // code until the page is reloaded. committedDoc (not updatedDoc): the commit may prune files.
+  for (const screen of committedDoc.screens) {
+    if (screen.code !== undefined && screen.code !== (doc.screens.find((s) => s.id === screen.id)?.code)) run?.emit({ type: "screen_done", screen })
+  }
+  run?.emit({ type: "files", files: committedDoc.files ?? {} })
+  return { converted: true, message, doc: committedDoc }
 }

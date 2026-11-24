@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "cn";
 
-import type { BackendInfo } from "@app/shared/agent/types";
+import type { BackendInfo, GeneratedScreen } from "@app/shared/agent/types";
 import {
   BACKEND_PROVIDER_IDS,
   BACKEND_SERVICE_INFO,
@@ -59,6 +59,12 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
+
+/** The app's code after switching back to local storage; absent if that rewrite failed. */
+export type DisconnectResult = {
+  files?: Record<string, string>;
+  screens?: GeneratedScreen[];
+};
 
 const SERVICE_ICONS: Record<BackendService, LucideIcon> = {
   postgres: Database,
@@ -478,7 +484,7 @@ export function BackendControl({
   providers: BackendProviderStatus[];
   agentBusy: boolean;
   onSetupBackend: (provider: BackendProviderId, services: string[]) => void;
-  onDisconnected: () => void;
+  onDisconnected: (result: DisconnectResult) => void;
   /** Re-checks the provider links and this app's backend with the server, in case either went stale (disconnected elsewhere, revoked on the provider's side). */
   onRefresh: () => void;
 }) {
@@ -533,16 +539,16 @@ export function BackendControl({
 
   const disconnectMutation = useMutation({
     mutationFn: async ({ forget }: { forget: boolean }) => {
-      const res = await apiClient.delete<{ error?: string }>(
+      const res = await apiClient.delete<DisconnectResult>(
         `/api/projects/${encodeURIComponent(projectId)}/backend`,
         { data: { forgetAccount: forget } },
       );
       return res.data;
     },
-    onSuccess: (_, { forget }) => {
+    onSuccess: (result, { forget }) => {
       setConfirm(false);
       if (forget && backend) setForgotten(backend.provider);
-      onDisconnected();
+      onDisconnected(result);
     },
     onError: (e) => {
       setDisconnectError(

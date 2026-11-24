@@ -39,9 +39,15 @@ export async function disconnectBackend(userId: string, projectId: string, forge
   // Switches the app's screens back to local stores/useState, same version
   // commit that drops lib/api.ts and un-wraps the root layout. Best-effort:
   // the disconnect itself already went through above either way.
-  await convertBackend(null, projectId, "disconnect").catch((e) => console.error("backend-conversion (disconnect) failed", projectId, e))
+  const conversion = await convertBackend(null, projectId, "disconnect").catch((e) => {
+    console.error("backend-conversion (disconnect) failed", projectId, e)
+    return null
+  })
 
   if (forgetAccount && row) await providerFor(row).connect.forget(userId)
+
+  // No live run to stream the rewritten code on, so the client gets it in the response.
+  return { files: conversion?.doc?.files, screens: conversion?.doc?.screens }
 }
 
 async function currentModel(projectId: string) {

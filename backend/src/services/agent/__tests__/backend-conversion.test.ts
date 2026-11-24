@@ -25,7 +25,7 @@ beforeEach(() => {
   m.ensureAppKey.mockReset().mockResolvedValue("key-1")
   m.builderUrl.mockReset().mockResolvedValue("https://builder.example")
   m.runChange.mockReset()
-  m.commitSnapshot.mockReset().mockResolvedValue({ version: 2 })
+  m.commitSnapshot.mockReset().mockImplementation(async (_id: string, doc: unknown) => ({ version: 2, doc }))
 })
 
 describe("pickTargets", () => {
@@ -59,7 +59,7 @@ describe("convertBackend", () => {
     v: 2 as const,
     screens: [{ id: "home", name: "Home", state: "ready" as const, path: "app/home.tsx", code: `import { useTasksStore } from "@/stores/useTasksStore"\nexport default function Home() { return null }` }],
     files: { "stores/useTasksStore.ts": "export const useTasksStore = () => {}" },
-    manifest,
+    manifest: { ...manifest, screens: { home: { title: "Home" } } },
     backend: { provider: "cloudhike" as const, projectRef: "ref1" },
   }
 
@@ -76,8 +76,12 @@ describe("convertBackend", () => {
       attempts: [],
     }))
 
-    const result = await convertBackend(null, "p1", "connect")
+    const emit = vi.fn()
+    const result = await convertBackend({ emit } as never, "p1", "connect")
     expect(result.converted).toBe(true)
+    // The client builds its preview from the stream, so the converted code must be pushed to it.
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: "screen_done", screen: expect.objectContaining({ id: "home", code: "export default function Home() { return null }" }) }))
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: "files" }))
     expect(m.ensureAppKey).toHaveBeenCalled()
     // The connected root layout must already be in place when runChange verifies the
     // conversion (a converted screen's useQuery/useMutation needs QueryClientProvider in

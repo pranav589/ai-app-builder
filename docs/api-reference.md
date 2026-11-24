@@ -458,8 +458,10 @@ also forgets this creator's link to that provider.
 
 **Response 200**
 ```json
-{ "ok": true }
+{ "ok": true, "files": { "lib/theme.ts": "..." }, "screens": [{ "id": "home", "state": "ready", "path": "app/home.tsx", "code": "..." }] }
 ```
+`files` and `screens` are the project's code after its screens were switched back to local
+storage, so the open workspace can show it without a reload. Both are omitted if that rewrite failed.
 
 **Error 409**
 ```json

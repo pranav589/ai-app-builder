@@ -95,8 +95,8 @@ export async function getBackend(req: Request, res: Response, next: NextFunction
 
 export async function deleteBackend(req: Request, res: Response, next: NextFunction) {
   try {
-    await disconnectBackend(req.user!.id, String(req.params.projectId || ""), req.body?.forgetAccount === true)
-    res.json({ ok: true })
+    const converted = await disconnectBackend(req.user!.id, String(req.params.projectId || ""), req.body?.forgetAccount === true)
+    res.json({ ok: true, ...converted })
   } catch (err) {
     next(err)
   }
