@@ -1,10 +1,16 @@
 import OpenAI from "openai"
 import { OpenAIChatCompletionsModel, setTracingDisabled } from "@openai/agents"
 
-// The AI gateway (AI_BASE_URL) is OpenAI-compatible but only serves
-// /chat/completions, and it does not pass function/tool calls through. So every
-// agent here runs on the Chat Completions model and talks in plain text; the
-// structured parts (plan, approval) are tagged blocks parsed by lib/agent/protocol.
+// The AI gateway (AI_BASE_URL) is OpenAI-compatible and serves /chat/completions
+// only (no Responses API), but it does pass real tool/function calls through --
+// confirmed live (scripts/probe-tool-calling.ts): non-streaming tool calls come
+// back correctly; streaming tool calls need lib/agent/tool-call-stream.ts's own
+// chunk accumulator, since the gateway resends a tool's full name on every
+// delta chunk instead of once, which corrupts @openai/agents-openai's own
+// accumulator. Every agent acts through real tool calls now (lib/verify/tools.ts,
+// lib/agent/tools.ts); the old tagged-block parsers in lib/agent/protocol.ts and
+// lib/verify/protocol.ts stay only as the fallback path for when a reply has no
+// tool call at all.
 
 // Tracing would try to export to api.openai.com with a key that isn't one.
 setTracingDisabled(true)
@@ -52,6 +58,23 @@ export function reasoningProviderData(): Record<string, unknown> {
   if (!/openrouter\.ai/i.test(process.env.AI_BASE_URL ?? "")) return {}
   const effort = reasoningEffort()
   return { reasoning: effort === "none" ? { enabled: false } : { effort: effort === "minimal" ? "low" : effort } }
+}
+
+export type ToolCallingMode = "on" | "off"
+
+/**
+ * Whether agents act through real tool calls (the default) or get no tools
+ * attached at all. "off" is a manual emergency kill switch, not a polished
+ * parallel path: every prompt now only describes tool-calling (Phase 3 of
+ * docs' tool-calling plan replaced the tagged-text instructions rather than
+ * keeping both), so "off" degrades to each path's existing "nothing useful
+ * came back" fallback (fallback themes, template-only shell, an unfixed
+ * file, no plan/edit) instead of a working tagged reply. Set AI_TOOL_CALLING=off
+ * only to rule out tool-calling itself while debugging; revert the prompts
+ * from git history for a real tagged-text fallback.
+ */
+export function toolCallingMode(): ToolCallingMode {
+  return process.env.AI_TOOL_CALLING?.trim().toLowerCase() === "off" ? "off" : "on"
 }
 
 /** The main model: planning conversations, the app shell and screens. */

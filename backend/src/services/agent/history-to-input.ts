@@ -30,11 +30,11 @@ export function historyToInput(
       ? `Files the creator attached to the first message (names only): ${assets.map((a) => `${a.name} (${a.type})`).join(", ")}.`
       : "No files were attached.",
     screens.length
-      ? `Screens already built on the canvas (id: name): ${screens.filter((s) => s.state === "ready").map((s) => `${s.id}: ${s.name}`).join(", ") || "none yet"}. Changes to these screens are edits (<edit targets="...">); adding, removing or renaming screens is a plan change (the full updated <plan>).`
+      ? `Screens already built on the canvas (id: name): ${screens.filter((s) => s.state === "ready").map((s) => `${s.id}: ${s.name}`).join(", ") || "none yet"}. Changes to these screens are edits (call request_edit); adding, removing or renaming screens is a plan change (call propose_plan with the full plan).`
       : "No screens have been designed yet.",
     components.length ? `Shared component files: ${components.join(", ")}.` : "",
     plan
-      ? `The current plan, exactly as last approved (reproduce every field for every unchanged screen character-for-character; only add, remove or edit what the person actually asked to change):\n<plan>\n${JSON.stringify(plan)}\n</plan>`
+      ? `The current plan, exactly as last approved (reproduce every field for every unchanged screen character-for-character; only add, remove or edit what the person actually asked to change):\n${JSON.stringify(plan)}`
       : "",
   ]
     .filter(Boolean)
@@ -48,7 +48,13 @@ export function historyToInput(
       const el = parseElementRef((m.pipelineData as { element?: unknown } | null)?.element)
       items.push(user(`${el ? `${describeElement(el)}\n` : ""}${about}${m.text}`))
     } else if (m.type === "plan" && m.plan) {
-      items.push(assistant(`${m.text}\n\n<plan>\n${JSON.stringify(m.plan)}\n</plan>`))
+      // Reconstructed as plain text, not the old <plan> tag: history is here
+      // to remind the model what it proposed, not to model a reply format
+      // it should imitate (the model now reports a plan by calling
+      // propose_plan, not by writing a tag -- re-showing the tag in its own
+      // past turns biased it right back toward writing tags instead of
+      // calling the tool, confirmed by seeing it happen on a live project).
+      items.push(assistant(`${m.text}\n\nProposed plan:\n${JSON.stringify(m.plan)}`))
     } else if (m.type === "build") {
       const b = m.pipelineData as BuildProgress | null
       items.push(assistant(`(Designed screens: ${b?.screens.map((s) => `${s.name} [${s.state}]`).join(", ") ?? "none"})`))

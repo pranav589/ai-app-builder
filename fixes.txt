@@ -19,3 +19,4 @@
 16. Notifications.
 17. Ask to create complex apps.
 18. Keyboard awareness to the apps
+19. When we connect with backend, we need to refresh to see the changes reflect

@@ -6,7 +6,7 @@ import { emptyDataModel, normalizeDataModel, type DataModel } from "@app/shared/
 import { asMotionLevel, baseThemeFromPlan, fallbackThemes, normalizeThemes, type AppTheme, type ThemePackage } from "@app/shared/app-runtime/theme"
 import { autoImport, checkFile, projectExports, screenPath, type ProjectFiles } from "@app/shared/app-project/project"
 import { undefinedNames } from "@/lib/app-project/analyze"
-import { applyHunks, parseEdits } from "@/lib/app-project/patch"
+import { applyHunks } from "@/lib/app-project/patch"
 import { ICONS } from "@app/shared/app-project/icons"
 import { platformFiles } from "@/lib/app-project/templates"
 import { PLATFORM_KIT_FILES } from "@/lib/app-project/platform-kits"
@@ -16,8 +16,9 @@ import { syncManifest } from "@app/shared/manifest/migrate"
 import { coderAdapter } from "@/lib/verify/coder"
 import { MAX_REPAIRS, runChange } from "@/lib/verify/run"
 import { verifiedNewScreenPrompt } from "@/lib/verify/prompts"
+import { toolCallsToFileMap, type ToolCallLog } from "@/lib/verify/tools"
 import { commitSnapshot } from "@/lib/versions/store"
-import { getAgents, heartbeat, streamText } from "./agents"
+import { getAgents, heartbeat, runWithTools } from "./agents"
 import { regenOutcome, screenSideFiles, storedSideFiles } from "./generation-guard"
 import { latestPlan, loadProject, saveDoc, saveMessage, saveScreens, setPhase } from "./history"
 import { fillSeedImages } from "./seed-images"
@@ -31,14 +32,12 @@ import {
 import {
   componentsHash,
   dataHash,
-  extractCode,
-  parseFiles,
-  parseFoundationJson,
   screenBuildHash,
   screenSpecHash,
   shellHash,
   themeHash,
 } from "./protocol"
+import { toolCallsToFoundation } from "./tools"
 import type { LiveRun } from "./registry"
 import type { AppPlan, BuildProgress, GeneratedScreen } from "@app/shared/agent/types"
 import { emitAttempts, verifyDebugFail } from "./verify-glue"
@@ -64,16 +63,16 @@ async function buildFoundation(
 
   const { foundation } = getAgents()
   const hb = heartbeat(run, () => "Creating the theme package and app data")
-  let raw = ""
+  let toolCalls: ToolCallLog = []
   try {
     const base = fallbackThemes(plan)[0]
-    raw = await streamText(foundation, foundationPrompt(plan, base, new Date().toISOString().slice(0, 10), data ? undefined : doc.data), () => hb.touch())
+    ;({ toolCalls } = await runWithTools(foundation, foundationPrompt(plan, base, new Date().toISOString().slice(0, 10), data ? undefined : doc.data)))
   } catch (e) {
     console.warn("foundation generation failed, using fallbacks", e instanceof Error ? e.message : e)
   } finally {
     hb.stop()
   }
-  const parsed = parseFoundationJson(raw)
+  const parsed = toolCallsToFoundation(toolCalls)
 
   if (!themes) {
     const list = parsed?.themes ? normalizeThemes(parsed.themes, plan) : fallbackThemes(plan)
@@ -157,24 +156,16 @@ async function checkAndFix(
     const whole = attempt === MAX_FIXES - 1
     console.warn(`[fix] ${path} attempt ${attempt + 1} (${whole ? "whole file" : "patch"}):`, blocking(problems))
     try {
-      const info: { finishReason?: string } = {}
-      const raw = await streamText(fixer, fixPrompt(path, current, problems, whole ? "file" : "patch"), () => hb.touch(), undefined, info)
-      // A cut-off reply is unusable; don't let it replace anything.
-      if (info.finishReason === "length") {
-        console.warn(`[fix] ${path}: fixer output cut off at the limit`)
-        continue
-      }
+      const { toolCalls } = await runWithTools(fixer, fixPrompt(path, current, problems, whole ? "file" : "patch"))
       let candidate: string | null = null
-      const edits = parseEdits(raw).filter((e) => e.path === path || e.path.endsWith(path.split("/").pop()!))
-      for (const e of edits) {
-        if (e.kind === "file") candidate = e.code
-        else {
-          const applied = applyHunks(candidate ?? current, e.hunks)
+      const matchesPath = (p: string) => p === path || p.endsWith(path.split("/").pop()!)
+      for (const call of toolCalls) {
+        if (call.name === "write_file" && matchesPath((call.args as { path: string }).path)) candidate = (call.args as { content: string }).content
+        else if (call.name === "edit_file" && matchesPath((call.args as { path: string }).path)) {
+          const applied = applyHunks(candidate ?? current, (call.args as { hunks: { search: string; replace: string }[] }).hunks)
           if (!applied.failed.length) candidate = applied.code
         }
       }
-      // A bare code reply (no blocks) is a whole file.
-      if (candidate === null && !edits.length && /export\s+default|export\s+(function|const)/.test(raw)) candidate = extractCode(raw)
       if (candidate === null) continue
       const next = inspectFile(path, candidate, files)
       // Keep the fix only if it is no worse. A runtime report counts as fixed once the model has rewritten the file.
@@ -271,9 +262,9 @@ async function buildShell(
   const templates = templateShell(plan)
   const { shell } = getAgents()
   const hb = heartbeat(run, () => (keep ? "Updating navigation" : "Setting up navigation and components"))
-  let raw = ""
+  let toolCalls: ToolCallLog = []
   try {
-    raw = await streamText(shell, keep ? layoutsPrompt(plan, theme, keep.layouts, keep.components) : shellPrompt(plan, theme), () => hb.touch())
+    ;({ toolCalls } = await runWithTools(shell, keep ? layoutsPrompt(plan, theme, keep.layouts, keep.components) : shellPrompt(plan, theme)))
   } catch (e) {
     console.warn("shell generation failed", e instanceof Error ? e.message : e)
   } finally {
@@ -282,7 +273,7 @@ async function buildShell(
   const hasTabs = plan.screens.some((s) => s.presentation === "tab")
   const allowed = keep ? LAYOUT_PATH : SHELL_PATH
   const generated = Object.fromEntries(
-    Object.entries(parseFiles(raw)).filter(([p]) => allowed.test(p) && (hasTabs || !p.startsWith("app/(tabs)/")))
+    Object.entries(toolCallsToFileMap(toolCalls)).filter(([p]) => allowed.test(p) && (hasTabs || !p.startsWith("app/(tabs)/")))
   )
   // Screens don't exist yet, but layouts may reference their files.
   const placeholders = Object.fromEntries(plannedPaths.map((p) => [p, ""]))

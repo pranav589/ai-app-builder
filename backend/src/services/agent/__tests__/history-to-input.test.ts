@@ -59,7 +59,7 @@ describe("historyToInput", () => {
   it("omits the plan block entirely when no plan is passed", () => {
     const items = historyToInput(project, [], builtScreens, [], null)
     const system = items[0] as { content: string }
-    expect(system.content).not.toContain("</plan>")
+    expect(system.content).not.toContain(JSON.stringify(plan))
   })
 
   it("still lists only built screen names, independent of the full plan block", () => {
@@ -67,5 +67,26 @@ describe("historyToInput", () => {
     const system = items[0] as { content: string }
     expect(system.content).toContain("home: Home")
     expect(system.content).toContain("settings: Settings")
+  })
+
+  it("tells the model to call propose_plan/request_edit, not to write <plan>/<edit> tags", () => {
+    const items = historyToInput(project, [], builtScreens, [], plan)
+    const system = items[0] as { content: string }
+    expect(system.content).toContain("call propose_plan")
+    expect(system.content).toContain("call request_edit")
+    expect(system.content).not.toMatch(/<plan>|<edit\b/)
+  })
+
+  it("reconstructs a past plan message as plain text, not a <plan> tag the model could imitate", () => {
+    // A real bug, found live: re-showing the model its own past turn wrapped
+    // in <plan> tags biased it right back toward writing a tag instead of
+    // calling propose_plan, even though the system instructions only
+    // described the tool call.
+    const history = [{ id: "m1", sender: "assistant", text: "Here's the plan.", type: "plan", plan, pipelineData: null }] as DbMessage[]
+    const items = historyToInput(project, history, builtScreens, [], null)
+    const assistantTurn = items[1] as { content: { text: string }[] }
+    const text = assistantTurn.content.map((c) => c.text).join("")
+    expect(text).toContain(JSON.stringify(plan))
+    expect(text).not.toMatch(/<plan>/)
   })
 })

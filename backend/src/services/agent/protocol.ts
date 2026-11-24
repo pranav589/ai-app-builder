@@ -38,7 +38,7 @@ const screenSchema = z.object({
 
 export const MAX_SCREENS = 10
 
-const planSchema = z.object({
+export const planSchema = z.object({
   appName: z.string().min(1).max(60),
   summary: z.string().catch(""),
   targetUsers: z.string().catch(""),
@@ -151,6 +151,24 @@ export function parsePlanJson(raw: string) {
 }
 
 /**
+ * Screen names seen so far in a partially-streamed plan JSON string --
+ * shared by `TagStreamFilter` (the tagged-text fallback, below) and the
+ * tool-calling path (a propose_plan call's streaming `arguments`, which is
+ * the same JSON shape), so the live "Planning screens: ..." progress works
+ * identically regardless of which path produced the plan.
+ */
+export function screenNamesInPlanJsonText(planText: string): string[] {
+  const i = planText.indexOf('"screens"')
+  if (i === -1) return []
+  const names: string[] = []
+  const re = /"name"\s*:\s*"((?:[^"\\]|\\.)*)"/g
+  re.lastIndex = i
+  let m: RegExpExecArray | null
+  while ((m = re.exec(planText))) names.push(m[1])
+  return names
+}
+
+/**
  * Splits a streamed reply into visible prose and hidden tag content as the
  * tokens arrive, so the chat never flashes a half-written tag.
  */
@@ -233,14 +251,7 @@ export class TagStreamFilter {
 
   /** Screen names seen so far in the partially streamed plan JSON. */
   screenNamesSoFar(): string[] {
-    const i = this.planText.indexOf('"screens"')
-    if (i === -1) return []
-    const names: string[] = []
-    const re = /"name"\s*:\s*"((?:[^"\\]|\\.)*)"/g
-    re.lastIndex = i
-    let m: RegExpExecArray | null
-    while ((m = re.exec(this.planText))) names.push(m[1])
-    return names
+    return screenNamesInPlanJsonText(this.planText)
   }
 }
 

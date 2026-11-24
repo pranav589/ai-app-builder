@@ -162,7 +162,7 @@ export function applyChangeSet(base: Workspace, cs: ChangeSet): { ws?: Workspace
           code: "screen_missing_file",
           severity: "error",
           file: path,
-          message: `The manifest has a screen "${id}" but no file at ${path}. Add it with a <file path="${path}"> block in the same change.`,
+          message: `The manifest has a screen "${id}" but no file at ${path}. Call write_file for "${path}" in the same turn.`,
         })
       }
     }

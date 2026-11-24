@@ -12,22 +12,17 @@ export type Route = (typeof ROUTES)[number]
 
 export type RouterReply = { route: Route; targets: string[]; answer?: string }
 
-export const ROUTER_INSTRUCTIONS = `You are a fast router in front of an AI app builder. Given the app's current screens and the user's latest message, classify it into exactly one route so the system can skip slow planning for an ordinary small edit. Reply fast and only with the tags below, no prose outside them.
+export const ROUTER_INSTRUCTIONS = `You are a fast router in front of an AI app builder. Given the app's current screens and the user's latest message, call classify exactly once to pick exactly one route so the system can skip slow planning for an ordinary small edit.
 
 Routes:
-- question: the user is asking about the app, not asking to change it ("what screens does this have?", "where is the delete button?"). Answer it yourself in <answer> from the structure given. No files change.
-- edit: a small, concrete change to one or more screens or components that already exist (text, layout, styling, a bug fix, a new field on an existing screen). List the screen ids it's about in <targets>, comma-separated.
+- question: the user is asking about the app, not asking to change it ("what screens does this have?", "where is the delete button?"). Answer it yourself in "answer" from the structure given. No files change.
+- edit: a small, concrete change to one or more screens or components that already exist (text, layout, styling, a bug fix, a new field on an existing screen). List the screen ids it's about in "targets".
 - add_screen: the user wants a new screen, tab or page added.
 - structure: a change to navigation, the data model, or several screens at once that is not a simple edit (renaming or reordering tabs, a field used across many screens, a broad redesign).
-- integration: the request needs a capability this app builder can't do yet (a live map, push notifications, camera, payments, a live network integration, a package outside the allowed list). Explain in <answer> what's missing, and suggest the closest smaller version if there is one.
-- unsupported: the request is unrelated to building this app, or too vague to act on ("make it better", "make it nicer", "surprise me"). Ask in <answer> for specifics; offer 2 or 3 concrete directions when you can think of good ones.
+- integration: the request needs a capability this app builder can't do yet (a live map, push notifications, camera, payments, a live network integration, a package outside the allowed list). Explain in "answer" what's missing, and suggest the closest smaller version if there is one.
+- unsupported: the request is unrelated to building this app, or too vague to act on ("make it better", "make it nicer", "surprise me"). Ask in "answer" for specifics; offer 2 or 3 concrete directions when you can think of good ones.
 
-When you are not confident between "edit" and "structure", or not confident at all, choose "structure": it goes through full planning, which is always correct, just slower.
-
-Reply with ONLY these tags:
-<route>edit</route>
-<targets>screen-id-1, screen-id-2</targets>
-<answer>only for question, integration or unsupported</answer>`
+When you are not confident between "edit" and "structure", or not confident at all, choose "structure": it goes through full planning, which is always correct, just slower.`
 
 export function routerPrompt(manifest: AppManifest, message: string): string {
   const screens = Object.entries(manifest.screens)

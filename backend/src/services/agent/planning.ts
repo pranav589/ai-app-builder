@@ -4,15 +4,12 @@ import { asc, eq } from "drizzle-orm"
 
 import { db, messages, projects } from "@/db"
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
-import { getAgents, heartbeat, streamText } from "./agents"
+import { describeToolCalls, type ToolCallLog } from "@/lib/verify/tools"
+import { getAgents, heartbeat, runWithTools, streamTextWithTools } from "./agents"
 import { historyToInput } from "./history-to-input"
 import { latestPlan, loadProject, saveMessage, setPhase } from "./history"
-import {
-  TagStreamFilter,
-  type EditRequest,
-  parsePlanJson,
-  parsePlannerReply,
-} from "./protocol"
+import { screenNamesInPlanJsonText } from "./protocol"
+import { toolCallsToFixedPlan, toolCallsToPlannerReply } from "./tools"
 import type { LiveRun } from "./registry"
 import { NEW_SCREEN_NUDGE } from "./router"
 import type { AgentPhase, AppPlan } from "@app/shared/agent/types"
@@ -115,28 +112,34 @@ export async function runPlanning(run: LiveRun, projectId: string, opts: { first
   const messageId = id("msg")
   run.emit({ type: "message_start", id: messageId })
 
-  const filter = new TagStreamFilter()
   let phaseLabel = opts.first ? "Understanding your idea" : "Thinking"
   let gotText = false
   let lastNames = 0
   const hb = heartbeat(run, () => phaseLabel)
 
-  let raw = ""
+  // Prose and a propose_plan/request_edit/approve_build call arrive on
+  // separate channels (output_text_delta vs. a tool call's streamed
+  // arguments), unlike the old tagged-text reply -- so there's no tag
+  // content to hide from the visible stream any more; every delta is prose.
+  let text = ""
+  let toolCalls: ToolCallLog = []
   try {
     const input = historyToInput(project, recent, screens, components, prevPlan)
     if (opts.nudge) input.push(system(opts.nudge))
-    raw = await streamText(planner, input, (delta) => {
-      hb.touch()
-      const visible = filter.push(delta)
-      if (visible) {
+    ;({ text, toolCalls } = await streamTextWithTools(
+      planner,
+      input,
+      (delta) => {
+        hb.touch()
         if (!gotText) {
           gotText = true
           run.emit({ type: "status", text: "Writing" })
         }
-        run.emit({ type: "text", id: messageId, delta: visible })
-      }
-      if (filter.insidePlan) {
-        const names = filter.screenNamesSoFar()
+        run.emit({ type: "text", id: messageId, delta })
+      },
+      () => run.emit({ type: "status", text: "The AI model didn't answer, trying again" }),
+      (partialJson) => {
+        const names = screenNamesInPlanJsonText(partialJson)
         if (names.length === 0 && phaseLabel !== "Drafting the app plan") {
           phaseLabel = "Drafting the app plan"
           run.emit({ type: "status", text: phaseLabel })
@@ -147,39 +150,32 @@ export async function runPlanning(run: LiveRun, projectId: string, opts: { first
           run.emit({ type: "status", text: phaseLabel })
         }
       }
-    }, () => run.emit({ type: "status", text: "The AI model didn't answer, trying again" }))
+    ))
   } finally {
     hb.stop()
   }
-  const tail = filter.end()
-  if (tail) run.emit({ type: "text", id: messageId, delta: tail })
 
-  let reply = parsePlannerReply(raw)
+  let reply = toolCallsToPlannerReply(toolCalls)
   // The editor can only change existing files, so a new screen sent as an
   // edit would be silently dropped. Ask once more for the plan instead.
   const lastUser = [...recent].reverse().find((m) => m.sender === "user")?.text ?? ""
   if (reply.edit && !reply.plan && !opts.nudge && asksForNewScreen(lastUser, reply.edit.instruction)) {
     run.emit({ type: "status", text: "Adding it to the plan" })
-    const again = await streamText(
+    const again = await streamTextWithTools(
       planner,
       [...historyToInput(project, recent, screens, components, prevPlan), system(NEW_SCREEN_NUDGE)],
       () => {}
-    ).catch(() => "")
-    const retried = parsePlannerReply(again)
-    if (retried.plan || retried.planInvalid) {
-      raw = again
-      reply = retried
-      filter.planText = ""
-    }
+    ).catch(() => ({ text: "", toolCalls: [] as ToolCallLog }))
+    const retried = toolCallsToPlannerReply(again.toolCalls)
+    if (retried.plan || retried.planInvalid) reply = retried
   }
   let plan = reply.plan
   if (reply.planInvalid) {
     run.emit({ type: "status", text: "Tidying up the plan" })
-    const fixed = await streamText(planFixer, filter.planText || raw, () => {}).catch(() => "")
-    plan = parsePlanJson(fixed)
+    const fixed = await runWithTools(planFixer, describeToolCalls(toolCalls)).catch(() => ({ text: "", toolCalls: [] as ToolCallLog }))
+    plan = toolCallsToFixedPlan(fixed.toolCalls)
   }
 
-  let text = reply.text
   if (!text && plan) text = "Here's the plan for your app. Approve it to start building, or tell me what to change."
   if (!text && !plan) text = "Sorry, I couldn't put a reply together. Please try again."
 

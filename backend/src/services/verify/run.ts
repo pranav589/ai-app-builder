@@ -7,13 +7,17 @@ import type { GateName, RunState, Workspace } from "@app/shared/verify/types"
 import { formatDiagnostics, verifyChange, type Gate, type Verdict } from "./pipeline"
 import { repairPrompt } from "./prompts"
 import { parseReply } from "./protocol"
+import { describeToolCalls, toolCallsToChangeSet, type ToolCallLog } from "./tools"
 
 export const MAX_REPAIRS = 3
 
 export type Turn = { role: "user" | "assistant"; content: string }
 
 export type ModelReply = {
+  /** The tagged-text reply, when the model didn't call a tool (or tool-calling is off). */
   text: string
+  /** Set when the model called write_file/edit_file/delete_file/patch_manifest/ask_question instead of replying in tagged text. */
+  toolCalls?: ToolCallLog
   modelMs: number
   tokens?: { prompt?: number; completion?: number }
 }
@@ -59,8 +63,8 @@ export async function runChange(base: Workspace, userPrompt: string, model: Mode
   for (let n = 1; n <= maxRepairs + 1; n++) {
     emit(n === 1 ? "writing" : "repairing", n === 1 ? undefined : `round ${n - 1} of ${maxRepairs}`)
     const out = await model(turns, opts.onDelta)
-    turns.push({ role: "assistant", content: out.text })
-    const parsed = parseReply(out.text)
+    turns.push({ role: "assistant", content: out.toolCalls?.length ? describeToolCalls(out.toolCalls) : out.text })
+    const parsed = out.toolCalls?.length ? { ...toolCallsToChangeSet(out.toolCalls, ""), problems: [] as string[] } : parseReply(out.text)
 
     if (parsed.question && !parsed.changeSet.files.length) {
       attempts.push({ n, modelMs: out.modelMs, gatesMs: 0, ok: false, files: [], tokens: out.tokens })

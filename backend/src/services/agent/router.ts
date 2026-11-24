@@ -3,8 +3,9 @@ import { and, desc, eq } from "drizzle-orm"
 import { db, messages } from "@/db"
 import { readAppDoc } from "@app/shared/app-runtime/app-doc"
 import { ensureManifest } from "@app/shared/manifest/migrate"
-import { parseRouterReply, routerPrompt } from "@/lib/verify/router"
-import { getAgents, streamText } from "./agents"
+import { routerPrompt } from "@/lib/verify/router"
+import { toolCallsToRouterReply } from "@/lib/verify/tools"
+import { getAgents, runWithTools } from "./agents"
 import { describeElement, elementFile, parseElementRef } from "@app/shared/agent/element-context"
 import { latestPlan, loadProject, saveMessage, setPhase } from "./history"
 import type { LiveRun } from "./registry"
@@ -12,7 +13,7 @@ import { runVerifiedEdit } from "./verified-edit"
 
 /** Sent to the planner when a request turned out to need a new screen. */
 export const NEW_SCREEN_NUDGE =
-  "The person's latest request may need a new screen, which an <edit> cannot do (the editor can only change files that already exist). If it does, reply again: one short sentence saying you are adding it now, then the full updated <plan> with every existing screen unchanged and the new screen added, and no <edit> block. If it really is only a change to existing screens, reply with the <edit> as before."
+  "The person's latest request may need a new screen, which request_edit cannot do (the editor can only change files that already exist). If it does, reply again: one short sentence saying you are adding it now, then call propose_plan with the full updated plan, every existing screen unchanged and the new screen added, and do not call request_edit. If it really is only a change to existing screens, call request_edit as before."
 
 /**
  * Phase 8 fast path: for a project that already has a built app, classify
@@ -45,14 +46,14 @@ export async function routeMessage(run: LiveRun, projectId: string): Promise<{ h
 
   run.emit({ type: "status", text: "Reading your message" })
   const { router } = getAgents()
-  let raw = ""
+  let toolCalls: Awaited<ReturnType<typeof runWithTools>>["toolCalls"]
   try {
-    raw = await streamText(router, routerPrompt(manifest, message), () => {})
+    ;({ toolCalls } = await runWithTools(router, routerPrompt(manifest, message)))
   } catch (e) {
     console.warn("router call failed, falling back to the planner", e instanceof Error ? e.message : e)
     return { handled: false }
   }
-  const reply = parseRouterReply(raw)
+  const reply = toolCallsToRouterReply(toolCalls)
   if (!reply || reply.route === "add_screen" || reply.route === "structure") return { handled: false }
 
   if (reply.route === "edit") {
